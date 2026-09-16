@@ -345,6 +345,24 @@ the notch:
 In Island-only mode the menu bar item is hidden, so the panel's **⋯** button carries
 Appearance, Color, the Sounds toggle, Settings, Check for Updates and Quit.
 
+### Appearance
+
+All of it lives in one window — **Appearance…** in the menu, and the same window
+you get on first launch. The preview above the buttons is the real mascot driven
+through the real code, not a picture of one, so it animates exactly as the bar will.
+
+<p align="center">
+  <img src="docs/assets/welcome-appearance.png" width="430" alt="AgentBar's Appearance window: a live mascot preview, the Menu bar / Dynamic Island / Both picker, an 'Island on:' row of drawn displays with 'Follow pointer' selected, the mark colour choice, and the list of agents whose hooks are wired up">
+</p>
+
+**Island on:** draws your displays rather than listing them — a laptop for the
+built-in one, notch included, a monitor on a stand for the rest. Click one and the
+island stays there instead of following the pointer around, which is what a fixed
+multi-monitor desk wants. Unplug a pinned display and the island falls back to the
+pointer until it's back; the choice is remembered, and it is keyed to the display's
+UUID, so a monitor that comes back under a different display ID is still recognised
+as the same one.
+
 ## Remote Allow/Deny
 
 <p align="center">
