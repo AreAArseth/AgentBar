@@ -231,12 +231,22 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         else { Notifier.Prefs.done = turningOn }
 
         if turningOn {
-            Notifier.shared.requestAuthorization { [weak self] granted in
-                guard let self, !granted else { self?.syncNotificationCaption(); return }
-                if sender === self.notifyApprovalsBox { Notifier.Prefs.approvals = false }
-                else { Notifier.Prefs.done = false }
-                sender.state = .off
-                self.syncNotificationCaption()
+            Notifier.shared.requestAuthorization { [weak self] granted, error in
+                guard let self else { return }
+                // The refusal has to SAY something. Springing the box back with an
+                // unchanged caption is indistinguishable from a dead control, which
+                // is how this shipped the first time and how it was reported.
+                Notifier.shared.authorizationStatus { [weak self] status in
+                    guard let self else { return }
+                    self.notificationProblem = Notifier.problem(granted: granted, error: error,
+                                                                status: status)
+                    if !granted {
+                        if sender === self.notifyApprovalsBox { Notifier.Prefs.approvals = false }
+                        else { Notifier.Prefs.done = false }
+                        sender.state = .off
+                    }
+                    self.syncNotificationCaption()
+                }
             }
         } else if sender === notifyApprovalsBox {
             // A banner already on screen must not outlive the setting that allowed it.
@@ -245,14 +255,29 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         onChange?()
     }
 
+    /// Set when macOS last refused, and shown until it stops being true. Kept
+    /// separate from the preferences: the refusal turns them back off, so a caption
+    /// that keyed off "is anything enabled" would erase its own explanation.
+    private var notificationProblem: String?
+
     private func syncNotificationCaption() {
         let base = "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above."
-        guard Notifier.Prefs.anyEnabled else { notifyCaption.stringValue = base; return }
+        if let notificationProblem {
+            notifyCaption.stringValue = notificationProblem
+            notifyCaption.textColor = .systemOrange
+            refit()
+            return
+        }
+        notifyCaption.textColor = .secondaryLabelColor
+        // Nothing switched on, nothing refused: there is no authorization state worth
+        // reporting yet, and asking for it would be a round trip for no reason.
+        guard Notifier.Prefs.anyEnabled else { notifyCaption.stringValue = base; refit(); return }
         Notifier.shared.authorizationStatus { [weak self] status in
             guard let self else { return }
-            self.notifyCaption.stringValue = status == .authorized || status == .provisional
-                ? base
-                : "macOS is not delivering AgentBar's notifications. Turn them back on in\nSystem Settings ▸ Notifications ▸ AgentBar."
+            let problem = Notifier.problem(granted: false, error: nil, status: status)
+            self.notifyCaption.stringValue = problem ?? base
+            self.notifyCaption.textColor = problem == nil ? .secondaryLabelColor : .systemOrange
+            self.refit()
         }
     }
 

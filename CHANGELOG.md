@@ -25,7 +25,11 @@ All notable changes to AgentBar are documented here. This project follows
   answered elsewhere or times out: two live buttons that do nothing are worse than
   no banner at all. Questions get a banner without buttons, because their answer
   is a list or free text, and tapping one jumps to the session. macOS is asked for
-  permission when you tick the box, never at launch.
+  permission when you tick the box, never at launch — and when macOS refuses, the
+  setting says so and says where to change it. Once macOS has an app down as
+  denied it never prompts again, so a checkbox that quietly sprang back would be
+  indistinguishable from a dead control; that was the first version of it, and it
+  was reported within a minute of being looked at.
 - **A Today row in the menu, and `agentbar history`.** What finished, how long it
   took, and what failed — the question you have at the end of a day, which nothing
   in AgentBar could answer before, because live status deletes a session the

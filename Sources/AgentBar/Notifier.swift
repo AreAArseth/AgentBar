@@ -64,6 +64,27 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// created it.
     func start() {
         let center = UNUserNotificationCenter.current()
+        // A launch-time probe for diagnosing "the checkbox does nothing" without
+        // making someone click it again; documented next to the other debug
+        // defaults in CONTRIBUTING. Async, so it cannot hang the launch.
+        if UserDefaults.standard.bool(forKey: "notifyProbeDebug") {
+            requestAuthorization { granted, error in
+                // A file, not just NSLog: an app launched by LaunchServices has no
+                // stderr anyone can read, and launching the binary by hand to get one
+                // changes the very thing being measured.
+                var line = "granted=\(granted) error=\(String(describing: error))\n"
+                line += "bundleID=\(Bundle.main.bundleIdentifier ?? "nil") path=\(Bundle.main.bundlePath)\n"
+                let url = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".agentbar/notify-probe.txt")
+                UNUserNotificationCenter.current().getNotificationSettings { st in
+                    let full = line + "authorizationStatus=\(st.authorizationStatus.rawValue) "
+                        + "alertSetting=\(st.alertSetting.rawValue) "
+                        + "notificationCenterSetting=\(st.notificationCenterSetting.rawValue)\n"
+                    try? full.write(to: url, atomically: true, encoding: .utf8)
+                    NSLog("AgentBar: notification probe \(full)")
+                }
+            }
+        }
         center.delegate = self
         let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [])
         let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny",
@@ -76,11 +97,38 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         ])
     }
 
-    /// Asks macOS for permission, and reports back whether it was granted so the
-    /// checkbox can un-tick itself rather than claiming a setting that does nothing.
-    func requestAuthorization(_ done: @escaping (Bool) -> Void) {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, _ in
-            DispatchQueue.main.async { done(granted) }
+    /// Asks macOS for permission, and reports back what happened so the checkbox can
+    /// un-tick itself **and say why** rather than silently springing back — which is
+    /// indistinguishable from a dead control, and was exactly that until it was
+    /// caught by someone clicking it.
+    ///
+    /// The error matters as much as the refusal: a plain "no" is the user declining
+    /// the system prompt, while an error means macOS would not even ask (an
+    /// unregistered or unsigned bundle, usually a build run from a folder rather
+    /// than installed), and those two need different words.
+    func requestAuthorization(_ done: @escaping (Bool, Error?) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
+            if let error { NSLog("AgentBar: notification authorization failed: \(error)") }
+            DispatchQueue.main.async { done(granted, error) }
+        }
+    }
+
+    /// One sentence for the Settings caption, or nil when there is nothing wrong.
+    ///
+    /// Worded from the *status*, not from the error. `requestAuthorization` returns
+    /// `UNErrorDomain Code=1` for anything it will not ask about, and guessing why
+    /// from that is how the first version of this told people to move the app when
+    /// the real answer was a switch in System Settings. Once macOS has AgentBar down
+    /// as denied it never prompts again, so the only way out is that switch.
+    static func problem(granted: Bool, error: Error?, status: UNAuthorizationStatus) -> String? {
+        if granted || status == .authorized || status == .provisional { return nil }
+        switch status {
+        case .denied:
+            return "macOS has notifications switched off for AgentBar. Turn them on in\nSystem Settings ▸ Notifications ▸ AgentBar, then tick this again."
+        case .notDetermined where error != nil:
+            return "macOS would not ask: \(error!.localizedDescription)"
+        default:
+            return "macOS did not allow notifications for AgentBar."
         }
     }
 

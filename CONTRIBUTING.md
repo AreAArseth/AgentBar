@@ -92,7 +92,19 @@ defaults write com.michalstrnadel.agentbar presentationMode -string island  # or
 defaults delete com.michalstrnadel.agentbar showWelcomeOnLaunch             # first-run window back
 defaults write com.michalstrnadel.agentbar islandExpandDebug -bool true     # hold the island open (layout work)
 defaults write com.michalstrnadel.agentbar settingsOnLaunchDebug -bool true # open Settings on launch (layout work)
+defaults write com.michalstrnadel.agentbar notifyProbeDebug -bool true      # ask for notification permission at launch and
+                                                                           # write the answer to ~/.agentbar/notify-probe.txt
 ```
+
+`notifyProbeDebug` writes to a *file* rather than only NSLog on purpose: an app
+launched by LaunchServices has no stderr anyone can read, and launching the binary
+by hand to get one changes the very thing being measured. It also reports
+`authorizationStatus`, which is what actually explains a refusal —
+`requestAuthorization` answers `UNErrorDomain Code=1` for everything it will not
+ask about, and guessing a cause from that is how the first version of the
+Notifications setting told people to move the app when the real answer was a
+switch in System Settings. Once macOS has AgentBar down as **denied** it never
+prompts again, so the only way back is System Settings ▸ Notifications ▸ AgentBar.
 
 The whole app ↔ hook protocol is files in `~/.agentbar/` (`state.d/`, `requests.d/`,
 `answers.d/`) — you can drive any app feature by writing JSON files there, no agent
