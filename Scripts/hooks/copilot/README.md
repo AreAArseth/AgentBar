@@ -58,6 +58,12 @@ snake_case shape the rest of the file reads, and writes the decision **bare**
 Everything in between — the request file, the wait, the successor guards, the
 silent exit on every failure path — is shared code.
 
+Round-tripped against a live CLI 1.0.85 on 2026-09-16: allow from AgentBar and the
+command runs; deny and Copilot reports *"Permission denied by a PermissionRequest
+hook"* and does not run it; with AgentBar not running no request file is written at
+all and the hook exits at once, so the session falls through to Copilot's own
+handling instead of waiting on a frontend that cannot answer.
+
 ### Two traps, and one correction
 
 **camelCase and raw tool ids.** This event alone uses `sessionId`/`toolName`/
