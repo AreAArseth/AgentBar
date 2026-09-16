@@ -56,11 +56,33 @@ const out = {
   ts: Math.floor(Date.now() / 1000),
 };
 
+// Codex has no session-end event, and the id above is per thread/turn — so each
+// finished turn leaves its own row behind. Neither sweeper reaches them: a codex
+// that stays open keeps its pid alive (which is what normally retires a row), so
+// they sat in the bar until the 24h staleness cut, three deep for one session.
+// Writing this row is itself the proof that the earlier ones are over: a codex
+// process shows one conversation at a time. Same pid only — a second codex in
+// another tab owns its own rows, and a pid of 0 would match every one of them.
+const retirePredecessors = () => {
+  const owner = process.ppid;
+  if (!(owner > 0)) return;
+  for (const f of fs.readdirSync(stateDir)) {
+    if (!f.endsWith(".json") || f === id + ".json") continue;
+    let prior = null;
+    try { prior = JSON.parse(fs.readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
+    if (prior && prior.agent === "codex" && Number(prior.pid) === owner)
+      fs.rmSync(path.join(stateDir, f), { force: true });
+  }
+};
+
 try {
   fs.mkdirSync(stateDir, { recursive: true });
   const tmp = file + "." + process.pid + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out));
   fs.renameSync(tmp, file);
+  // After the write, never before: a sweep that ran first and then failed to
+  // write would take the session out of the bar entirely.
+  try { retirePredecessors(); } catch {}
 } catch (e) {
   // Single stderr line per invocation — enough of a trail to explain "AgentBar
   // shows nothing", too little to be noise. Self-swallowing: never throws, never

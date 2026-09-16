@@ -240,6 +240,21 @@ check "codex complete → done row"        'grep -q "\"state\":\"done\"" "$HOME/
 check "codex second turn keeps started_at" 'grep -q "\"started_at\":7777" "$HOME/.agentbar/state.d/codex-t1.json"'
 check "codex second turn keeps prompt"     'grep -q "\"prompt\":\"first task\"" "$HOME/.agentbar/state.d/codex-t1.json"'
 
+# A new thread/turn id from the SAME codex process retires the earlier rows:
+# Codex has no session-end event and a live codex keeps its pid alive, so
+# nothing else would clear them before the 24h staleness cut.
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"t2","input_messages":["second task"],"cwd":"/tmp/proj"}'
+check "codex new thread retires old row"  '[ ! -e "$HOME/.agentbar/state.d/codex-t1.json" ]'
+check "codex new thread row is there"     'grep -q "\"prompt\":\"second task\"" "$HOME/.agentbar/state.d/codex-t2.json"'
+# Another agent's row, and a codex row owned by a DIFFERENT process, both survive.
+printf '{"agent":"claude","state":"tool","pid":%d,"started":true,"ts":1}' $$ \
+  > "$HOME/.agentbar/state.d/keepme.json"
+printf '{"agent":"codex","state":"done","pid":999999,"started":true,"ts":1}' \
+  > "$HOME/.agentbar/state.d/codex-other.json"
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"t3","cwd":"/tmp/proj"}'
+check "codex sweep spares other agents"   '[ -e "$HOME/.agentbar/state.d/keepme.json" ]'
+check "codex sweep spares other process"  '[ -e "$HOME/.agentbar/state.d/codex-other.json" ]'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
