@@ -31,12 +31,18 @@ const reqDir = path.join(base, "requests.d");
 const ansDir = path.join(base, "answers.d");
 const watcherFile = path.join(base, "watcher.json");
 const historyFile = path.join(base, "history.jsonl");
+const decisionsFile = path.join(base, "decisions.jsonl");
 const seenFile = path.join(base, "history-seen.json");
 const PRESENCE_TTL = 60; // seconds a heartbeat stays valid (hooks use the same value)
 const HISTORY_MAX_AGE = 30 * 86400; // long enough for a sprint, short enough to stay a file
 const HISTORY_MAX = 5000;
 
-const now = () => Math.floor(Date.now() / 1000);
+// The clock, in one place. `AGENTBAR_NOW` (epoch seconds) pins it, which exists
+// for the test suite: a fixture written as "an hour ago" means today at 14:00 and
+// *yesterday* at 00:30, so a day-boundary test passes all afternoon and fails in
+// CI for the first hour of every day. Unset in normal use.
+const nowMs = () => (process.env.AGENTBAR_NOW ? Number(process.env.AGENTBAR_NOW) * 1000 : Date.now());
+const now = () => Math.floor(nowMs() / 1000);
 const readJSON = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
 const writeAtomic = (f, obj) => {
   const t = f + "." + process.pid + ".tmp";
@@ -174,7 +180,7 @@ function printHistory(argv, json) {
   const days = Math.max(1, parseInt(d >= 0 ? argv[d + 1] : "1", 10) || 1);
   // Local midnight, not "the last N*24 hours": a day that starts whenever you
   // happen to look at it is not a day.
-  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const midnight = new Date(nowMs()); midnight.setHours(0, 0, 0, 0);
   const since = Math.floor(midnight.getTime() / 1000) - (days - 1) * 86400;
 
   const rows = readHistory()
@@ -248,6 +254,78 @@ function requests() {
   return out;
 }
 
+// --- what you decided about permission prompts ---
+// AgentBar sits in the permission path, so it is the only thing that can know
+// this; today every decision is thrown away the moment it is made. Kept, it lets
+// the next prompt say what you did last time, and lets the day say how long agents
+// sat blocked on you. It never decides anything by itself.
+//
+// Only decisions that actually reached answers.d are written. Keystroke approvals
+// (Codex, Antigravity) press a key at a terminal and never learn what the terminal
+// did with it — recording that as "you allowed" would be a claim nobody here can
+// make.
+
+const MULTIPLEXERS = new Set(["git", "gh", "npm", "pnpm", "yarn", "bun", "cargo", "go",
+  "docker", "kubectl", "brew", "make", "swift", "dotnet", "pip", "pip3", "uv", "poetry",
+  "rails", "terraform", "aws", "gcloud", "systemctl", "apt", "apt-get", "flutter"]);
+
+// The first two words that matter, and never an argument: `git push` repeats,
+// `git push origin feature/PR-4113` never does — and arguments are where a path,
+// a URL or an accidentally typed secret would be.
+function decisionVerb(command) {
+  const head = String(command || "").split(/[|;&\n]/)[0];
+  let words = head.split(/\s+/).filter(Boolean);
+  while (words.length && (words[0] === "sudo" || words[0] === "command" || words[0] === "env"
+        || (words[0].includes("=") && !words[0].startsWith("-")))) words.shift();
+  if (!words.length) return "";
+  const name = path.basename(words[0]);
+  if (!MULTIPLEXERS.has(name)) return name;
+  const next = words.slice(1).find((w) => !w.startsWith("-"));
+  return next ? `${name} ${next}` : name;
+}
+
+function decisionShape(r) {
+  const ctx = r.context || {};
+  if (ctx.kind === "bash") return "bash:" + decisionVerb(ctx.command);
+  let input = null;
+  try { input = JSON.parse(r.toolInputPretty || "null"); } catch {}
+  const p = input && (input.file_path || input.notebook_path || input.path || input.filePath);
+  if (p) {
+    const parts = String(p).split("/").filter(Boolean);
+    const dir = parts.length > 1 ? parts[parts.length - 2] : "";
+    const ext = path.extname(String(p)).replace(/^\./, "");
+    const suffix = ext ? `*.${ext}` : "*";
+    return `${String(r.toolName || "").toLowerCase()}:${dir ? dir + "/" + suffix : suffix}`;
+  }
+  return "tool:" + (r.toolName || "");
+}
+
+function recordDecision(r, decision) {
+  const session = sessions().find((x) => x.sessionId === r.sessionId || x.id === r.sessionId);
+  const rec = {
+    v: 1, ts: now(), agent: r.agent || "", sessionId: r.sessionId || "",
+    project: (session && session.project) || "", cwd: (session && session.cwd) || "",
+    tool: r.toolName || "", shape: decisionShape(r), display: r.display || "",
+    decision,
+    // A request with no ts, or one stamped in the future, contributes no wait
+    // rather than a negative one that would quietly shrink the day's total.
+    waited: r.ts > 0 ? Math.max(0, now() - r.ts) : 0,
+    via: "cli",
+  };
+  try { fs.appendFileSync(decisionsFile, JSON.stringify(rec) + "\n"); } catch {}
+}
+
+function readDecisions() {
+  let text = ""; try { text = fs.readFileSync(decisionsFile, "utf8"); } catch { return []; }
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }   // a torn line costs one line
+    if (o && o.shape && o.decision) out.push(o);
+  }
+  return out;
+}
+
 function answer(r, behavior) {
   fs.mkdirSync(ansDir, { recursive: true });
   const obj = { behavior };
@@ -258,6 +336,7 @@ function answer(r, behavior) {
   // tools of one turn, and the hook discards answers aimed at a predecessor.
   if (r.hookPid > 0) obj.hookPid = r.hookPid;
   writeAtomic(path.join(ansDir, r.fileName), obj);
+  recordDecision(r, behavior);
 }
 
 // Chosen option labels for a question request, one array per question. The hook
@@ -267,6 +346,7 @@ function answerQuestion(r, labels) {
   const obj = { behavior: "answer", answers: labels };
   if (r.hookPid > 0) obj.hookPid = r.hookPid;
   writeAtomic(path.join(ansDir, r.fileName), obj);
+  recordDecision(r, "answer");
 }
 
 // Same .git/HEAD trick as the app: no git invocation, handles worktrees.
@@ -405,6 +485,66 @@ function sessionWeight(agent, sessionId, cwd) {
 const weightTotal = (w) => (w ? (w.in || 0) + (w.out || 0) + (w.cacheWrite || 0) : 0);
 const compact = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
 
+// --- the approvals you keep answering ---
+
+function durationShort(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+}
+
+function printApprovals(argv, json) {
+  const i = argv.indexOf("--days");
+  const asked = i >= 0 ? parseInt(argv[i + 1], 10) : 1;
+  const days = Number.isFinite(asked) && asked > 0 ? asked : 1;
+  const midnight = new Date(nowMs()); midnight.setHours(0, 0, 0, 0);
+  const since = midnight.getTime() / 1000 - (days - 1) * 86400;
+  const rows = readDecisions().filter((r) => r.ts >= since);
+
+  // Counted per repo: the same command is routine in one checkout and the
+  // opposite in another.
+  const byShape = new Map();
+  let waited = 0;
+  for (const r of rows) {
+    waited += r.waited || 0;
+    const key = JSON.stringify([r.shape, r.cwd || ""]);
+    const e = byShape.get(key) || { shape: r.shape, cwd: r.cwd || "", project: r.project || "",
+                                    allowed: 0, denied: 0, other: 0, last: 0 };
+    if (r.decision === "allow" || r.decision === "always") e.allowed++;
+    else if (r.decision === "deny") e.denied++;
+    else e.other++;
+    e.last = Math.max(e.last, r.ts);
+    byShape.set(key, e);
+  }
+  const list = [...byShape.values()].sort((a, b) => (b.allowed + b.denied) - (a.allowed + a.denied));
+
+  if (json) {
+    console.log(JSON.stringify({ answered: rows.length, waited, repeats: list }, null, 2));
+    return;
+  }
+  if (!rows.length) {
+    console.log(dim("Nothing answered yet" + (days > 1 ? ` in ${days} days.` : " today.")));
+    return;
+  }
+  for (const e of list.slice(0, 15)) {
+    const verdicts = [e.allowed ? green(`${e.allowed} allowed`) : "",
+                      e.denied ? red(`${e.denied} denied`) : ""].filter(Boolean).join(", ");
+    console.log(`${bold(e.shape.padEnd(26))} ${verdicts.padEnd(26)} ${dim(e.project || "")}`);
+  }
+  if (list.length > 15) console.log(dim(`...and ${list.length - 15} more`));
+  // The half of the loop nothing else is standing in the right place to measure.
+  console.log("\n" + `${rows.length} answered ${dim("·")} they waited ${durationShort(waited)} on you`);
+}
+
+// Empties the ledger. Deliberately not "prune": this is the answer to "I would
+// rather not keep that", so it removes everything and says how much it removed.
+function forget() {
+  const n = readDecisions().length;
+  try { fs.rmSync(decisionsFile, { force: true }); } catch {}
+  console.log(`Forgot ${n} decision${n === 1 ? "" : "s"} (${decisionsFile}).`);
+}
+
 // --- what's left of the quota ---
 // The same local sources the app reads, and the same refusals. Codex stamps the
 // exact percentages of both its windows into every rollout; Copilot prices its own
@@ -495,7 +635,7 @@ function copilotSpend() {
   const db = path.join(home, "session-store.db");
   if (!fs.existsSync(db)) return null;
   if (!sqliteTool) return { needsSqlite: true };
-  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const start = new Date(nowMs()); start.setHours(0, 0, 0, 0);
   const end = new Date(start.getTime() + 24 * 3600 * 1000);
   const sql = "SELECT coalesce(sum(total_nano_aiu),0)||'|'||"
     + "coalesce(sum(input_tokens+output_tokens+cache_write_tokens),0)||'|'||count(*)"
@@ -1361,6 +1501,8 @@ switch (cmd) {
   case "waybar": waybar(); break;
   case "history": printHistory(argv, json); break;
   case "usage": printUsage(json); break;
+  case "approvals": printApprovals(argv, json); break;
+  case "forget": forget(); break;
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
   case "--help": case "help": default:
@@ -1376,6 +1518,8 @@ switch (cmd) {
   agentbar waybar                 JSON for waybar/polybar (poll <= 30s)
   agentbar history [--days N]     what finished today (or over N days) [--json]
   agentbar usage [--json]         what's left of each provider's quota
+  agentbar approvals [--days N]   prompts you keep answering + how long they waited [--json]
+  agentbar forget                 empty the decision ledger
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
     break;

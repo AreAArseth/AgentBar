@@ -16,6 +16,7 @@ locks. All timestamps (`ts`) are Unix seconds.
   answers.d/   one JSON per user decision       (writer: frontends; reader: the hook)
   watcher.json frontend presence heartbeat      (writer: CLI watch/waybar)
   history.jsonl  one line per ended session     (writer: frontends only)
+  decisions.jsonl one line per permission decision (writer: frontends only)
   history-seen.json  the CLI's previous tick, so one-shot commands can diff
   hooks/       installed copies of the hook scripts (refreshed by the installer)
   claude-config-dir  optional hint: custom CLAUDE_CONFIG_DIR path (one line)
@@ -288,6 +289,46 @@ the baseline commit all mean the key is omitted.
 `history-seen.json` is an implementation detail of the CLI, not part of the
 protocol: a snapshot of the previous tick so that one-shot commands (`status`,
 `waybar`) can diff. The macOS app keeps the same snapshot in memory.
+
+## decisions.jsonl — what the human decided
+
+One append-only line per permission decision that **actually reached `answers.d`**.
+Written by frontends only, same mechanics as `history.jsonl` (O_APPEND, one line at
+a time, a torn line costs that line). Unlike the history, nothing collapses: two
+decisions about the same command are two decisions, and counting them is the point.
+
+```json
+{"v":1,"ts":1789561881,"agent":"claude","sessionId":"abc-123","project":"AgentBar",
+ "cwd":"/Users/me/AgentBar","tool":"Bash","shape":"bash:git push",
+ "display":"Bash: git push origin main","decision":"allow","waited":42,"via":"app"}
+```
+
+- `decision` is one of the verbs the answer carried: `allow` | `always` | `deny` |
+  `defer` | `answer`. Only `allow`/`always`/`deny` are verdicts; the other two are
+  a hand-off and a question, and a reader counting repeats MUST skip them.
+- `waited` is seconds between the request's `ts` and the decision — how long the
+  agent sat blocked on the human. A request with no `ts`, or one stamped in the
+  future, contributes `0` rather than a negative number.
+- `shape` is the key repeats are counted by, and it is **normalised on purpose**:
+  the first meaningful word of a command (two for a multiplexer — `git push`,
+  `npm test`), or `<tool>:<folder>/*.<ext>` for an edit or a write. It MUST NOT
+  carry arguments, paths or URLs: those never repeat, and they are where a secret
+  would be if one were ever typed into a command.
+- `display` is the request's own one-line summary, already capped by the hook, kept
+  so a count can be shown next to what it refers to.
+- `via` names the frontend that answered: `app` | `cli`.
+
+**What is deliberately absent.** Keystroke approvals — the ones AgentBar sends for
+agents with no request file (Codex, Antigravity), and a Claude plan approval, which
+is also a keystroke — write **no line**. A frontend presses a key at a terminal and
+never learns what the terminal did with it; recording that as "the user allowed"
+would be a claim no writer is in a position to make. So the ledger covers the
+agents that speak `requests.d`, and a reader must not treat its silence about Codex
+as "Codex was never approved".
+
+Rows are the user's own record of their own decisions. Nothing is sent anywhere, a
+frontend MAY offer a switch to stop writing them (AgentBar: **Settings ▸
+Approvals**), and `agentbar forget` empties the file.
 
 ## Adding a frontend or an agent
 

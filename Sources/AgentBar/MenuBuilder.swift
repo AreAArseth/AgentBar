@@ -212,8 +212,32 @@ enum MenuBuilder {
             more.attributedTitle = dim("…and \(entries.count - 12) more — `agentbar history`")
             sub.addItem(more)
         }
+        // The other half of the day. Everything above is how long the machine
+        // worked; this is how long it waited for you, which is the half nothing
+        // else on the machine is standing in the right place to measure.
+        if let waiting = waitingLine() {
+            sub.addItem(.separator())
+            let row = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            row.isEnabled = false
+            row.attributedTitle = dim(waiting)
+            sub.addItem(row)
+        }
         item.submenu = sub
         return item
+    }
+
+    /// "18 approvals answered · they waited 34m on you" — nil on a day with none,
+    /// because a zero here is an absence and not a result.
+    static func waitingLine(now: Date = Date(), calendar: Calendar = .current) -> String? {
+        let start = calendar.startOfDay(for: now).timeIntervalSince1970
+        let day = DecisionLedger.waiting(in: DecisionLedger.cached(), since: start,
+                                         until: now.timeIntervalSince1970)
+        guard day.answered > 0 else { return nil }
+        var text = "\(day.answered) answered"
+        if day.waited >= 60 {
+            text += " · they waited \(HistoryDigest.duration(day.waited)) on you"
+        }
+        return text
     }
 
     private static func dim(_ text: String) -> NSAttributedString {
@@ -453,6 +477,26 @@ enum MenuBuilder {
                 menu.addItem(ctx)
             }
 
+            // What you did about this exact prompt before, at the moment you are
+            // deciding again — the only place that fact is worth anything.
+            let past = DecisionLedger.summary(shape: DecisionLedger.shape(of: r), cwd: s.cwd,
+                                              in: DecisionLedger.cached())
+            let promote = DecisionLedger.shouldPromoteAlways(past, hasRule: r.ruleDescription != nil)
+            if var hint = DecisionLedger.hint(past) {
+                // Enough repeats and never once refused: say that the button beside
+                // this line would end the asking. Saying, not pressing — a count is
+                // not consent, and nothing here answers anything by itself.
+                if promote { hint += " — ✓ Always stops the asking" }
+                let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                item.representedObject = tag
+                item.attributedTitle = NSAttributedString(string: "      \(hint)", attributes: [
+                    .font: NSFont.menuFont(ofSize: 11),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ])
+                menu.addItem(item)
+            }
+
             let buttons = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             let deferTitle = s.entrypoint == "claude-desktop" ? "⧉ Claude app" : "⌨ Terminal"
             let onChoose: (String) -> Void = { [weak controller] behavior in
@@ -474,6 +518,7 @@ enum MenuBuilder {
                     hasRule: r.ruleDescription != nil,
                     ruleToolTip: r.ruleDescription.map { "Always allow \($0)" },
                     deferTitle: deferTitle,
+                    promoteAlways: promote,
                     onChoose: onChoose)
             }
             buttons.representedObject = tag

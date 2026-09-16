@@ -1,9 +1,9 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: one small window, six quiet sections — Sounds,
-/// Notifications, the global Allow/Deny shortcut, the island, usage, and
-/// Diagnostics.
+/// AgentBar's Settings: one small window, seven quiet sections — Sounds,
+/// Notifications, the global Allow/Deny shortcut, the island, usage, approvals,
+/// and Diagnostics.
 /// Every control writes
 /// UserDefaults directly and fires `onChange`, so changes apply live; the app
 /// delegate owns the fan-out to whichever surfaces care. Diagnostics is the odd
@@ -26,6 +26,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var hideIslandBox: NSButton!
     private var diagnostics: DiagnosticsView!
     private var claudeQuotaBox: NSButton!
+    private var rememberBox: NSButton!
     private var notifyApprovalsBox: NSButton!
     private var notifyFailuresBox: NSButton!
     private var notifyQuietBox: NSButton!
@@ -178,6 +179,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             + "already stored, asks every five minutes, and is the one network call\n"
             + "AgentBar makes besides checking for updates. Codex and Copilot need none.")
 
+        // ---- Approvals ----
+        rememberBox = NSButton(checkboxWithTitle: "Remember what I decided",
+                               target: self, action: #selector(toggleRemember))
+        let rememberCaption = caption(
+            "So a prompt you have answered before can say so: “Allowed 23× here”.\n"
+            + "Kept in ~/.agentbar/decisions.jsonl, never sent anywhere, and never\n"
+            + "acted on by itself. `agentbar forget` empties it.")
+
         // ---- Diagnostics ----
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
@@ -187,7 +196,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // A rule, not a per-section variable: each one is width-constrained
         // individually, and naming them sep1…sepN meant remembering a constraint
         // every time a section was added.
-        let seps = (0..<5).map { _ in separator() }
+        let seps = (0..<6).map { _ in separator() }
         let stack = NSStackView(views: [
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
             sectionLabel("Notifications"), notifyApprovalsBox, notifyFailuresBox,
@@ -195,6 +204,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
             sectionLabel("Usage"), claudeQuotaBox, quotaCaption, seps[4],
+            sectionLabel("Approvals"), rememberBox, rememberCaption, seps[5],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
         stack.orientation = .vertical
@@ -207,6 +217,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(16, after: grid)
         stack.setCustomSpacing(16, after: islandCaption)
         stack.setCustomSpacing(16, after: quotaCaption)
+        stack.setCustomSpacing(16, after: rememberCaption)
         stack.setCustomSpacing(8, after: notifyCaption)
         stack.setCustomSpacing(14, after: notifyButtons)
         stack.setCustomSpacing(2, after: notifyApprovalsBox)
@@ -216,13 +227,27 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         // The grid indents to line up under the checkbox title, not its box.
         grid.translatesAutoresizingMaskIntoConstraints = false
-        w.contentView = NSView()
-        w.contentView!.addSubview(stack)
+        // Scrolled, because the content can now be taller than a laptop screen and a
+        // window that simply runs off the bottom puts Diagnostics somewhere nobody
+        // can reach. The scroller only appears when it is needed: `refit` sizes the
+        // window to the content until the screen runs out, and clamps there.
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let doc = FlippedView()          // top-down, like the island's row list
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(stack)
+        scroll.documentView = doc
+        w.contentView = scroll
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: w.contentView!.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: w.contentView!.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: w.contentView!.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: w.contentView!.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: doc.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             grid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             volumeRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             diagnostics.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
@@ -233,8 +258,16 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             stack.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minWidth),
         ] + seps.map { $0.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40) })
         self.stack = stack
-        w.setContentSize(stack.fittingSize)
         window = w
+        refit()
+    }
+
+    /// The tallest the window may get: the screen it is on, less the room a title
+    /// bar and a Dock want. Past this the content scrolls instead of the window
+    /// growing out of sight.
+    private func maxContentHeight(for window: NSWindow) -> CGFloat {
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+        return max(320, visible - 60)
     }
 
     /// Diagnostics changes height as checks come and go, so the window has to be
@@ -242,7 +275,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var stack: NSStackView?
     private func refit() {
         guard let window, let stack else { return }
-        window.setContentSize(stack.fittingSize)
+        let wanted = stack.fittingSize
+        window.setContentSize(NSSize(width: wanted.width,
+                                     height: min(wanted.height, maxContentHeight(for: window))))
         // The window was centred at its old height and grows downward from its title
         // bar, so a few diagnostic rows push its bottom under the Dock. Nudge it back
         // into view rather than re-centring, which would yank it while it is read.
@@ -261,6 +296,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
         claudeQuotaBox.state = ClaudeQuota.enabled ? .on : .off
+        rememberBox.state = DecisionLedger.enabled ? .on : .off
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
         notifyFailuresBox.state = Notifier.Prefs.failures ? .on : .off
         notifyQuietBox.state = Notifier.Prefs.quiet ? .on : .off
@@ -280,6 +316,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     @objc private func toggleClaudeQuota() {
         ClaudeQuota.enabled = claudeQuotaBox.state == .on
         UsageCenter.shared.refresh()
+        onChange?()
+    }
+
+    /// Switching it off stops new rows; it does not delete the old ones, because
+    /// silently destroying something somebody might want is not what a checkbox
+    /// does. `agentbar forget` is the thing that empties it, and it says so.
+    @objc private func toggleRemember() {
+        DecisionLedger.enabled = rememberBox.state == .on
         onChange?()
     }
 

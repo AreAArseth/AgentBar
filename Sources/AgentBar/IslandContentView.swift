@@ -558,7 +558,7 @@ final class IslandRowView: NSView {
 final class IslandApprovalView: NSView {
     private let onChoose: (String) -> Void
 
-    init(request: ApprovalRequest, deferTitle: String, width: CGFloat,
+    init(request: ApprovalRequest, deferTitle: String, cwd: String = "", width: CGFloat,
          onChoose: @escaping (String) -> Void) {
         self.onChoose = onChoose
         super.init(frame: .zero)
@@ -590,6 +590,17 @@ final class IslandApprovalView: NSView {
             if let summary = Self.diffSummary(context) { rows.append(summary) }
         }
 
+        // What you did about this exact prompt before, where you are deciding it
+        // again. Absent below two, because "allowed 1× here" is the thing you just
+        // did. See `DecisionLedger`.
+        let past = DecisionLedger.summary(shape: DecisionLedger.shape(of: request), cwd: cwd,
+                                          in: DecisionLedger.cached())
+        let promote = plan == nil
+            && DecisionLedger.shouldPromoteAlways(past, hasRule: request.ruleSuggestion != nil)
+        if let hint = DecisionLedger.hint(past), plan == nil {
+            rows.append(Self.pastLine(hint))
+        }
+
         let shortcuts = UserDefaults.standard.bool(forKey: "globalApprovalShortcut")
         let deny = Self.button(plan != nil ? "Keep planning" : "Deny",
                                hint: shortcuts ? KeyCombo.deny.display : nil,
@@ -614,7 +625,12 @@ final class IslandApprovalView: NSView {
         // "always allow ExitPlanMode" would auto-approve every future plan sight
         // unseen, which defeats the card.
         if request.ruleSuggestion != nil, plan == nil {
-            let always = Self.link("Always allow", target: self, action: #selector(alwaysClicked))
+            // Weight only when the same prompt has been allowed over and over and
+            // never refused. A coloured link would read as the safe default, and
+            // "stop asking about this" is not a default anyone else gets to pick.
+            let always = Self.link(promote ? "Always allow — stop asking" : "Always allow",
+                                   target: self, action: #selector(alwaysClicked),
+                                   emphasised: promote)
             always.toolTip = request.ruleMenuTitle
             secondary.append(always)
         }
@@ -770,14 +786,26 @@ final class IslandApprovalView: NSView {
         return b
     }
 
-    private static func link(_ title: String, target: Any, action: Selector) -> NSButton {
+    private static func link(_ title: String, target: Any, action: Selector,
+                             emphasised: Bool = false) -> NSButton {
         let b = IslandButton(title: "", target: target, action: action)
         b.isBordered = false
         b.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.5),
+            .font: NSFont.systemFont(ofSize: 11, weight: emphasised ? .semibold : .regular),
+            .foregroundColor: NSColor.white.withAlphaComponent(emphasised ? 0.75 : 0.5),
         ])
         return b
+    }
+
+    /// The quiet line above the buttons: what this same prompt got last time, and
+    /// how many times. Dimmer than the tool line it sits under — it is context for
+    /// a decision, not the decision.
+    private static func pastLine(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = .systemFont(ofSize: 11)
+        l.textColor = NSColor.white.withAlphaComponent(0.45)
+        l.lineBreakMode = .byTruncatingTail
+        return l
     }
 }
 

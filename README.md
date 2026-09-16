@@ -105,6 +105,19 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   your displays the way System Settings does; unplug the pinned one and it falls
   back to the pointer until it's back.
 - **Permission alerts** — an amber dot the moment an agent waits for your approval.
+- **It remembers what you decided** — the fifth time an agent asks to run the same
+  thing, the card says so: *“Allowed 23× here · last Tue”*, counted per repo, because
+  a command that is routine in one checkout is the opposite in another. Once a prompt
+  has been allowed five times and never refused, **✓ Always** is pointed at — pointed
+  at, never pressed; AgentBar still answers nothing by itself. Kept in
+  `~/.agentbar/decisions.jsonl`, never sent anywhere, switchable off in **Settings ▸
+  Approvals**, and `agentbar forget` empties it. Keystroke approvals (Codex,
+  Antigravity) write **nothing**: a key pressed at a terminal is not a decision
+  anybody here witnessed.
+- **How long they waited on you** — the other half of the day's account, under
+  **Today**: *“18 answered · they waited 34m on you”*. Nothing else on the machine is
+  standing in the right place to measure it. `agentbar approvals` says the same, with
+  the prompts you answer most.
 - **Multi-session** — every running session listed with its agent's mark, project, git
   branch, state and elapsed time; click a row to jump to its app or terminal.
 - **Open anything** — launch any supported agent (Claude, Codex, Copilot,
@@ -232,6 +245,8 @@ agentbar approve --always
 agentbar answer Blue     # answer a pending question by option label (or number)
 agentbar history         # what finished today (--days N, --json)
 agentbar usage           # what's left of each provider's quota
+agentbar approvals       # the prompts you keep answering (--days N, --json)
+agentbar forget          # empty the decision ledger
 agentbar doctor          # why an agent isn't showing up; --json for a bug report
 ```
 

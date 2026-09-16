@@ -389,6 +389,9 @@ final class IslandController: NSObject {
             let view = card(IslandApprovalView(
                 request: r,
                 deferTitle: deferTitle(for: s, plan: r.isPlanRequest),
+                // The repo the count is scoped to: the same command is routine in
+                // one checkout and the opposite in another.
+                cwd: s.cwd,
                 width: Self.expandedWidth - IslandContentView.hPad * 2 - Self.cardIndent
             ) { [weak self] behavior in
                 // Only confirm what actually reached disk: a dropped answer leaves the

@@ -74,8 +74,12 @@ seed_session h3 idle $$
 check "idle is not an ending"          '[ ! -f "$HOME/.agentbar/history.jsonl" ]'
 
 # --- history: the day's account, read back out of history.jsonl
+# The clock is pinned to noon. Seeded as "an hour ago" against the real clock,
+# this block means today at 14:00 and YESTERDAY at 00:30 — it passed every
+# afternoon and failed for the first hour of every day, CI included.
 fresh_home
-NOW="$(date +%s)"
+export AGENTBAR_NOW="$(node -e 'const d = new Date(); d.setHours(12, 0, 0, 0); console.log(Math.floor(d / 1000))')"
+NOW="$AGENTBAR_NOW"
 {
   printf '{"agent":"claude","sessionId":"h1","project":"Alpha","state":"done","startedAt":%s,"endedAt":%s}\n' "$((NOW-3600))" "$((NOW-1800))"
   printf '{"agent":"codex","sessionId":"h2","project":"Beta","state":"error","startedAt":%s,"endedAt":%s}\n' "$((NOW-900))" "$((NOW-300))"
@@ -98,8 +102,10 @@ check "history with no record says so" '"$CLI" history | grep -qi "nothing"'
 
 # --- history: what a session cost, and what moved in the repo. Both are optional
 # in the protocol, and "absent" has to survive as absent — a zero would be quoted.
+# Clock pinned to noon, for the reason the block above gives.
 fresh_home
-NOW="$(date +%s)"
+export AGENTBAR_NOW="$(node -e 'const d = new Date(); d.setHours(12, 0, 0, 0); console.log(Math.floor(d / 1000))')"
+NOW="$AGENTBAR_NOW"
 {
   printf '{"agent":"claude","sessionId":"w1","project":"Alpha","state":"done","startedAt":%s,"endedAt":%s,"weight":{"in":1330,"out":622024,"cacheWrite":1453897,"cacheRead":220795232,"src":"claude-transcript"},"change":{"files":7,"added":210,"removed":80,"base":"3a30264"}}\n' "$((NOW-3600))" "$((NOW-1800))"
   printf '{"agent":"gemini","sessionId":"w2","project":"Beta","state":"done","startedAt":%s,"endedAt":%s}\n' "$((NOW-900))" "$((NOW-300))"
@@ -114,6 +120,8 @@ check "history shows what changed"     'echo "$OUT" | grep -q "7 files +210"'
 # normal case — presenting it as the day's spend would be wrong most days.
 check "partial token total says so"    'echo "$OUT" | grep -q "tokens across 1"'
 check "an unmeasured row stays blank"  '! echo "$OUT" | grep -E "Beta.*[0-9]+(k|M)"'
+
+unset AGENTBAR_NOW
 
 # An agent that keeps a readable number gets one written for it. Claude Code's
 # session id IS its transcript's file name, which is what makes the lookup exact.
@@ -145,6 +153,8 @@ rm -f "$HOME/.agentbar/state.d/nw.json"
 "$CLI" status >/dev/null 2>&1
 check "no source means no weight key"  '! grep -q "weight" "$HOME/.agentbar/history.jsonl"'
 check "no repo means no change key"    '! grep -q "change" "$HOME/.agentbar/history.jsonl"'
+
+unset AGENTBAR_NOW
 
 # --- requests + approve/deny
 fresh_home
@@ -371,6 +381,34 @@ printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits
   "$OLD" "$SOON" > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T10-00-00-old.jsonl"
 check "a stale rollout speaks for nothing"  '! "$CLI" usage | grep -q "% left"'
 unset CODEX_HOME COPILOT_HOME
+
+# --- decisions: what the human decided, kept so the next prompt can say so
+fresh_home
+seed_session s1 permission $$
+printf '{"sessionId":"s1","agent":"claude","toolName":"Bash","display":"Bash: git push origin main","toolInputPretty":"{}","context":{"kind":"bash","command":"git push origin main"},"ruleSuggestion":{"type":"addRules"},"pid":%s,"hookPid":%s,"ts":%s}' \
+  $$ $$ "$(($(date +%s) - 45))" > "$HOME/.agentbar/requests.d/d1.json"
+"$CLI" approve >/dev/null
+LEDGER="$HOME/.agentbar/decisions.jsonl"
+check "a decision is recorded"              '[ -f "$LEDGER" ] && grep -q "\"decision\":\"allow\"" "$LEDGER"'
+# The shape is what repeats are counted by: the verb, never the arguments — those
+# never repeat, and they are where a path or a secret would be.
+check "the shape keeps the verb"            'grep -q "\"shape\":\"bash:git push\"" "$LEDGER"'
+check "the shape drops the arguments"       '! grep -q "shape\":\"bash:git push origin" "$LEDGER"'
+check "the wait is measured"                'node -e "const r=JSON.parse(require(\"fs\").readFileSync(process.env.HOME+\"/.agentbar/decisions.jsonl\",\"utf8\").trim());process.exit(r.waited>=40&&r.waited<=120?0:1)"'
+check "the frontend names itself"           'grep -q "\"via\":\"cli\"" "$LEDGER"'
+
+# Two decisions about the same command are two decisions — nothing collapses here.
+printf '{"sessionId":"s1","agent":"claude","toolName":"Bash","display":"Bash: git push origin main","toolInputPretty":"{}","context":{"kind":"bash","command":"git push origin main"},"pid":%s,"hookPid":%s,"ts":%s}' \
+  $$ $$ "$(date +%s)" > "$HOME/.agentbar/requests.d/d2.json"
+"$CLI" deny >/dev/null
+check "both decisions survive"              '[ "$(wc -l < "$LEDGER" | tr -d " ")" = "2" ]'
+OUT="$("$CLI" approvals)"
+check "approvals counts the repeat"         'echo "$OUT" | grep -q "bash:git push"'
+check "approvals counts both verdicts"      'echo "$OUT" | grep -q "1 allowed" && echo "$OUT" | grep -q "1 denied"'
+check "approvals reports the waiting"       'echo "$OUT" | grep -q "waited"'
+check "approvals --json carries the rows"   '"$CLI" approvals --json | grep -q "\"answered\": 2"'
+
+check "forget empties the ledger"           '"$CLI" forget | grep -q "Forgot 2 decisions" && [ ! -f "$LEDGER" ]'
 
 echo "---"
 echo "$pass passed, $fail failed"

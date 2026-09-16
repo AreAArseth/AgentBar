@@ -34,7 +34,7 @@ final class ApprovalButtonsRow: NSView {
 
     /// The native-request strip (Claude): Allow / Always / Deny / defer.
     convenience init(hasRule: Bool, ruleToolTip: String?, deferTitle: String,
-                     leading: CGFloat = 21,
+                     leading: CGFloat = 21, promoteAlways: Bool = false,
                      onChoose: @escaping (String) -> Void) {
         var specs: [(title: String, behavior: String, toolTip: String?)] = [
             ("✓ Allow", "allow", nil)
@@ -44,6 +44,18 @@ final class ApprovalButtonsRow: NSView {
         // "⌨ Terminal" for CLI sessions, "⧉ Claude app" for desktop ones.
         specs.append((deferTitle, "defer", "Answer in \(deferTitle.dropFirst(2)) instead"))
         self.init(buttons: specs, leading: leading, onChoose: onChoose)
+        // The nudge, when the same prompt has been allowed over and over and never
+        // refused: weight only. A coloured button in a menu reads as the safe
+        // default, and "make the agent stop asking" is not a default anyone else
+        // gets to pick.
+        if promoteAlways, let always = button(for: "always") {
+            always.font = .boldSystemFont(ofSize: NSFont.menuFont(ofSize: 11).pointSize)
+        }
+    }
+
+    private func button(for behavior: String) -> NSButton? {
+        (subviews.first as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton }
+            .first { $0.identifier?.rawValue == behavior }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

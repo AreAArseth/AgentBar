@@ -3,6 +3,49 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.20.0 - 2026-09-17
+
+### Added
+
+- **The approval card remembers what you decided.** AgentBar sits in the permission
+  path — the blocking hook is its own — so it is the only thing on the machine that
+  can know how often you have answered the same prompt. Until now it threw every
+  decision away the moment it was made.
+
+  Now the card says it, where you are deciding again: *"Allowed 23× here · last
+  Tue"*, or *"Allowed 12×, denied 2× here"*. Counted **per repo**, because a command
+  that is routine in one checkout is the opposite in another, and never shown for a
+  single past decision — "allowed 1× here" is the thing you just did.
+
+  When a prompt has been allowed five times and **never once refused**, and Claude
+  Code supplied a rule for it, the existing **✓ Always** is pointed at: a heavier
+  weight and a line saying it would stop the asking. Pointed at, not pressed. A count
+  is not consent, and nothing here answers anything by itself.
+
+- **How long agents waited on you.** Every decision records the seconds the agent sat
+  blocked, and **Today** gains the other half of the day: *"18 answered · they waited
+  34m on you"*. The history says how long the machine worked; this says how long it
+  waited, which nothing else is standing in the right place to measure.
+
+- `agentbar approvals` lists the prompts you answer most, with both verdicts and the
+  day's waiting; `agentbar forget` empties the ledger and says how much it removed.
+
+### Changed
+
+- New protocol file `~/.agentbar/decisions.jsonl`, documented in `docs/protocol.md`.
+  The shape a repeat is counted by is normalised on purpose and **carries no
+  arguments** — `git push`, never `git push origin feature/PR-4113`. Arguments never
+  repeat, and they are where a path, a URL or an accidentally typed secret would be.
+- **Settings ▸ Approvals** can turn the ledger off; it stops new rows and deletes
+  nothing, because silently destroying something somebody might want is not what a
+  checkbox does.
+
+### Fixed
+
+- The CLI test suite failed for the first hour of every day, CI included. Two blocks
+  seeded fixtures as "an hour ago", which means today at 14:00 and *yesterday* at
+  00:30. The clock is now pinnable with `AGENTBAR_NOW` and those blocks pin it.
+
 ## 1.19.0 - 2026-09-17
 
 ### Added

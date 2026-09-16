@@ -133,12 +133,13 @@ enum AgentActions {
         }
         switch a.behavior {
         case "always":
-            return ack(reportFailedAnswer(
-                AnswerWriter.write(behavior: "always", rule: a.request.ruleSuggestion, for: a.request)))
+            return ack(remember("always", a, reportFailedAnswer(
+                AnswerWriter.write(behavior: "always", rule: a.request.ruleSuggestion, for: a.request))))
         case "defer":
             // Hand off only once the hook can actually see the answer, or the user
             // arrives at a prompt that never reappears.
-            guard reportFailedAnswer(AnswerWriter.write(behavior: "defer", for: a.request)) else { return false }
+            guard remember("defer", a, reportFailedAnswer(
+                AnswerWriter.write(behavior: "defer", for: a.request))) else { return false }
             // The prompt is about to reappear where the session lives: bring it
             // forward — the exact tab when the terminal can be asked for it.
             if a.session.entrypoint == "claude-desktop" {
@@ -148,15 +149,40 @@ enum AgentActions {
             }
             return true
         default:
-            return ack(reportFailedAnswer(AnswerWriter.write(behavior: a.behavior, for: a.request)))
+            return ack(remember(a.behavior, a,
+                                reportFailedAnswer(AnswerWriter.write(behavior: a.behavior,
+                                                                      for: a.request))))
         }
+    }
+
+    /// Writes the decision to the ledger, but **only once it actually reached
+    /// disk** — a click that failed is not something you did, and counting it would
+    /// make "allowed 23× here" include prompts that went on to time out in the
+    /// terminal. Passes the written flag straight through so it can wrap a call.
+    ///
+    /// The plan branch above is deliberately not on this path: approving a plan is
+    /// a keystroke into a terminal, and nothing here learns what the terminal made
+    /// of it. See `DecisionLedger`.
+    @discardableResult
+    private static func remember(_ decision: String, _ a: ApprovalAction, _ written: Bool) -> Bool {
+        if written {
+            DecisionLedger.shared.record(decision, request: a.request, session: a.session)
+        }
+        return written
     }
 
     /// Chosen option labels for a pending question, one array per question.
     /// False means the answer never reached disk — the card stays answerable.
     @discardableResult
     static func answerQuestion(_ labels: [[String]], request: ApprovalRequest) -> Bool {
-        ack(reportFailedAnswer(AnswerWriter.writeAnswer(labels: labels, for: request)))
+        let written = reportFailedAnswer(AnswerWriter.writeAnswer(labels: labels, for: request))
+        if written {
+            // A question has no session in hand here, and it needs none: what the
+            // day wants from it is how long the agent waited for an answer.
+            DecisionLedger.shared.record("answer", request: request,
+                                         session: currentSessions().first { $0.id == request.sessionId })
+        }
+        return ack(written)
     }
 
     /// A dropped answer has no surface of its own — the row just stays pending — so

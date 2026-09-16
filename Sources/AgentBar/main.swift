@@ -93,7 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HookInstaller.installIfNeeded()
         // Off the main queue: it reads and may rewrite a file that has had a month
         // to grow, and nothing on screen is waiting for it.
-        DispatchQueue.global(qos: .utility).async { HistoryStore.prune() }
+        DispatchQueue.global(qos: .utility).async {
+            HistoryStore.prune()
+            DecisionLedger.prune()
+        }
         antigravityWatcher.start()
         coworkWatcher.start()
 
