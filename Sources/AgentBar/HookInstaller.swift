@@ -45,6 +45,7 @@ enum HookInstaller {
             _ = step("gemini", installGemini)
             _ = step("antigravity", installAntigravity)
             _ = step("qwen", installQwen)
+            _ = step("copilot", installCopilot)
             _ = step("opencode", installOpenCode)
             DispatchQueue.main.async { onFinish?() }
         }
@@ -362,6 +363,61 @@ enum HookInstaller {
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try writeIfChanged(data, to: cfgURL)
         note("qwen")
+    }
+
+    // MARK: - GitHub Copilot CLI (~/.copilot/hooks/agentbar.json)
+
+    /// Copilot CLI hooks come in two spellings, and the PascalCase one delivers the
+    /// VS Code/Claude payload shape (`session_id`, `tool_name`, Claude tool names) —
+    /// so the claude/ scripts serve it unchanged, with AGENTBAR_AGENT naming the rows.
+    ///
+    /// `exec` + `args` rather than a `bash` line, for a reason that matters: a shell
+    /// wrapper would make the hook's parent a shell that exits immediately, and
+    /// `pid: process.ppid` is the liveness handle the app prunes sessions by — every
+    /// row would vanish on the next refresh.
+    ///
+    /// Observational events only. `permissionRequest` can block and decide, but its
+    /// input payload is not documented, and a blocking hook must never be wired on
+    /// faith (same call as Qwen's). Remote approval for Copilot waits on a payload
+    /// someone has actually seen.
+    ///
+    /// AgentBar owns the whole file: Copilot loads every `*.json` in the hooks dir,
+    /// so our entries live in ours and the user's live in theirs.
+    private static func installCopilot() throws {
+        guard let node = nodePath else { NSLog("AgentBar: node not found, Copilot hooks skipped"); return }
+        // COPILOT_HOME wins when set, exactly as the CLI resolves it.
+        let copilotDir = ProcessInfo.processInfo.environment["COPILOT_HOME"].flatMap {
+            $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+        } ?? home.appendingPathComponent(".copilot")
+        guard FileManager.default.fileExists(atPath: copilotDir.path) else { return } // not a Copilot user
+        let hooksFileDir = copilotDir.appendingPathComponent("hooks", isDirectory: true)
+        try FileManager.default.createDirectory(at: hooksFileDir, withIntermediateDirectories: true)
+        let dir = hooksDir.appendingPathComponent("claude").path
+
+        let events: [(event: String, script: String, arg: String?)] = [
+            ("SessionStart",       "lifecycle.js", "start"),
+            ("SessionEnd",         "lifecycle.js", "end"),
+            ("UserPromptSubmit",   "update.js", "prompt"),
+            ("PreToolUse",         "update.js", "pre"),
+            ("PostToolUse",        "update.js", "post"),
+            // A failed tool call is still mid-turn: keep the session working.
+            ("PostToolUseFailure", "update.js", "post"),
+            ("Stop",               "update.js", "stop"),
+            // Only Copilot reports errors as their own event; update.js reads the
+            // payload's `recoverable` so a retry doesn't end the turn early.
+            ("ErrorOccurred",      "update.js", "fail"),
+        ]
+        var hooks: [String: Any] = [:]
+        for e in events {
+            var args = ["\(dir)/\(e.script)"]
+            if let arg = e.arg { args.append(arg) }
+            hooks[e.event] = [["type": "command", "exec": node, "args": args,
+                               "timeoutSec": 5, "env": ["AGENTBAR_AGENT": "copilot"]]]
+        }
+        let root: [String: Any] = ["version": 1, "hooks": hooks]
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: hooksFileDir.appendingPathComponent("agentbar.json"))
+        note("copilot")
     }
 
     // MARK: - OpenCode (~/.config/opencode/plugins/agentbar.js)

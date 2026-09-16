@@ -146,10 +146,16 @@ function run() {
     case "pre":    state = "tool"; label = TOOL_LABELS[p.tool_name] || "Using tool"; break;
     case "post":   state = "thinking"; label = "Thinking…"; break;
     case "stop":    state = "done"; label = ""; break;
-    // Agents that report a failed turn separately (Qwen's StopFailure). The
-    // turn is over, but it is not a success — a green tick and a celebration
-    // cue over an error would be a lie.
-    case "fail":    state = "error"; label = ""; break;
+    // Agents that report a failed turn separately (Qwen's StopFailure, Copilot's
+    // ErrorOccurred). The turn is over, but it is not a success — a green tick
+    // and a celebration cue over an error would be a lie.
+    // Copilot alone says whether it intends to retry; a recoverable error is
+    // mid-turn noise, and painting the row red for it would end the turn twice.
+    // Qwen never carries the field, so the check leaves it exactly as it was.
+    case "fail":
+      if (p.recoverable === true) { state = "thinking"; label = "Thinking…"; }
+      else { state = "error"; label = ""; }
+      break;
     default: return;
   }
 

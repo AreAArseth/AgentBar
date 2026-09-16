@@ -460,6 +460,23 @@ printf '{"session_id":"failsess","cwd":"/tmp/proj"}' \
 check "fail: error state"           'grep -q "\"state\":\"error\"" "$HOME/.agentbar/state.d/failsess.json"'
 check "fail: not done"              '! grep -q "\"state\":\"done\"" "$HOME/.agentbar/state.d/failsess.json"'
 
+# 19b. Copilot's ErrorOccurred carries `recoverable`: an error the CLI intends to
+# retry is mid-turn noise, not the end of the turn. Qwen's StopFailure has no such
+# field, so the case above must keep behaving exactly as it did.
+fresh_home
+printf '{"session_id":"recsess","cwd":"/tmp/proj","recoverable":true}' \
+  | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js fail
+check "recoverable: stays working"  'grep -q "\"state\":\"thinking\"" "$HOME/.agentbar/state.d/recsess.json"'
+check "recoverable: not error"      '! grep -q "\"state\":\"error\"" "$HOME/.agentbar/state.d/recsess.json"'
+printf '{"session_id":"recsess","cwd":"/tmp/proj","recoverable":false}' \
+  | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js fail
+check "unrecoverable: error state"  'grep -q "\"state\":\"error\"" "$HOME/.agentbar/state.d/recsess.json"'
+check "copilot: agent id in state"  'grep -q "\"agent\":\"copilot\"" "$HOME/.agentbar/state.d/recsess.json"'
+# The PascalCase dialect remaps Copilot's tool ids to Claude's, so TOOL_LABELS hits.
+printf '{"session_id":"recsess","tool_name":"Bash"}' \
+  | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js pre
+check "copilot: tool label mapped"  'grep -q "\"label\":\"Running command\"" "$HOME/.agentbar/state.d/recsess.json"'
+
 # 20. the OpenCode plugin is loadable and maps the bus to protocol states
 fresh_home
 check "opencode: plugin parses"     '"$NODE" --input-type=module --check < Scripts/hooks/opencode/agentbar.js'

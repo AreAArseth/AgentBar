@@ -126,8 +126,12 @@ check "CLI answer reaches the hook"    'grep -q "\"behavior\":\"allow\"" "$TESTR
 
 # --- install-hooks: wiring, idempotence, unparseable config untouched
 fresh_home
-mkdir -p "$HOME/.gemini" "$HOME/.cursor" "$HOME/.claude" "$HOME/.qwen" "$HOME/.codex" "$HOME/.config/opencode"
+mkdir -p "$HOME/.gemini" "$HOME/.cursor" "$HOME/.claude" "$HOME/.qwen" "$HOME/.codex" "$HOME/.config/opencode" "$HOME/.copilot"
 echo '{"theme":"dark"}' > "$HOME/.gemini/settings.json"
+# A hooks file of the user's own, next to ours: Copilot loads every *.json in the
+# dir, so ours must be a separate file and theirs must come back untouched.
+mkdir -p "$HOME/.copilot/hooks"
+echo '{"version":1,"hooks":{"SessionStart":[{"type":"command","bash":"true"}]}}' > "$HOME/.copilot/hooks/mine.json"
 "$CLI" install-hooks >/dev/null 2>&1
 check "gemini wired, existing kept"    'grep -q BeforeAgent "$HOME/.gemini/settings.json" && grep -q theme "$HOME/.gemini/settings.json"'
 check "cursor wired with pinned node"  'grep -q afterAgentResponse "$HOME/.cursor/hooks.json" && head -1 "$HOME/.agentbar/hooks/cursor/cursor.js" | grep -qv "env node"'
@@ -135,10 +139,17 @@ check "claude wired"                   'grep -q PermissionRequest "$HOME/.claude
 check "qwen wired with its identity"   'grep -q StopFailure "$HOME/.qwen/settings.json" && grep -q AGENTBAR_AGENT "$HOME/.qwen/settings.json"'
 check "codex notify wired"             'grep -q "/.agentbar/hooks/codex/" "$HOME/.codex/config.toml"'
 check "opencode plugin installed"      '[ -f "$HOME/.config/opencode/plugins/agentbar.js" ]'
+check "copilot wired with its identity" 'grep -q ErrorOccurred "$HOME/.copilot/hooks/agentbar.json" && grep -q "\"copilot\"" "$HOME/.copilot/hooks/agentbar.json"'
+# exec+args, never a shell line: a bash wrapper would make the hook'"'"'s parent a
+# shell that exits at once, and ppid is what prunes dead rows.
+check "copilot runs node directly"     'grep -q "\"exec\"" "$HOME/.copilot/hooks/agentbar.json" && ! grep -q "\"bash\"" "$HOME/.copilot/hooks/agentbar.json"'
+check "copilot approval left unwired"  '! grep -qi "permissionRequest" "$HOME/.copilot/hooks/agentbar.json"'
+check "copilot leaves other hook files" 'grep -q "\"bash\":\"true\"" "$HOME/.copilot/hooks/mine.json"'
 SNAP="$(cat "$HOME/.gemini/settings.json")"
 QWEN_SNAP="$(cat "$HOME/.qwen/settings.json")"
+COPILOT_SNAP="$(cat "$HOME/.copilot/hooks/agentbar.json")"
 "$CLI" install-hooks >/dev/null 2>&1
-check "install-hooks idempotent"       '[ "$SNAP" = "$(cat "$HOME/.gemini/settings.json")" ] && [ "$QWEN_SNAP" = "$(cat "$HOME/.qwen/settings.json")" ]'
+check "install-hooks idempotent"       '[ "$SNAP" = "$(cat "$HOME/.gemini/settings.json")" ] && [ "$QWEN_SNAP" = "$(cat "$HOME/.qwen/settings.json")" ] && [ "$COPILOT_SNAP" = "$(cat "$HOME/.copilot/hooks/agentbar.json")" ]'
 echo '{broken' > "$HOME/.gemini/settings.json"
 "$CLI" install-hooks >/dev/null 2>&1
 check "unparseable config untouched"   '[ "$(cat "$HOME/.gemini/settings.json")" = "{broken" ]'

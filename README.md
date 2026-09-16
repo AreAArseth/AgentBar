@@ -58,7 +58,8 @@ all reversible (see [Uninstall](#uninstall)):
 - Adds a `notify` line to `~/.codex/config.toml` **only if you use Codex and have none**;
   merges into `~/.cursor/hooks.json` / `~/.gemini/settings.json` /
   `~/.gemini/antigravity{,-cli}/hooks.json` / `~/.qwen/settings.json`
-  **only if those exist**.
+  **only if those exist**. Writes its own `~/.copilot/hooks/agentbar.json`
+  **only if you use Copilot** — a separate file, so your own hooks stay untouched.
 - Copies a plugin to `~/.config/opencode/plugins/agentbar.js` **only if you use OpenCode**.
 - The SessionStart hook launches AgentBar in the background when an agent session begins.
 - Nothing else is granted automatically: the exact-tab jump-back asks for
@@ -242,18 +243,18 @@ launchd agent has to be booted out separately, which is what the last line does.
 | Codex CLI | turn-complete | yes | knot + braille dot-matrix | via Codex `notify` (auto-installed); no per-tool granularity upstream |
 | Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed) |
 | Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed) |
-| GitHub Copilot | — | yes | pixel head + dot-matrix | no public event API yet; everything else is wired and waiting |
+| GitHub Copilot CLI | working / done / failed | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session). Remote approval waits until its `permissionRequest` payload is documented |
 | Qwen Code | working / done / failed | yes | Q ring | Claude-style hooks in `~/.qwen/settings.json` (auto-wired if Qwen is installed); remote approval waits until its decision contract is verified |
 | OpenCode | working / approval / done / failed | yes | prompt chevron | plugin in `~/.config/opencode/plugins/` (auto-installed if OpenCode is installed); observe-only |
 | Google Antigravity | working / done | yes | pixel rainbow arch + dot-matrix | hooks in `~/.gemini/antigravity{,-cli}/hooks.json` (auto-wired); desktop 2.3.x only honors per-workspace `.agents/hooks.json`, and only `PostToolUse` fires — quiet sessions decay to done |
 | Devin (cloud) | working / blocked / finished / suspended | yes | D letterform | no local process at all — rows come from the [cloud poller](Scripts/cloud/), clicking opens the exact thread in Devin Desktop (or the web) |
 
 Hook readiness: Claude Code, Codex (`notify`), Cursor (`hooks.json`), Gemini
-(`settings.json`), Antigravity (`hooks.json`), Qwen Code (`settings.json`), and
-OpenCode (plugin) hooks all install automatically at launch (idempotently — every
-launch re-checks, nothing is duplicated) for the tools you have. Copilot ships with its mascot, menu entry, and
-the keystroke-approval backend already in place — the moment it exposes session
-events, support is one small hook script away.
+(`settings.json`), Antigravity (`hooks.json`), Qwen Code (`settings.json`),
+Copilot CLI (`hooks/agentbar.json`), and OpenCode (plugin) hooks all install
+automatically at launch (idempotently — every launch re-checks, nothing is
+duplicated) for the tools you have. Copilot reads its hook config once at
+startup, so a session already open won't report until you restart it.
 
 ## Cloud agents
 

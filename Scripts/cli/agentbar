@@ -14,7 +14,7 @@
 //   agentbar waybar                 one-line JSON for waybar/polybar custom modules
 //                                   (each call refreshes the heartbeat; poll <= 30s)
 //   agentbar install-hooks          wire agent hooks (Claude/Codex/Cursor/Antigravity/
-//                                   Gemini/Qwen/OpenCode) —
+//                                   Gemini/Qwen/Copilot/OpenCode) —
 //                                   the Linux equivalent of the macOS app's installer
 
 "use strict";
@@ -536,6 +536,40 @@ function installHooks() {
     }
   }
 
+  // GitHub Copilot CLI — ~/.copilot/hooks/agentbar.json (or $COPILOT_HOME/hooks).
+  // The PascalCase event names deliver the VS Code/Claude payload shape, so the
+  // claude/ scripts serve Copilot unchanged, same reuse as Qwen above.
+  // `exec` + `args` runs node directly: a bash wrapper would make the hook's parent
+  // a shell that exits at once, and ppid is the liveness handle rows are pruned by.
+  // Observational events only — permissionRequest can block, but its input payload
+  // is undocumented, and a blocking hook must never be wired on faith.
+  // AgentBar owns this whole file; Copilot loads every *.json in the dir, so the
+  // user's own hooks live in theirs and are never touched.
+  const copilotDir = process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
+  if (fs.existsSync(copilotDir)) {
+    const file = path.join(copilotDir, "hooks", "agentbar.json");
+    const copilotEvents = [
+      ["SessionStart", "lifecycle.js", "start"],
+      ["SessionEnd", "lifecycle.js", "end"],
+      ["UserPromptSubmit", "update.js", "prompt"],
+      ["PreToolUse", "update.js", "pre"],
+      ["PostToolUse", "update.js", "post"],
+      // A failed tool call is still mid-turn: keep the session working.
+      ["PostToolUseFailure", "update.js", "post"],
+      ["Stop", "update.js", "stop"],
+      // Only Copilot reports errors as their own event; update.js reads the
+      // payload's `recoverable` so a retry doesn't end the turn early.
+      ["ErrorOccurred", "update.js", "fail"],
+    ];
+    const hooks = {};
+    for (const [ev, script, arg] of copilotEvents) {
+      hooks[ev] = [{ type: "command", exec: node, args: [`${dir}/${script}`, arg],
+                     timeoutSec: 5, env: { AGENTBAR_AGENT: "copilot" } }];
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    report(`copilot ${file}`, writeIfChanged(file, { version: 1, hooks }));
+  }
+
   // OpenCode — ~/.config/opencode/plugins/agentbar.js. OpenCode loads JS plugins
   // from its config dir; ours observes the event bus and mirrors it into state
   // files. Copied on change, same refresh-with-the-installer rule as macOS.
@@ -580,6 +614,6 @@ switch (cmd) {
   agentbar watch [-i SEC]         live view + keys (a allow/A always/d deny/f defer/1-9 answer/q quit);
                                   enables remote approval
   agentbar waybar                 JSON for waybar/polybar (poll <= 30s)
-  agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/OpenCode hooks (Linux installer)`);
+  agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
     break;
 }
