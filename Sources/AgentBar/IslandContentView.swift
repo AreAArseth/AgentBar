@@ -748,14 +748,18 @@ final class IslandApprovalView: NSView {
     /// counts live here.
     private static func diffSummary(_ context: ApprovalRequest.Context) -> NSView? {
         guard case .diff(let old, let new, _) = context else { return nil }
-        func count(_ s: String) -> Int {
-            s.isEmpty ? 0 : s.split(separator: "\n", omittingEmptySubsequences: false).count
+        // What actually moved. Counting the whole old and new blocks reported a
+        // one-character edit inside an eight-line window as "+8 −8", which is a
+        // number somebody would repeat.
+        func lines(_ s: String) -> [String] {
+            s.isEmpty ? [] : s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         }
-        let out = NSMutableAttributedString(string: "+\(count(new))", attributes: [
+        let count = LineDiff.counts(old: lines(old), new: lines(new))
+        let out = NSMutableAttributedString(string: "+\(count.added)", attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.systemGreen,
         ])
-        out.append(NSAttributedString(string: "  −\(count(old))", attributes: [
+        out.append(NSAttributedString(string: "  −\(count.removed)", attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.systemRed,
         ]))

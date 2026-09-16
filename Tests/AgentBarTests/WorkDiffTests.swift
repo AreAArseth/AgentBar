@@ -116,4 +116,22 @@ import Testing
         #expect(RepoChange(json: nil) == nil)
         #expect(RepoChange(json: "not an object") == nil)
     }
+    /// The runner used to promise in a comment that a slow repository "must not pin
+    /// a queue forever" and then called `waitUntilExit` with nothing to end it. A
+    /// child that never returns has to come back as no answer, not as a hung queue.
+    /// Tested with `sleep` rather than a git command, because no git invocation
+    /// hangs reliably enough to be a test.
+    @Test func aChildThatNeverReturnsGivesUp() throws {
+        let started = Date()
+        let result = WorkDiff.run("/bin/sleep", ["30"], in: NSTemporaryDirectory(), timeout: 1)
+        #expect(result == nil)
+        #expect(Date().timeIntervalSince(started) < 5)   // gave up, did not hang
+    }
+
+    /// And the ordinary path still returns what the child wrote.
+    @Test func aChildThatAnswersIsRead() throws {
+        let out = try #require(WorkDiff.run("/bin/echo", ["hello"], in: NSTemporaryDirectory()))
+        #expect(out.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+    }
+
 }

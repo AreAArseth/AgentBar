@@ -215,13 +215,20 @@ final class WorkDiff {
     /// a second. This runs twice in a session's whole life, on a utility queue. The
     /// two are not in conflict, and neither should be "fixed" to match the other.
     @discardableResult
-    static func git(_ args: [String], in cwd: String) -> String? {
-        guard let tool, FileManager.default.fileExists(atPath: cwd) else { return nil }
+    static func git(_ args: [String], in cwd: String, timeout: TimeInterval = 8) -> String? {
+        guard let tool else { return nil }
+        return run(tool, args, in: cwd, timeout: timeout)
+    }
+
+    /// The runner itself, separate from git so the deadline can be tested with a
+    /// child that is guaranteed to hang — which no git invocation reliably is.
+    static func run(_ tool: String, _ args: [String], in cwd: String,
+                    timeout: TimeInterval = 8) -> String? {
+        guard FileManager.default.fileExists(atPath: cwd) else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        // A repository on a slow network mount must not pin a queue forever.
         var env = ProcessInfo.processInfo.environment
         env["GIT_OPTIONAL_LOCKS"] = "0"     // never take index.lock for a read
         env["GIT_TERMINAL_PROMPT"] = "0"
@@ -230,9 +237,29 @@ final class WorkDiff {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+
+        // Drained on another thread, and killed at the deadline. The comment here
+        // used to say a slow mount must not pin a queue forever, and then the code
+        // did exactly that: `waitUntilExit` with nothing to end it. A repository on
+        // a stalled network mount, or a `git` waiting on a lock somebody else holds,
+        // took the utility queue with it — and a full pipe would deadlock the pair
+        // before the wait even began.
+        var data = Data()
+        let lock = NSLock()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            let read = out.fileHandleForReading.readDataToEndOfFile()
+            lock.lock(); data = read; lock.unlock()
+            done.signal()
+        }
+        if done.wait(timeout: .now() + timeout) == .timedOut {
+            p.terminate()
+            _ = done.wait(timeout: .now() + 1)   // let the reader finish on the EOF
+            return nil
+        }
         p.waitUntilExit()
         guard p.terminationStatus == 0 else { return nil }
+        lock.lock(); defer { lock.unlock() }
         return String(decoding: data, as: UTF8.self)
     }
 }

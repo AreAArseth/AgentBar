@@ -125,6 +125,12 @@ don't use. Hooks are snapshotted per session — start a new agent session after
 - **Two looks** — full-color mascots, or a monochrome System mode that matches the menu bar.
 - **Remote Allow/Deny** — answer Claude Code permission prompts straight from the menu:
   see exactly what's requested, then Allow once, Always allow, Deny, or defer to terminal.
+- **A diff you can actually read** — an edit shows the lines that *moved*, with a line
+  of context and a marker where untouched lines were skipped. Where a single line was
+  edited, the characters that changed stay at full strength and the rest of the line
+  fades, and a change past the right edge slides into view instead of truncating —
+  both halves by the same amount, so the columns still line up. The `+N −M` beside it
+  counts what moved, not the size of the window it moved in.
 - **Answer questions too** — when Claude asks a multiple-choice question, the island
   and the menu show the actual options: tap one and the session continues, no
   terminal switch. The terminal wizard stays live the whole time — whoever answers

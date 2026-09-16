@@ -3,6 +3,41 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.21.0 - 2026-09-17
+
+### Fixed
+
+- **The mini-diff showed the wrong lines.** It printed the first three lines of the
+  old text followed by the first three of the new, so an edit in the middle of a
+  function came out as three identical lines of context printed twice, with the
+  change itself off the bottom. You were approving something you could not see.
+
+  It is a real diff now: the two sides are aligned, only what moved is shown, with a
+  line of context either side and a marker wherever untouched lines were skipped.
+
+- **`+N −M` counted the window, not the change.** A one-character edit inside an
+  eight-line context read as *"+8 −8"* — a number somebody would repeat. It counts
+  the lines that actually moved.
+
+- **`git` had no deadline.** The comment said a slow repository "must not pin a queue
+  forever" and the code then called `waitUntilExit` with nothing to end it: a
+  repository on a stalled network mount, or a `git` waiting on a lock somebody else
+  held, took the utility queue with it, and a full pipe could deadlock the pair
+  before the wait even began. It drains on another thread and kills the child at the
+  deadline.
+
+### Added
+
+- **The characters that changed stay lit.** When one line was edited rather than
+  replaced, the part that differs keeps full strength and the shared ends fade, so a
+  renamed variable or a flipped comparison is one bright word instead of two lines
+  that look identical.
+- **A change past the right edge slides into view.** A ninety-character line whose
+  only difference sits at column seventy used to truncate before it — emphasis on a
+  part of the line nobody could see. Text is dropped from the front, where both
+  versions agree, and the `−`/`+` pair is slid by the **same** amount so the columns
+  still line up under each other.
+
 ## 1.20.0 - 2026-09-17
 
 ### Added
