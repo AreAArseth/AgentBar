@@ -53,6 +53,16 @@ All notable changes to AgentBar are documented here. This project follows
   will.
 
 ### Fixed
+- **An approval answered the instant it appears is no longer thrown away.** The
+  permission hook clears any stale answer left under its request's file name —
+  the orphan of a crashed twin — but it did that *after* publishing the request.
+  The app watches `requests.d` by filesystem event rather than by poll, so it can
+  answer within microseconds of the request becoming visible, and an answer that
+  landed inside that window was deleted by the hook's own cleanup. The hook then
+  waited out its full ten minutes for a decision it had already been given, and
+  the session finally fell through to the terminal prompt. Nobody can answer a
+  request that does not exist yet, so the clear now happens first and the window
+  is closed rather than narrowed. Caught by CI, which lost the race for real.
 - **A `node` that moves no longer silently kills every hook.** The path to the
   interpreter is written into each agent's config, and that config outlives the
   next `node` upgrade — so after `nvm install 22` or a Homebrew Cellar bump the

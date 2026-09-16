@@ -298,6 +298,18 @@ function run() {
         ts: Math.floor(Date.now() / 1000) });
     } catch {}
 
+    // A leftover answer under this name (orphan of a crashed twin, prompt_id
+    // reuse) must not be mistaken for the user's decision on THIS request.
+    //
+    // BEFORE the request is published, not after. The rename below is what makes
+    // the request visible, and a frontend watching requests.d can answer within
+    // microseconds of it — the app watches by fs event, not by poll. Clearing
+    // afterwards left a window in which that prompt answer was deleted by this
+    // cleanup, and the hook then waited out its full 10 minutes for a decision it
+    // had already been given. Nobody can answer a request that does not exist yet,
+    // so doing it first closes the window instead of narrowing it.
+    try { fs.rmSync(ansPath, { force: true }); } catch {}
+
     writeAtomic(reqPath, {
       // safeId to match Session.id, which the app derives from the state file name.
       sessionId: safeId(p.session_id), agent,
@@ -306,9 +318,6 @@ function run() {
       ruleSuggestion: suggestion, pid: process.ppid, hookPid: process.pid,
       ts: Math.floor(Date.now() / 1000),
     });
-    // A leftover answer under this name (orphan of a crashed twin, prompt_id
-    // reuse) must not be mistaken for the user's decision on THIS request.
-    try { fs.rmSync(ansPath, { force: true }); } catch {}
 
     // Request files are named <session>-<prompt>, and prompt ids repeat across
     // the tools of ONE turn — so a later tool's hook writes the same path we

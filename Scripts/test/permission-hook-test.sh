@@ -235,7 +235,9 @@ wait "$hookpid"
 check "legacy verb: real answer lands" 'grep -q "User answered \\\\\"Red\\\\\"" "$HOME/out.json"'
 
 # 12h. a stale answer file left under the same name must not be mistaken for
-# the user's decision on a fresh request
+# the user's decision on a fresh request. This is also what guards the ordering:
+# the clear happens BEFORE the request is published, so a frontend answering the
+# instant it appears cannot have its answer swept away by this cleanup.
 fresh_home
 printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/testsess-p4.json"
 AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
