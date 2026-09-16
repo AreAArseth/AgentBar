@@ -13,16 +13,48 @@ final class DisplayPicker: NSView {
 
     private let row = NSStackView()
     private static let tileHeight: CGFloat = 62
+    private static let spacing: CGFloat = 10
     /// Wide enough for a short display name on one line. Names are kept short on
     /// purpose rather than wrapped: a two-line label inside a stack fights
     /// AppKit's intrinsic width and loses, and System Settings labels them
     /// briefly too. The full name is in the tooltip.
-    private static let tileWidth: CGFloat = 104
+    private static let idealTileWidth: CGFloat = 104
+    /// Below this the drawing stops reading as a display at all, so the row is
+    /// allowed to overflow rather than shrink into confetti. It takes seven
+    /// displays to get there, which is past what macOS drives.
+    private static let minTileWidth: CGFloat = 56
+
+    /// How much room the row has. The welcome window sets it to its content
+    /// width; tiles shrink to fit rather than running off the edge, which is what
+    /// happened from four displays up — 5 tiles at the ideal width is 560pt
+    /// against 480pt of window.
+    var availableWidth: CGFloat = 480 {
+        didSet { if availableWidth != oldValue { rebuild() } }
+    }
+
+    /// Ideal width, shrunk just enough that every tile fits on the row.
+    /// `tiles` counts the displays plus the *Follow pointer* tile.
+    static func tileWidth(tiles: Int, available: CGFloat) -> CGFloat {
+        let n = CGFloat(max(1, tiles))
+        let fits = (available - spacing * (n - 1)) / n
+        return max(minTileWidth, min(idealTileWidth, fits))
+    }
+
+    /// Total width the row will occupy at that tile count — what the fit is
+    /// actually judged on, and what the tests assert against.
+    static func rowWidth(tiles: Int, available: CGFloat) -> CGFloat {
+        let n = CGFloat(max(1, tiles))
+        return tileWidth(tiles: tiles, available: available) * n + spacing * (n - 1)
+    }
+
+    private var tileWidth: CGFloat {
+        Self.tileWidth(tiles: NSScreen.screens.count + 1, available: availableWidth)
+    }
 
     init() {
         super.init(frame: .zero)
         row.orientation = .horizontal
-        row.spacing = 10
+        row.spacing = Self.spacing
         row.alignment = .top
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
@@ -72,6 +104,7 @@ final class DisplayPicker: NSView {
         let art = DisplayTileView(screen: screen, selected: selected)
         art.translatesAutoresizingMaskIntoConstraints = false
         art.heightAnchor.constraint(equalToConstant: Self.tileHeight).isActive = true
+        let width = tileWidth
 
         let name = NSTextField(labelWithString: label(for: screen))
         name.font = .systemFont(ofSize: 10)
@@ -79,14 +112,14 @@ final class DisplayPicker: NSView {
         name.alignment = .center
         name.lineBreakMode = .byTruncatingTail
         name.translatesAutoresizingMaskIntoConstraints = false
-        name.widthAnchor.constraint(equalToConstant: Self.tileWidth).isActive = true
+        name.widthAnchor.constraint(equalToConstant: width).isActive = true
 
         let col = NSStackView(views: [art, name])
         col.orientation = .vertical
         col.spacing = 4
         col.alignment = .centerX
         col.translatesAutoresizingMaskIntoConstraints = false
-        col.widthAnchor.constraint(equalToConstant: Self.tileWidth).isActive = true
+        col.widthAnchor.constraint(equalToConstant: width).isActive = true
 
         let button = TileButton(frame: .zero)
         button.translatesAutoresizingMaskIntoConstraints = false

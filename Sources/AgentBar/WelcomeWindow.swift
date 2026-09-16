@@ -155,6 +155,7 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         label.font = .systemFont(ofSize: 13, weight: .medium)
 
         displayPicker = DisplayPicker()
+        displayPicker.availableWidth = Self.rowWidth
         displayPicker.onPick = { [weak self] in self?.reload() }
 
         displayCaption = NSTextField(wrappingLabelWithString: "")

@@ -3,6 +3,18 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.15.1 - 2026-09-16
+
+### Fixed
+- **The display row no longer runs off the window at four displays.** The tiles
+  were a fixed 104pt, so five of them (four displays plus *Follow pointer*) came
+  to 560pt against 480pt of window and the last one was simply cut off — on the
+  setups most likely to want this feature. Tiles now shrink to fit instead, down
+  to a floor where the drawing stops reading as a display; three displays and
+  fewer are unchanged, and no display is ever dropped from the row, because one
+  you cannot see is one you cannot pin the island to. The fit is a pure function
+  with tests behind it rather than arithmetic done on paper.
+
 ## 1.15.0 - 2026-09-16
 
 ### Added
