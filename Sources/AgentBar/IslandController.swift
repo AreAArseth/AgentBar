@@ -581,6 +581,11 @@ final class IslandController: NSObject {
 
     @objc private func showMenu(_ sender: NSButton) {
         let menu = NSMenu()
+        // In island-only mode this is the only menu there is, so the day's digest
+        // has to be reachable from it — otherwise the feature exists for menu bar
+        // users and nobody else.
+        menu.addItem(MenuBuilder.todayRow(target: self, action: #selector(openPastProject(_:))))
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Appearance…", action: #selector(openWelcome), keyEquivalent: "")
         // In Island-only mode this menu is the only menu — the colour choice the
         // status item dropdown offers has to be reachable here too.
@@ -620,6 +625,14 @@ final class IslandController: NSObject {
         SoundCenter.enabled.toggle()
         if SoundCenter.enabled { SoundCenter.shared.preview() }
         SettingsWindow.shared.refreshIfVisible()
+    }
+
+    /// A finished session's project folder — the session itself is gone, so there is
+    /// no tab to jump back to. Mirrors `StatusItemController.openPastProject`.
+    @objc private func openPastProject(_ sender: NSMenuItem) {
+        guard let cwd = sender.representedObject as? String, !cwd.isEmpty,
+              FileManager.default.fileExists(atPath: cwd) else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: cwd))
     }
 
     @objc private func openWelcome() { WelcomeWindow.shared.show() }

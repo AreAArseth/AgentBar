@@ -70,7 +70,10 @@ enum MenuBuilder {
             ])
             menu.addItem(item)
         }
-        menu.addItem(todayRow(controller))
+        let today = todayRow(target: controller,
+                             action: #selector(StatusItemController.openPastProject(_:)))
+        today.submenu?.delegate = controller // hold live refresh while it is open
+        menu.addItem(today)
         menu.addItem(.separator())
 
         // Open
@@ -176,7 +179,11 @@ enum MenuBuilder {
     ///
     /// Read fresh on every open. A digest recomputed when someone asks for it is
     /// cheap; a digest kept in sync all day is a store nobody needed.
-    private static func todayRow(_ controller: StatusItemController) -> NSMenuItem {
+    ///
+    /// Takes its target rather than assuming the status item: in island-only mode
+    /// there is no menu bar item at all, and a digest only one of the two surfaces
+    /// can reach is half a feature. The island's overflow menu uses the same row.
+    static func todayRow(target: AnyObject?, action: Selector?) -> NSMenuItem {
         let (summary, entries) = HistoryDigest.today(HistoryStore.read())
         let item = NSMenuItem(title: "Today", action: nil, keyEquivalent: "")
         item.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
@@ -189,12 +196,10 @@ enum MenuBuilder {
             return item
         }
         let sub = NSMenu()
-        sub.delegate = controller
         // Enough to read at a glance, not a log. The rest is in `agentbar history`.
         for e in entries.prefix(12) {
-            let row = NSMenuItem(title: "", action: #selector(StatusItemController.openPastProject(_:)),
-                                 keyEquivalent: "")
-            row.target = controller
+            let row = NSMenuItem(title: "", action: action, keyEquivalent: "")
+            row.target = target
             row.representedObject = e.cwd
             row.isEnabled = !e.cwd.isEmpty
             row.image = menuMark(for: Agent.byID(e.agent))

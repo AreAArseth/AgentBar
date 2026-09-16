@@ -57,7 +57,10 @@ All notable changes to AgentBar are documented here. This project follows
   there is already something to look at.
 
   It stays a menu row rather than becoming a window: the project allows two
-  surfaces and a dashboard is not one of them. Numbers are reported only as far as
+  surfaces and a dashboard is not one of them. Reachable from **both** of them —
+  the menu bar dropdown and the island's **⋯** — because in island-only mode there
+  is no menu bar item at all, and a digest only half the users can open is half a
+  feature. Numbers are reported only as far as
   they are true — `started_at` is optional in the protocol, so a day where only
   some sessions could be timed says "30m across 1" rather than presenting a
   partial sum as the day's work, and a session a watchdog *guessed* was over is

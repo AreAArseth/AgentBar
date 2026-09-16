@@ -86,9 +86,9 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   you aren't looking at. **Send a test** checks they reach you; if nothing appears
   but it shows up in Notification Center, a Focus is on — macOS files banners
   rather than showing them, which is working as designed.
-- **What happened today** — the menu's **Today** row sums up the sessions that
-  finished, how long they took, and what failed; `agentbar history` says the same
-  in a terminal. Live status forgets a session the moment it ends; this doesn't.
+- **What happened today** — the **Today** row sums up the sessions that finished,
+  how long they took, and what failed. In the menu bar dropdown, and behind the
+  island's **⋯**; `agentbar history` says the same in a terminal. Live status forgets a session the moment it ends; this doesn't.
 - **Pick the island's display** — on a multi-monitor desk the island can be pinned
   to one screen instead of following the pointer around. The welcome window draws
   your displays the way System Settings does; unplug the pinned one and it falls
