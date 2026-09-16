@@ -190,7 +190,7 @@ and the hooks are plain Node — so on Linux, the `agentbar` CLI is the frontend
 
 ```bash
 git clone https://github.com/michalstrnadel/AgentBar.git && cd AgentBar
-./Scripts/cli/agentbar install-hooks   # wires Claude/Codex/Cursor/Antigravity/Gemini/Qwen/OpenCode hooks
+./Scripts/cli/agentbar install-hooks   # wires Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks
 sudo ln -s "$PWD/Scripts/cli/agentbar" /usr/local/bin/agentbar   # optional
 
 agentbar                 # session list (same rows as the macOS menu)
@@ -216,6 +216,21 @@ The module's `class` (and `alt`) is one of `permission`, `question`, `working`,
 `idle` or `empty`, in that priority order — style them in your waybar CSS; the
 text is `✋ n` / `❓ n` / `● n` / the session count.
 
+**Updating:** the CLI has no release channel of its own — `git pull` in the
+checkout is the update, and re-run `install-hooks` afterwards so the copies in
+`~/.agentbar/hooks/` are refreshed. (On macOS the app does that for you on every
+launch; on Linux the CLI *is* AgentBar, so nothing does it behind your back.)
+
+`install-hooks` writes an absolute path to the `node` that will run the hooks,
+because a GUI-launched agent's `PATH` can't be relied on. It picks a *stable*
+path — `/usr/bin/node`, `/usr/local/bin/node`, `/opt/homebrew/bin/node` or
+`~/.local/bin/node` — whenever one of those is the same binary as the `node`
+running the CLI, rather than the version-pinned path a version manager resolves
+to. A hook config outlives the next `node` upgrade; if it named
+`…/node/v20.11.0/bin/node`, every hook would silently stop firing the day you
+upgrade. On a version manager with no stable alias it falls back to the running
+interpreter, so re-run `install-hooks` after a major `node` change.
+
 The CLI works on macOS too (same protocol, handy over SSH). A native tray app
 (StatusNotifierItem) may come later if there's demand.
 
@@ -232,6 +247,8 @@ rm -rf ~/.agentbar
 #   ~/.gemini/antigravity/hooks.json and ~/.gemini/antigravity-cli/hooks.json
 #                              — delete the top-level "agentbar" key
 #   ~/.qwen/settings.json      — delete hook groups whose command references "/.agentbar/hooks/claude/"
+# Copilot and OpenCode are whole files AgentBar owns, so they just go:
+rm -f ~/.copilot/hooks/agentbar.json
 rm -f ~/.config/opencode/plugins/agentbar.js
 ./Scripts/cloud/install.sh uninstall   # only if you installed the cloud poller
 ```

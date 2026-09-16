@@ -17,6 +17,14 @@ All notable changes to AgentBar are documented here. This project follows
   On macOS the app repaired this on its next launch — on Linux the CLI *is*
   AgentBar, so nothing repaired it.
 
+### Documentation
+- The README's uninstall list never mentioned Copilot, which is the easiest one
+  to remove — AgentBar owns that whole file, so it is a single `rm`. The Linux
+  quick start still listed the pre-Copilot agent set.
+- The Linux section says how the CLI updates (`git pull`, then re-run
+  `install-hooks`; nothing refreshes the hook copies behind your back the way the
+  macOS app does) and which `node` path gets pinned into the configs, and why.
+
 ## 1.14.0 - 2026-09-16
 
 ### Added
