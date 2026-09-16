@@ -40,5 +40,7 @@ open "build/AgentBar.app"
    optional hook dir in `Scripts/hooks/<agent>/` plus its installer step in
    `HookInstaller.swift` AND the Linux CLI's `install-hooks`, and the agent id in
    the `docs/protocol.md` list, the README agent table, and the agent list above.
-   Nothing else should need touching.
+   If it gets hooks it also needs a row in the `Diagnostics.integrations` table AND
+   the Linux `doctor`'s — otherwise diagnostics reports a clean bill of health for
+   an integration it never looked at. Nothing else should need touching.
 5. Third-party marks stay listed in `THIRD_PARTY_NOTICES.md`.
