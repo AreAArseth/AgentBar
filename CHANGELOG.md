@@ -3,7 +3,7 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.15.0 - 2026-09-16
 
 ### Added
 - **Pick which display the island lives on.** It followed the pointer, full stop
