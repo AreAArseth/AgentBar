@@ -5,6 +5,21 @@ All notable changes to AgentBar are documented here. This project follows
 
 ## Unreleased
 
+### Added
+- **Pick which display the island lives on.** It followed the pointer, full stop
+  — right for a laptop, wrong for a fixed multi-monitor desk, where the island
+  jumped to whichever screen the mouse wandered onto and a status surface that
+  moves is one you have to go looking for. The welcome window now has an **Island
+  on:** row that draws your displays the way System Settings does — a laptop for
+  the built-in one, notch and all, a monitor on a stand for the rest, proportioned
+  from each screen's real aspect ratio — and one click pins the island to any of
+  them. Identity is the display's UUID, not its display ID, so a monitor unplugged
+  and plugged back in is still recognised as the same one. A pinned display that
+  is currently missing falls back to the pointer and says so, keeping the
+  preference for when it returns: unplugging a monitor must never make AgentBar
+  invisible. The row shows with a single display too, so the setting is findable
+  while undocked rather than only once a second screen is attached.
+
 ### Fixed
 - **The Linux CLI no longer pins hooks to a node that will move.** `install-hooks`
   wrote `process.execPath`, which has symlinks resolved — on Homebrew, nvm and fnm

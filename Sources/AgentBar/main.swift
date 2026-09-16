@@ -69,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coworkWatcher.start()
 
         Presentation.onChange = { [weak self] in self?.applyPresentation() }
+        // Pinning the island to another display moves it now, not next launch.
+        IslandScreen.onChange = { [weak self] in self?.applyPresentation() }
         applyPresentation()
 
         if WelcomeWindow.showOnLaunch { WelcomeWindow.shared.show() }

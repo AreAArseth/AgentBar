@@ -80,6 +80,10 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   Clawd the crab (Claude), the knot + a braille dot-matrix that literally spells
   *codex* (Codex), the pixel mascot head + dots spelling *copilot* (Copilot), and the
   animated pixel rainbow arch (Antigravity).
+- **Pick the island's display** — on a multi-monitor desk the island can be pinned
+  to one screen instead of following the pointer around. The welcome window draws
+  your displays the way System Settings does; unplug the pinned one and it falls
+  back to the pointer until it's back.
 - **Permission alerts** — an amber dot the moment an agent waits for your approval.
 - **Multi-session** — every running session listed with its agent's mark, project, git
   branch, state and elapsed time; click a row to jump to its app or terminal.
@@ -331,6 +335,12 @@ the notch:
   the agents are actually running — and it never takes focus, so you can keep
   typing in your editor with the panel open. The pill is 30pt tall and only opens
   when you point at it.
+- **Or pin it to one display.** Following the pointer is right for a laptop and
+  wrong for a fixed desk, where a status surface that moves is one you have to
+  look for. **Island on:** in the welcome window draws every connected display —
+  a laptop for the built-in one, notch included — and one click pins the island
+  there for good. A pinned display that gets unplugged falls back to the pointer
+  and re-pins itself when it returns, so AgentBar never goes missing.
 
 In Island-only mode the menu bar item is hidden, so the panel's **⋯** button carries
 Appearance, Color, the Sounds toggle, Settings, Check for Updates and Quit.

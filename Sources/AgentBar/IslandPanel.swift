@@ -32,13 +32,10 @@ final class IslandPanel: NSPanel {
 /// Where the island sits. On a notched Mac it hangs from the notch; anywhere else
 /// (older Macs, external displays) it is a floating bar centred at the top.
 enum IslandGeometry {
-    /// The screen the island should follow: whichever one the pointer is on, so a
-    /// two-display setup puts it where the user is looking.
-    static var screen: NSScreen? {
-        let mouse = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main ?? NSScreen.screens.first
-    }
+    /// The screen the island belongs on. By default it follows the pointer, so a
+    /// two-display setup puts it where the user is looking; it can be pinned to
+    /// one display instead (`IslandScreen`, picked in the welcome window).
+    static var screen: NSScreen? { IslandScreen.resolved }
 
     /// The notch's own rect, or nil on a display without one. The notch is the gap
     /// between the two usable strips macOS reports either side of it.

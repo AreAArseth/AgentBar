@@ -18,6 +18,9 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
     private var preview: PresentationPreview!
     private var radios: [NSButton] = []
     private var colorRadios: [NSButton] = []
+    private var displayRow: NSView!
+    private var displayPicker: DisplayPicker!
+    private var displayCaption: NSTextField!
     private var modeCaption: NSTextField!
     private var wiredLabel: NSTextField!
     private var showBox: NSButton!
@@ -57,7 +60,8 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         w.delegate = self
         w.center()
 
-        let stack = NSStackView(views: [header(), previewBox(), picker(), colorPicker(), footer()])
+        let stack = NSStackView(views: [header(), previewBox(), picker(), displayPickerRow(),
+                                        colorPicker(), footer()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -143,6 +147,30 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
 
     /// Colored marks or monochrome templates — the same choice both menus offer,
     /// here next to the preview that shows what it means.
+    /// Which display the island lives on. Hidden unless it can matter — one
+    /// display leaves nothing to choose, and in menu-bar mode there is no island
+    /// to place. `reload()` shows and hides it as those change.
+    private func displayPickerRow() -> NSView {
+        let label = NSTextField(labelWithString: "Island on:")
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+
+        displayPicker = DisplayPicker()
+        displayPicker.onPick = { [weak self] in self?.reload() }
+
+        displayCaption = NSTextField(wrappingLabelWithString: "")
+        displayCaption.font = .systemFont(ofSize: 11)
+        displayCaption.textColor = .secondaryLabelColor
+        displayCaption.preferredMaxLayoutWidth = Self.rowWidth
+
+        let col = NSStackView(views: [label, displayPicker, displayCaption])
+        col.orientation = .vertical
+        col.alignment = .leading
+        col.spacing = 6
+        col.widthAnchor.constraint(equalToConstant: Self.rowWidth).isActive = true
+        displayRow = col
+        return col
+    }
+
     private func colorPicker() -> NSView {
         let label = NSTextField(labelWithString: "Mark color:")
         label.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -202,7 +230,34 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         preview.mode = mode
         modeCaption.stringValue = mode.caption
         showBox.state = Self.showOnLaunch ? .on : .off
+        reloadDisplayRow(mode: mode)
         refreshWired()
+    }
+
+    private func reloadDisplayRow(mode: Presentation) {
+        displayRow.isHidden = !mode.showsIsland
+        if mode.showsIsland {
+            displayPicker.rebuild()
+            if IslandScreen.pinnedDisplayMissing {
+                displayCaption.stringValue = "The display you picked isn't connected — "
+                    + "the island follows the pointer until it's back."
+            } else if DisplayPicker.singleDisplay {
+                displayCaption.stringValue = "One display, so there's nothing to choose "
+                    + "yet — this is where you'll pin it once a second one is plugged in."
+            } else if case .pinned = IslandScreen.choice {
+                displayCaption.stringValue = "The island stays on this display, "
+                    + "wherever the pointer goes."
+            } else {
+                displayCaption.stringValue = "The island appears on whichever display "
+                    + "the pointer is on."
+            }
+        }
+        // Re-fit whether the row appeared OR disappeared: skipping the hidden case
+        // is what left an empty gap where the row had been.
+        if let w = window, let content = w.contentView {
+            w.setContentSize(NSSize(width: Self.contentWidth,
+                                    height: content.fittingSize.height))
+        }
     }
 
     /// The install pass runs off the main queue and usually finishes after this
