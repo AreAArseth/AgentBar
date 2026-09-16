@@ -24,18 +24,39 @@ Thanks for your interest! AgentBar is intentionally small — please keep it tha
 ## Developing
 
 ```bash
-./Scripts/build.sh                        # builds build/AgentBar.app
+./Scripts/build.sh                        # builds build/AgentBar.app (universal)
+./Scripts/build.sh --native               # this Mac's architecture only — see below
 open build/AgentBar.app
-./Scripts/test/permission-hook-test.sh    # hook protocol tests
+swift test                                # Swift unit tests (needs Swift 6)
+./Scripts/test/permission-hook-test.sh    # Claude hook protocol tests
 ./Scripts/test/bridge-hooks-test.sh       # cursor/gemini/antigravity/codex bridge tests
 ./Scripts/test/opencode-plugin-test.sh    # OpenCode plugin driven through its event bus
 ./Scripts/test/cli-test.sh                # cross-platform CLI tests
+node --test Scripts/cloud/test/*.test.js  # cloud poller tests
 ./Scripts/test/antigravity-watcher-test.sh # live-app integration test (needs the app running)
 ./Scripts/test/cowork-watcher-test.sh     # live-app integration test (needs AgentBar + Claude.app running)
 ```
 
 `swift build` works for quick compile checks and SourceKit-LSP; the shippable app
-(bundle, Info.plist, hooks) comes from `./Scripts/build.sh`.
+(bundle, Info.plist, hooks) comes from `./Scripts/build.sh`. `docs/testing.md`
+says what each suite covers and how to add to it.
+
+**If the universal build fails to link x86_64**, you are on a machine with only
+the Command Line Tools. Recent versions ship `libswiftCompatibility*.a` for arm64
+alone, and the error looks like this:
+
+```
+ld: warning: ignoring file libswiftCompatibility56.a: fat file missing arch 'x86_64'
+Undefined symbols for architecture x86_64: "__swift_FORCE_LOAD_$_swiftCompatibility56"
+```
+
+Use `./Scripts/build.sh --native` for a bundle you can actually run. It is a dev
+build only — releases stay universal, and are cut from CI (see **Releases**).
+
+**Testing a hook change needs a rebuild.** `HookInstaller` re-copies the scripts
+from the app bundle into `~/.agentbar/hooks/` on every launch, so editing the
+copy in `~/.agentbar/` is overwritten the next time AgentBar starts. Edit the
+repo, rebuild, relaunch.
 
 **Quit any installed copy before testing a dev build.** Two AgentBars running at
 once both watch *and write* `~/.agentbar/state.d/`, so they overwrite each other's
@@ -85,11 +106,38 @@ needed. See `docs/specs/` for the design documents.
 
 ## Releases
 
-1. Bump `VERSION` in `Scripts/build.sh`, add a `CHANGELOG.md` section.
-2. Tag `vX.Y.Z`, create a GitHub release with the changelog section as notes.
-3. Attach the prebuilt app: `./Scripts/build.sh && ditto -c -k --keepParent
-   build/AgentBar.app AgentBar.app.zip && gh release upload vX.Y.Z AgentBar.app.zip`.
-4. Update `Casks/agentbar.rb` in `michalstrnadel/homebrew-tap`: bump `version`,
+A release asset has to satisfy two things that no longer fit on one machine. It
+must be **universal**, and it must be signed with the **"AgentBar Local Signing"**
+identity — that lives in one keychain, and changing the signature makes macOS
+re-ask every user for folder access on update, which is the whole reason a stable
+identity exists. A machine with only the Command Line Tools cannot link x86_64 at
+all, and CI has no access to the certificate. So CI builds and verifies the
+universal bundle, and it is signed locally.
+
+1. Bump `VERSION` in `Scripts/build.sh`, date the `CHANGELOG.md` section.
+2. Commit as `chore: release X.Y.Z — …` and push. Wait for CI to go green.
+3. Download the bundle CI built and verified, then sign it here:
+   ```bash
+   RID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+   gh run download "$RID" -n AgentBar-app-universal -D /tmp/rel
+   cd /tmp/rel && ditto -xk AgentBar.app.zip .
+   codesign --force --deep -s "AgentBar Local Signing" AgentBar.app
+   rm AgentBar.app.zip
+   ditto -c -k --sequesterRsrc --keepParent AgentBar.app AgentBar.app.zip
+   ```
+   `ditto`, not `zip`: a plain zip of a `.app` loses symlinks and resource forks.
+4. Check the asset before publishing it — this is what every user downloads:
+   ```bash
+   codesign --verify --deep --strict AgentBar.app
+   codesign -dvvv AgentBar.app 2>&1 | grep Authority   # AgentBar Local Signing
+   lipo -archs AgentBar.app/Contents/MacOS/AgentBar    # x86_64 arm64
+   /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" AgentBar.app/Contents/Info.plist
+   ```
+5. `gh release create vX.Y.Z AgentBar.app.zip --title "…" --notes-file …`. The
+   asset **must** be named `AgentBar.app.zip` and the tag `vX.Y.Z`: `UpdateChecker`
+   looks up exactly that name under `releases/latest` and strips the leading `v`
+   to compare versions. A different name ships an update nobody can install.
+6. Update `Casks/agentbar.rb` in `michalstrnadel/homebrew-tap`: bump `version`,
    set `sha256` to the output of `shasum -a 256 AgentBar.app.zip`, push, then
    verify with `brew audit --cask michalstrnadel/tap/agentbar` (and
    `brew style` on the tap checkout).

@@ -16,6 +16,21 @@ import Cocoa
 /// `permission_request` / `permission_response` pairs. That is the signal this
 /// watcher reads, upserting state files on the same `~/.agentbar/state.d`
 /// protocol the hooks use.
+///
+/// **Newer VM-mode builds write none of it** (re-checked 2026-09-16 on desktop
+/// 2.110.0: a VM session ran on 2026-08-25 and left only `rootfs.img` /
+/// `sessiondata.img` mtimes behind, while the newest host `audit.jsonl` stayed at
+/// 2026-06-26). The `local-agent-mode-sessions` → `claude-code-sessions` rename
+/// has landed, but that tree is metadata only — no session dirs, no audit log —
+/// and covers the Claude Code tab, not Cowork. So this watcher covers the older
+/// local mode and nothing else; see issue #13.
+///
+/// The live candidate is OpenTelemetry, not the filesystem: the desktop app emits
+/// `desktop_ccd_permission_auto_allowed` / `_auto_denied` / `_mode_changed` and
+/// `desktop_session_title_set` (which carries the Claude Code session id to join
+/// on) from its Electron main process — host-side, so VM isolation doesn't hide
+/// them. It is gated behind `otlpEndpoint`, a managed setting read from
+/// `/Library/Managed Preferences`, with no per-user knob.
 final class CoworkWatcher {
     private static let root = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Claude/local-agent-mode-sessions",

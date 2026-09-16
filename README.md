@@ -155,9 +155,14 @@ brew install --cask michalstrnadel/tap/agentbar
 
 ```bash
 git clone https://github.com/michalstrnadel/AgentBar.git && cd AgentBar
-./Scripts/build.sh
+./Scripts/build.sh          # add --native if the x86_64 half fails to link
 open "build/AgentBar.app"
 ```
+
+`./Scripts/build.sh` produces a universal binary, which needs a full Xcode: recent
+Command Line Tools ship the Swift compatibility libraries for arm64 only, so the
+x86_64 half won't link without one. `--native` builds for your Mac alone, which is
+all you need to run it yourself.
 
 First launch installs hooks automatically for every supported tool you have —
 see the [agent table](#agent-support). New agent sessions appear in the bar from then on.
@@ -243,7 +248,7 @@ launchd agent has to be booted out separately, which is what the last line does.
 | Codex CLI | turn-complete | yes | knot + braille dot-matrix | via Codex `notify` (auto-installed); no per-tool granularity upstream |
 | Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed) |
 | Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed) |
-| GitHub Copilot CLI | working / done / failed | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session). Remote approval waits until its `permissionRequest` payload is documented |
+| GitHub Copilot CLI | working / done / failed | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session — it reads hook config only at startup). Remote approval is possible and tracked in [#16](https://github.com/michalstrnadel/AgentBar/issues/16) |
 | Qwen Code | working / done / failed | yes | Q ring | Claude-style hooks in `~/.qwen/settings.json` (auto-wired if Qwen is installed); remote approval waits until its decision contract is verified |
 | OpenCode | working / approval / done / failed | yes | prompt chevron | plugin in `~/.config/opencode/plugins/` (auto-installed if OpenCode is installed); observe-only |
 | Google Antigravity | working / done | yes | pixel rainbow arch + dot-matrix | hooks in `~/.gemini/antigravity{,-cli}/hooks.json` (auto-wired); desktop 2.3.x only honors per-workspace `.agents/hooks.json`, and only `PostToolUse` fires — quiet sessions decay to done |
@@ -330,10 +335,19 @@ you ignore the request for 10 minutes, the prompt shows in the terminal exactly 
 before. (Known cosmetic issue: the terminal dialog can flash briefly even when
 approved from the menu — upstream [claude-code #12176](https://github.com/anthropics/claude-code/issues/12176).)
 
-Codex and Copilot have no decision hooks, so their rows offer *Approve in terminal
-(sends keystroke)* — AgentBar focuses the session's terminal and presses the approval
-key. Best-effort by design, and it needs the Accessibility permission (the menu item
+Codex has no decision hook, so its rows offer *Approve in terminal (sends
+keystroke)* — AgentBar brings the session's own tab forward and presses the
+approval key. It waits for that tab to be confirmed by tty and sends nothing if it
+can't be found, so a keystroke never lands in a tab it couldn't verify; on
+terminals with no tab targeting (Warp, Ghostty, kitty) it falls back to the app.
+Best-effort by design, and it needs the Accessibility permission (the menu item
 offers to open System Settings until it's granted).
+
+Copilot CLI takes the same path today, but it *does* have a decision hook —
+`permissionRequest`, which can answer allow/deny and falls through to the terminal
+prompt on timeout. Wiring it is tracked in
+[#16](https://github.com/michalstrnadel/AgentBar/issues/16); once it lands,
+Copilot answers like Claude does and needs no keystroke at all.
 
 **Approving a plan** works the same way, for a different reason: Claude Code
 ignores a hook's *allow* at the plan dialog, because approving a plan also

@@ -66,7 +66,10 @@ Rules:
   agent gives one. Writers that can't tell success from failure keep using
   `done`; frontends that predate `error` decode it as `idle`, which is harmless.
 - `started` stays `false` on SessionStart; the first real event flips it. Frontends
-  MUST hide sessions with `started: false`.
+  MUST hide sessions with `started: false`. A writer whose agent can open a session
+  with a prompt already in flight MUST seed it `true` — that session is working the
+  instant it exists, and some agents (Copilot CLI) fire their start and prompt
+  events concurrently, so a seed of `false` can land second and hide a live row.
 - The optional fields are additive: writers that don't know them simply omit
   them, and frontends MUST render fine without them — old state files and
   third-party writers stay valid. `started_at` is set once (session start, or first

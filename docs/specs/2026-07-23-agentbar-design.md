@@ -11,13 +11,17 @@
 >   plugin) too; Cowork and Antigravity are watched rather than hooked
 >   (`CoworkWatcher`, `AntigravityWatcher`) — so the "Antigravity live status
 >   waits on upstream" line under *Agent event support* below is obsolete.
+>   **Copilot too**: it ships hooks since 0.0.396, and AgentBar has reported live
+>   Copilot CLI status since 1.14.0 — the "no public event APIs" line below was
+>   true when written and is not any more. Cowork's coverage narrowed rather than
+>   grew: newer VM-mode sessions write nothing on the host (issue #13).
 > - **Units.** The unit list omits everything added after 1.0.0 — the island and
 >   its welcome window (`Presentation`, `MascotDriver`, `AgentActions`,
 >   `WelcomeWindow`, `IslandPanel`, `IslandContentView`, `IslandController`), the
 >   remote-approval path (`RequestStore`, `ApprovalRequest`, `ApprovalContextView`,
 >   `ApprovalButtonsRow`, `AnswerWriter`, `KeystrokeApprover`, `HotKeyCenter`),
->   the watchers above, `SettingsWindow`, `Terminals`, `IconColor` and
->   `UpdateChecker`. Island work:
+>   the watchers above, `SettingsWindow`, `Terminals`, `IconColor`,
+>   `UpdateChecker` and `UpdateInstallation`. Island work:
 >   [`docs/plans/2026-07-28-presentation-modes-and-island.md`](../plans/2026-07-28-presentation-modes-and-island.md).
 > - **Non-goals.** Two v1 non-goals now exist: the update checker
 >   (`Sources/AgentBar/UpdateChecker.swift`) and sounds
