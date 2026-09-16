@@ -1,7 +1,22 @@
 #!/bin/bash
-# Builds build/AgentBar.app (universal binary). Usage: ./Scripts/build.sh
+# Builds build/AgentBar.app (universal binary). Usage: ./Scripts/build.sh [--native]
+#
+# --native builds for this Mac's architecture only. It exists because a machine
+# with just the Command Line Tools may not be able to link the other one: recent
+# CLT versions ship libswiftCompatibility*.a for arm64 only, so the x86_64 half
+# dies on "Undefined symbols … __swift_FORCE_LOAD_$_swiftCompatibility56".
+# Releases must stay universal, so this flag is for local runs only — never CI,
+# which has a full Xcode and both slices.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+NATIVE=0
+for arg in "$@"; do
+  case "$arg" in
+    --native) NATIVE=1 ;;
+    *) echo "unknown option: $arg (usage: $0 [--native])" >&2; exit 2 ;;
+  esac
+done
 
 APP="build/AgentBar.app"
 VERSION="1.13.0"
@@ -13,15 +28,21 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # build/AgentBar.app and Launchpad shows a second AgentBar next to /Applications.
 touch build/.metadata_never_index
 
-echo "Compiling universal binary (arm64 + x86_64)…"
 # swiftc emits one arch per -target: two compiles joined by lipo (works with plain CLT,
 # no full Xcode needed). Deployment target pinned so the binary matches Info.plist.
 BIN="$APP/Contents/MacOS/AgentBar"
 SWIFT_FILES=$(find Sources/AgentBar -name "*.swift")
-swiftc -O -target arm64-apple-macos12.0  $SWIFT_FILES -o "$BIN.arm64"  -framework Cocoa
-swiftc -O -target x86_64-apple-macos12.0 $SWIFT_FILES -o "$BIN.x86_64" -framework Cocoa
-lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
-rm -f "$BIN.arm64" "$BIN.x86_64"
+if [ "$NATIVE" = 1 ]; then
+  ARCH="$(uname -m)"
+  echo "Compiling native binary ($ARCH only — dev build, not shippable)…"
+  swiftc -O -target "$ARCH-apple-macos12.0" $SWIFT_FILES -o "$BIN" -framework Cocoa
+else
+  echo "Compiling universal binary (arm64 + x86_64)…"
+  swiftc -O -target arm64-apple-macos12.0  $SWIFT_FILES -o "$BIN.arm64"  -framework Cocoa
+  swiftc -O -target x86_64-apple-macos12.0 $SWIFT_FILES -o "$BIN.x86_64" -framework Cocoa
+  lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
+  rm -f "$BIN.arm64" "$BIN.x86_64"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

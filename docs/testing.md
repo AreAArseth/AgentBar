@@ -74,7 +74,9 @@ that reports `plugin for module 'TestingMacros' not found`; `swift package clean
 fixes it. And `./Scripts/build.sh` builds universal, so it needs an x86_64 Swift
 runtime — Command Line Tools alone ships `libswiftCompatibility56.a` for arm64
 only, and the link fails there with `Undefined symbols for architecture x86_64`.
-Use `swift build` for a native check locally; CI has full Xcode and builds both.
+Use `./Scripts/build.sh --native` for a runnable dev bundle (this Mac's
+architecture only), or `swift build` for a compile check. Releases stay
+universal — CI has a full Xcode and both slices.
 
 ## Writing a test
 
