@@ -3,7 +3,7 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.14.0 - 2026-09-16
 
 ### Added
 - **GitHub Copilot CLI reports live status.** The long-standing blocker is gone:
@@ -16,9 +16,15 @@ All notable changes to AgentBar are documented here. This project follows
   session start/end, prompt, pre/post tool, tool failure, stop, and
   `ErrorOccurred` — whose `recoverable` flag is read, so an error Copilot means
   to retry no longer ends the turn early. Needs CLI 1.0.67+ and a fresh session
-  (Copilot reads hook config once, at startup). Remote approval stays unwired:
-  `permissionRequest` can block and decide, but its input payload is
-  undocumented, and a blocking hook is not something to wire on faith.
+  (Copilot reads hook config once, at startup). Verified end to end against a
+  real 1.0.85 CLI, not just the documentation: all eight events fire, the hook's
+  parent really is the `copilot` process (which is what rows are pruned by), and
+  a session appears and is cleaned up correctly. Remote approval stays unwired
+  for now, but no longer for lack of information — the `permissionRequest`
+  payload was logged from a live session and is written down in
+  [`Scripts/hooks/copilot/`](Scripts/hooks/copilot/), including a
+  `permissionSuggestions` field that GitHub does not document, which is what an
+  "Always allow" would pin.
 
 ### Fixed
 - **A failed update can no longer leave you with no AgentBar.** The relaunch
@@ -50,6 +56,26 @@ All notable changes to AgentBar are documented here. This project follows
   the session's tab can't be found — the same discipline plan approval has
   followed since 1.12.0. Terminals with no tab targeting (Warp, Ghostty, kitty)
   keep the app-level behaviour.
+- **A session that opens mid-prompt no longer seeds itself hidden.** Copilot
+  fires `SessionStart` and `UserPromptSubmit` concurrently, and `SessionStart`
+  can land second — measured ~100 ms behind. The seed then overwrote a working
+  row with `idle`/`started:false`, and `started:false` hides a row from every
+  frontend: the session vanished from the bar at the moment it began working.
+  A session that opens with a prompt already in flight is working the instant it
+  exists, so it is no longer seeded as "not started yet". Claude is unaffected —
+  it never sends the field this keys on.
+
+### Build
+- **`./Scripts/build.sh --native`** builds for this Mac alone. Recent Command
+  Line Tools ship `libswiftCompatibility*.a` for arm64 only, so a machine
+  without a full Xcode can no longer link the x86_64 half of the universal
+  build — which left a developer unable to produce a bundle they could run, and
+  the hook scripts are refreshed from the app bundle on every launch, so a hook
+  fix cannot be exercised until the app is rebuilt. Releases stay universal.
+- **CI keeps the universal bundle it already builds.** A release asset has to be
+  universal *and* signed with the identity that lives in one keychain, and those
+  two requirements no longer fit on one machine. CI now publishes the verified
+  bundle as an artifact; the release is cut by signing it locally.
 
 ### Documentation
 - The README claimed the island steps aside for fullscreen windows; it has
