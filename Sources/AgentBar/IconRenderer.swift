@@ -231,6 +231,16 @@ final class IconRenderer {
     /// Side-by-side row of marks for the multi-agent bar. Template parts are tinted
     /// with labelColor inside the drawing handler (resolved per appearance at render
     /// time), so the row mixes color dots and adaptive monochrome correctly.
+    /// A brand colour picked for a menu bar can be too dark to read on the island's
+    /// near-black panel; lift it until it does. Shared, because the chips and the
+    /// day's strip both tint by agent and two copies of this drifted apart once.
+    static func legibleOnDark(_ c: NSColor) -> NSColor {
+        guard let s = c.usingColorSpace(.sRGB) else { return c }
+        guard s.brightnessComponent < 0.55 else { return s }
+        return NSColor(hue: s.hueComponent, saturation: s.saturationComponent * 0.9,
+                       brightness: 0.85, alpha: 1)
+    }
+
     static func compose(_ parts: [NSImage], gap: CGFloat = 7) -> NSImage {
         guard !parts.isEmpty else { return NSImage() }
         let h = parts.map(\.size.height).max() ?? 18

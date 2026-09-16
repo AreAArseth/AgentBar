@@ -54,12 +54,24 @@ final class HistoryStore {
         /// True when a watchdog synthesized the end rather than the agent reporting
         /// it — a digest that counts those as clean finishes would be lying.
         var decayed: Bool
+        /// What the session cost, when the agent keeps a number we can read. Nil is
+        /// the common case and means "not measured", never zero — see `Weight`.
+        var weight: Weight? = nil
+        /// How much the repository moved while the session was open. Nil whenever the
+        /// span cannot be measured honestly — see `WorkDiff`.
+        var change: RepoChange? = nil
 
         var json: [String: Any] {
-            ["v": 1, "agent": agent, "sessionId": sessionId, "project": project,
-             "cwd": cwd, "label": label, "prompt": prompt, "model": model,
-             "startedAt": Int(startedAt), "endedAt": Int(endedAt),
-             "state": state, "decayed": decayed]
+            var o: [String: Any] =
+                ["v": 1, "agent": agent, "sessionId": sessionId, "project": project,
+                 "cwd": cwd, "label": label, "prompt": prompt, "model": model,
+                 "startedAt": Int(startedAt), "endedAt": Int(endedAt),
+                 "state": state, "decayed": decayed]
+            // Omitted rather than written empty: a reader must be able to tell
+            // "nobody measured this" from "this cost nothing".
+            if let weight { o["weight"] = weight.json }
+            if let change { o["change"] = change.json }
+            return o
         }
 
         init(_ s: Session, endedAt: TimeInterval) {
@@ -114,12 +126,47 @@ final class HistoryStore {
 
     // MARK: - Wiring
 
+    /// Where the weight and the diff are measured, off the main queue. Serial on
+    /// purpose: it is what keeps records in the order they happened without any
+    /// locking, and what lets the enrichment take as long as it needs.
+    ///
+    /// Enriching *before* the append, rather than appending a second superseding
+    /// line, is the difference between one record per ending and two. The protocol
+    /// would tolerate two — the last line for a session wins — but the file is also
+    /// the thing a person reads.
+    private let writer = DispatchQueue(label: "agentbar.history", qos: .utility)
+
+    /// Injected in tests, which must not shell out to git or read a home directory.
+    var enrich: (Record) -> Record = HistoryStore.measure
+
     func observe(_ sessions: [Session]) {
         defer { previous = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
         guard primed else { primed = true; return }
         let due = Self.records(from: previous, to: sessions, now: Date().timeIntervalSince1970)
         guard !due.isEmpty else { return }
-        append(due)
+        writer.async { [weak self] in
+            guard let self else { return }
+            self.append(due.map(self.enrich))
+        }
+    }
+
+    /// Blocks until everything queued has been written. For tests and for a clean
+    /// shutdown; no surface ever waits on history.
+    func flush() { writer.sync {} }
+
+    /// The default enrichment: ask each agent's own files what the session cost, and
+    /// git what moved. Both answer nil far more often than not.
+    ///
+    /// A turn-end total can undercount, because Claude Code flushes its last assistant
+    /// message asynchronously and may not have written it yet. That corrects itself:
+    /// every record for a session carries the running total, and the reader keeps the
+    /// last line — so the next turn, or the row's disappearance, supersedes it.
+    static func measure(_ record: Record) -> Record {
+        var out = record
+        out.weight = WeightReader.read(agent: record.agent, sessionId: record.sessionId,
+                                       cwd: record.cwd)
+        out.change = WorkDiff.shared.change(sessionId: record.sessionId, cwd: record.cwd)
+        return out
     }
 
     private func append(_ records: [Record]) {
@@ -158,6 +205,28 @@ final class HistoryStore {
         return order.compactMap { byID[$0] }
     }
 
+    /// `read()` memoised on the file's own `(mtime, size)`.
+    ///
+    /// The menu can afford a full parse — it happens when someone opens it. The
+    /// island footer cannot: it is rebuilt about once a second while an agent works,
+    /// and a month of history is up to 5000 lines of JSON. A `stat(2)` per rebuild
+    /// instead, and a re-read only when the file actually moved.
+    static func cached(url: URL = HistoryStore.fileURL) -> [Record] {
+        let stamp = (try? FileManager.default.attributesOfItem(atPath: url.path)).map {
+            (($0[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0,
+             ($0[.size] as? Int) ?? 0)
+        } ?? (0, 0)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let c = cache, c.url == url.path, c.stamp == stamp { return c.records }
+        let records = read(url: url)
+        cache = (url.path, stamp, records)
+        return records
+    }
+
+    private static let cacheLock = NSLock()
+    private static var cache: (url: String, stamp: (TimeInterval, Int), records: [Record])?
+
     /// Called once on launch. Rewrites the file only when something actually goes,
     /// so the common case costs a read and nothing else.
     static func prune(url: URL = HistoryStore.fileURL, now: TimeInterval = Date().timeIntervalSince1970) {
@@ -193,5 +262,7 @@ extension HistoryStore.Record {
         endedAt = (o["endedAt"] as? NSNumber)?.doubleValue ?? 0
         state = o["state"] as? String ?? ""
         decayed = o["decayed"] as? Bool ?? false
+        weight = Weight(json: o["weight"])
+        change = RepoChange(json: o["change"])
     }
 }

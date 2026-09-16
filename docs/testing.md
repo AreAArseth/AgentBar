@@ -15,9 +15,9 @@ how to add to it.
 | `Scripts/test/permission-hook-test.sh` | The Claude hooks: `permission.js` (allow/always/deny/defer round-trips, rule forgery, questions, plans, timeouts, signals, successor/`hookPid` guards, surrogate-safe cuts), `update.js` (state mapping incl. Copilot's `recoverable` error, `started_at`, prompt/model/recap/activity rules, stalled stdin), `lifecycle.js` (seed, merge on resume/compact/clear, the mid-prompt open, dead-only sweep, launch guard, end) | 138 | node, python3 |
 | `Scripts/test/bridge-hooks-test.sh` | The Cursor, Gemini, Antigravity and Codex bridges: dead-only stale sweep, app-launch guard (fake `open` in `PATH`), event → state mapping, project/prompt merge across events, the 64-char id cap, surrogate-safe cuts, and Antigravity's fail-open `PreToolUse` decision | 53 | node, python3 |
 | `Scripts/test/opencode-plugin-test.sh` | The OpenCode plugin, loaded as ESM and driven through its event bus: created/prompt/tool/permission/idle/error/title/child/deleted — including "the idle that trails an error stays an error" | 23 | node |
-| `Scripts/test/cli-test.sh` | `Scripts/cli/agentbar`: status/requests rendering, pruning rules, approve/deny/answer (incl. plan and multi-question refusals, `hookPid` stamping), waybar classes and heartbeat, the hook blocking on the CLI's presence, the history record an ended session leaves behind (baseline, once per ending, `idle` is not an ending), `install-hooks` for every agent (idempotent, unparseable config untouched, `CLAUDE_CONFIG_DIR`, Copilot's own hooks file left alone, the written node path stable and the same interpreter, a dead Codex interpreter repaired) | 67 | node, python3 |
+| `Scripts/test/cli-test.sh` | `Scripts/cli/agentbar`: status/requests rendering, pruning rules, approve/deny/answer (incl. plan and multi-question refusals, `hookPid` stamping), waybar classes and heartbeat, the hook blocking on the CLI's presence, the history record an ended session leaves behind (baseline, once per ending, `idle` is not an ending, the weight read out of a Claude transcript with duplicate lines counted once, an agent with nothing on disk leaving the key out rather than writing zero), `install-hooks` for every agent (idempotent, unparseable config untouched, `CLAUDE_CONFIG_DIR`, Copilot's own hooks file left alone, the written node path stable and the same interpreter, a dead Codex interpreter repaired) | 76 | node, python3 |
 | `Scripts/test/doctor-test.sh` | `agentbar doctor`: a clean install reporting clean, an interpreter that moved, an agent installed but unwired, the escaped-slash marker trap, a config the installer refuses to touch, directories missing or unwritable, last-seen read from `history.jsonl` (blank is fine, a fortnight of silence is not), `--json`, and that a diagnostic changes nothing it diagnoses. Assertions are by check id, never wording — see `docs/diagnostics.md` | 23 | node |
-| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script (new bundle opens; it refuses and the backup is restored and launched; both refuse and the old bundle stays with the staging dir kept; a hostile bundle path stays out of the shell's parser); the island's display choice (defaults, round-trip, a pinned display unplugged falling back to the pointer without losing the pin); the display row wrapping at one display through eight; the installer's node-path stabilisation and Codex repair; the history edge detector (a lingering `done` row written once, `idle` not an ending, a torn line costing one line, prune leaving an unchanged file alone); the digest's arithmetic (local midnight, a partial total saying what it covers, an end before its start not counting as timed); what does and does not deserve a notification (off means off, an answered request is withdrawn, a watchdog-decayed end is not announced); and every diagnostic check, by id | 76 | Swift 6 toolchain |
+| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script (new bundle opens; it refuses and the backup is restored and launched; both refuse and the old bundle stays with the staging dir kept; a hostile bundle path stays out of the shell's parser); the island's display choice (defaults, round-trip, a pinned display unplugged falling back to the pointer without losing the pin); the display row wrapping at one display through eight; the installer's node-path stabilisation and Codex repair; the history edge detector (a lingering `done` row written once, `idle` not an ending, a torn line costing one line, prune leaving an unchanged file alone); the digest's arithmetic (local midnight, a partial total saying what it covers, an end before its start not counting as timed, a token clause that drops rather than showing zero); what does and does not deserve a notification (off means off, an answered request is withdrawn, a watchdog-decayed end is not announced, **a successful turn is not an event at all**, the quiet burst announced once and only once the human is away, `notifyDone` migrating exactly once); what a session cost (duplicate transcript lines counted once, Codex's last cumulative `token_count` winning, Copilot's rows summed through real SQLite, every reader answering nil rather than zero); what moved in the repo (the per-file subtraction and its zero floor, a binary counted as a file and no lines, a missing baseline producing nothing); and every diagnostic check, by id | 126 | Swift 6 toolchain |
 | `Scripts/test/antigravity-watcher-test.sh` | `AntigravityWatcher` against a staged `brain/` transcript: thinking → permission → done | — | macOS, app running |
 | `Scripts/test/cowork-watcher-test.sh` | `CoworkWatcher` against a staged audit log | — | macOS, app + Claude.app running |
 
@@ -44,6 +44,27 @@ copy the pattern.
 
 Runtime: the permission suite takes ~1.5 minutes (it exercises real timeouts);
 the others finish in seconds.
+
+### When `swift test` says the macro plugin is missing
+
+On a Mac with **only the Command Line Tools** (no Xcode), `swift test` can fail with
+dozens of `external macro implementation type 'TestingMacros.…' could not be found`
+errors on files you did not touch. That is not your code: the toolchain's build system
+omits the TestingMacros plugin from the *emit-module* invocation while including it in
+the compile one, so the failure alternates from run to run. It reproduces on a package
+created fresh by `swift package init`, which is the quickest way to confirm it is the
+machine and not the change.
+
+Pass the plugin yourself:
+
+```bash
+CLT=/Library/Developer/CommandLineTools
+swift test -Xswiftc -load-resolved-plugin -Xswiftc \
+  "$CLT/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib#$CLT/usr/bin/swift-plugin-server#TestingMacros"
+```
+
+It can still need a second run — the stale command is cached per file. CI installs
+Xcode and never sees this.
 
 ### Environment knobs the scripts honor
 

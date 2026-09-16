@@ -3,6 +3,79 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.18.0 - 2026-09-16
+
+### Fixed
+
+- **Notifications stop firing after every reply.** 1.17.0 shipped a switch called
+  *When an agent finishes*, and it meant something much narrower than it sounded:
+  it fired on a session reaching `done`, which Claude Code does at the end of
+  **every turn**. A fifty-turn conversation posted fifty banners. That switch is
+  gone, and nothing is announced for merely finishing any more.
+
+  What replaced it is a rule rather than a setting, written into the project's own
+  second rule: a banner has to be something that wants an answer, or something that
+  happened while you were not there to see it. Anyone who had the old switch on gets
+  both of the new ones, once.
+
+### Added
+
+- **Three notification channels, each answering a different question.** *An agent
+  needs approval* is unchanged — Allow and Deny on the banner itself. *A session
+  failed* is new and rare enough to be worth interrupting for. *Everything went
+  quiet* is one banner for a whole batch: it waits for nothing to be running for two
+  minutes **and** for you to have been away from the keyboard for two minutes (or
+  the screen to be locked), then says what the batch came to — "3 sessions · 42m ·
+  1 failed". If you are sitting at the machine, the island has been telling you all
+  along and a banner would only be noise on top of it.
+
+- **The day's account has weight.** Every finished session now records what it cost,
+  read out of the agent's own local files: Claude Code's transcript, Codex's rollout
+  file, Copilot CLI's session store. Nothing leaves the machine and no API is called.
+  The digest becomes *"12 sessions · 3h 40m · 4.1M tokens"* and a row becomes
+  *"AgentBar · 34m · 1.2M · 7 files +210 −80"*.
+
+  The seven agents that publish no such number show nothing rather than a zero, and a
+  day where only some sessions could be measured says *"4.1M tokens across 8"* rather
+  than passing a partial sum off as the day's spend. The four token categories are
+  stored separately because the agents genuinely disagree about what a token is —
+  Claude reports cache reads alongside the rest, Codex folds cached input into its
+  input count — and what is *shown* leaves cache reads out. On one real session that
+  choice is the difference between 2.1 M and 222.9 M.
+
+- **What moved in the repo.** A session's record now carries how many files differ and
+  by how many lines, measured from a git baseline taken when the session was first
+  seen and with whatever was already uncommitted subtracted back out. It is worded as
+  *changed in the repo*, everywhere, and never as what the agent did: you edit in the
+  same working tree, two sessions can share one checkout, and nothing on disk can
+  separate those. No baseline, no repository, or a history rewritten underneath it,
+  and the row simply carries no numbers.
+
+- **The island can carry the day along its bottom** — two switches in **Appearance…**,
+  next to where the island's display and marks are chosen, and both off until you ask.
+  *The day's total* is the one line the menu already shows. *A bar per session* draws
+  today's finished sessions pinned above the quota line, oldest on the left, in the
+  agent's own colour, red for what failed and half-lit for one nobody could time.
+  They are separate because they cost different things: the line is a row of small
+  text, the strip is taller and only pays for itself on a day spread across several
+  sessions. The widths are square-rooted rather than drawn to scale — a real
+  day is one eight-hour session and a handful of two-minute ones, and to scale the
+  long one takes the whole strip and the rest vanish. Point at one for its project, duration,
+  tokens and changes. The menu bar's **Today** row and `agentbar history` carry the
+  same numbers as text.
+
+### Changed
+
+- `agentbar history` gained the two new columns and computes them itself for Claude
+  and Codex, so a Linux machine with no AgentBar app still gets a full day's account.
+  Copilot's numbers live in a SQLite database the dependency-free CLI cannot open, so
+  a Copilot row there carries no weight — which is said out loud rather than left as
+  a mystery.
+- Claude transcript discovery now finds **any** `~/.claude*` directory with a
+  `projects/` folder instead of the three it knew by name. The machine this was
+  written on had a fourth, and every token in it was invisible to the island's usage
+  line.
+
 ## 1.17.0 - 2026-09-16
 
 ### Added

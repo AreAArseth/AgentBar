@@ -24,6 +24,13 @@ enum HistoryDigest {
             guard startedAt > 0, endedAt >= startedAt else { return nil }
             return endedAt - startedAt
         }
+        /// What the session cost, when its agent keeps a readable number. Nil for the
+        /// seven agents that keep none — and for the three that do, whenever the file
+        /// was not there. Never zero standing in for "unknown".
+        var weight: Weight?
+        /// What moved in the repo while it ran. Nil unless the whole span was
+        /// observed — see `WorkDiff`, and note the wording it insists on.
+        var change: RepoChange?
         var failed: Bool { state == "error" }
     }
 
@@ -35,6 +42,10 @@ enum HistoryDigest {
         /// read as a total it is not.
         var seconds: TimeInterval = 0
         var measured = 0
+        /// Same pair again, for weight. Most days will have `tokensMeasured` lower
+        /// than `sessions`, because most agents publish nothing to measure.
+        var tokens = 0
+        var tokensMeasured = 0
 
         var isEmpty: Bool { sessions == 0 }
     }
@@ -56,7 +67,8 @@ enum HistoryDigest {
             .filter { $0.endedAt >= since && $0.endedAt <= until }
             .sorted { $0.endedAt > $1.endedAt }
             .map { Entry(agent: $0.agent, project: $0.project, cwd: $0.cwd, state: $0.state,
-                         startedAt: $0.startedAt, endedAt: $0.endedAt) }
+                         startedAt: $0.startedAt, endedAt: $0.endedAt,
+                         weight: $0.weight, change: $0.change) }
 
         var summary = Summary()
         summary.sessions = entries.count
@@ -64,6 +76,10 @@ enum HistoryDigest {
         for d in entries.compactMap(\.duration) {
             summary.seconds += d
             summary.measured += 1
+        }
+        for w in entries.compactMap(\.weight) {
+            summary.tokens += w.total
+            summary.tokensMeasured += 1
         }
         return (summary, entries)
     }
@@ -77,6 +93,14 @@ enum HistoryDigest {
         // work is a number someone would quote.
         if s.measured == s.sessions, s.seconds > 0 { parts.append(duration(s.seconds)) }
         else if s.measured > 0 { parts.append("\(duration(s.seconds)) across \(s.measured)") }
+        // The same rule a third time. Only three of the ten agents publish a number
+        // at all, so a partial total is the normal case here rather than the
+        // exception — and quoting it as the day's spend would be wrong most days.
+        if s.tokensMeasured == s.sessions, s.tokens > 0 {
+            parts.append("\(UsageCenter.compact(s.tokens)) tokens")
+        } else if s.tokensMeasured > 0 {
+            parts.append("\(UsageCenter.compact(s.tokens)) tokens across \(s.tokensMeasured)")
+        }
         if s.failed > 0 { parts.append("\(s.failed) failed") }
         return parts.joined(separator: " · ")
     }
@@ -91,10 +115,15 @@ enum HistoryDigest {
         return m == 0 ? "\(h)h" : "\(h)h \(m)m"
     }
 
-    /// One row: "AgentBar · 34m" — or just the project when it was never timed.
+    /// One row: "AgentBar · 34m · 1.2M · 7 files +210 −80".
+    ///
+    /// Every clause after the name is dropped when it is not known, so a row never
+    /// pads itself out with zeroes to look complete.
     static func line(_ e: Entry) -> String {
-        let who = e.project.isEmpty ? Agent.byID(e.agent).name : e.project
-        guard let d = e.duration else { return who }
-        return "\(who) · \(duration(d))"
+        var parts = [e.project.isEmpty ? Agent.byID(e.agent).name : e.project]
+        if let d = e.duration { parts.append(duration(d)) }
+        if let w = e.weight, w.total > 0 { parts.append(UsageCenter.compact(w.total)) }
+        if let c = e.change { parts.append(WorkDiff.describe(c)) }
+        return parts.joined(separator: " · ")
     }
 }

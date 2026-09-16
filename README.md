@@ -80,15 +80,23 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   Clawd the crab (Claude), the knot + a braille dot-matrix that literally spells
   *codex* (Codex), the pixel mascot head + dots spelling *copilot* (Copilot), and the
   animated pixel rainbow arch (Antigravity).
-- **Notifications with Allow and Deny on them** — off by default; turn them on in
-  Settings and macOS shows a banner the moment an agent needs you, answerable
-  without switching apps. Useful precisely when the island is pinned to a display
-  you aren't looking at. **Send a test** checks they reach you; if nothing appears
-  but it shows up in Notification Center, a Focus is on — macOS files banners
-  rather than showing them, which is working as designed.
-- **What happened today** — the **Today** row sums up the sessions that finished,
-  how long they took, and what failed. In the menu bar dropdown, and behind the
-  island's **⋯**; `agentbar history` says the same in a terminal. Live status forgets a session the moment it ends; this doesn't.
+- **Notifications that only carry what wants you** — off by default, and three
+  separate switches: an agent **needs approval** (Allow and Deny on the banner
+  itself, answerable without switching apps), a session **failed**, and **everything
+  went quiet** — one summary of the whole batch, and only once you have actually been
+  away from the keyboard for a couple of minutes. Nothing is announced for merely
+  finishing. **Send a test** checks they reach you; if nothing appears but it shows up
+  in Notification Center, a Focus is on — macOS files banners rather than showing
+  them, which is working as designed.
+- **What happened today, with its weight** — sessions that finished, how long they
+  took, what they cost and what moved in the repo: *"12 sessions · 3h 40m · 4.1M
+  tokens"*, and per row *"AgentBar · 34m · 1.2M · 7 files +210 −80"*. Token counts
+  come from each agent's own local files (Claude's transcript, Codex's rollout,
+  Copilot's session store); the agents that publish nothing simply show nothing,
+  never a zero. In the menu bar dropdown it is the **Today** row, and behind the
+  island's **⋯**. **Appearance…** can also put it along the bottom of the island —
+  the day's total, a bar per session, or both. `agentbar history` says the same in a terminal. Live status forgets a session
+  the moment it ends; this doesn't.
 - **Pick the island's display** — on a multi-monitor desk the island can be pinned
   to one screen instead of following the pointer around. The welcome window draws
   your displays the way System Settings does; unplug the pinned one and it falls
@@ -344,9 +352,17 @@ the notch:
   An **ExitPlanMode** shows the whole plan as formatted Markdown with
   **Keep planning** / **Approve plan**. A failed turn says *failed* in red and
   stays silent — no green tick, no chime.
+- **The day along the bottom** *(off by default)* — **Appearance… ▸ Today, along the
+  bottom** has two switches you can take separately. **The day's total** is one line:
+  *"12 sessions · 3h 40m · 4.1M tokens"*. **A bar per session** draws today's finished
+  sessions oldest-first, wider the longer each ran, in the agent's colour, red for
+  what failed and half-lit for one nobody could time — point at a bar for its project,
+  duration, tokens and what changed in its repo. Both are off until you ask, because
+  the strip costs height and a day spent in a single agent draws one long bar that
+  does not earn it.
 - **It scrolls when it must** — the panel is sized to its content, and past the
-  screen limit the rows scroll while the **⋯** menu and the quota line stay
-  pinned along the bottom.
+  screen limit the rows scroll while the day's strip, the **⋯** menu and the quota
+  line stay pinned along the bottom.
 - **No notch, or an external display?** Same panel, centred at the top of whichever
   screen your pointer is on. It stays put over fullscreen windows — that is where
   the agents are actually running — and it never takes focus, so you can keep

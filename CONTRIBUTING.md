@@ -94,7 +94,15 @@ defaults write com.michalstrnadel.agentbar islandExpandDebug -bool true     # ho
 defaults write com.michalstrnadel.agentbar settingsOnLaunchDebug -bool true # open Settings on launch (layout work)
 defaults write com.michalstrnadel.agentbar notifyProbeDebug -bool true      # ask for notification permission at launch and
                                                                            # write the answer to ~/.agentbar/notify-probe.txt
+defaults write com.michalstrnadel.agentbar notifyQuietDebug -bool true      # "all quiet" after 10s instead of 2min, and
+                                                                           # without waiting for you to leave the keyboard
 ```
+
+`notifyQuietDebug` exists because the honest version of that notification is close
+to impossible to observe deliberately: it waits two minutes of nothing running
+**and** two minutes of you not touching the machine (or a locked screen), which is
+the whole reason it is not noise. With the default on you would have to walk away
+to test it.
 
 `notifyProbeDebug` writes to a *file* rather than only NSLog on purpose: an app
 launched by LaunchServices has no stderr anyone can read, and launching the binary

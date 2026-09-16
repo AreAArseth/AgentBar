@@ -215,7 +215,15 @@ any account of a day's work. Hence one append-only JSON Lines file.
 { "v": 1, "agent": "codex", "sessionId": "abc-123", "project": "AgentBar",
   "cwd": "/Users/me/src/AgentBar", "label": "build", "prompt": "fix the linker",
   "model": "gpt-5", "startedAt": 1784844000, "endedAt": 1784844796,
-  "state": "done", "decayed": false }
+  "state": "done", "decayed": false,
+
+  "weight": { "in": 1330, "out": 622024, "cacheWrite": 1453897,
+              "cacheRead": 220795232, "src": "claude-transcript" },
+                               // OPTIONAL: what the session cost, in the agent's own
+                               //   numbers. Absent = nobody could measure it.
+  "change": { "files": 7, "added": 210, "removed": 80, "base": "3a30264" }
+                               // OPTIONAL: what moved in the repo while it ran.
+}
 ```
 
 Rules:
@@ -235,6 +243,47 @@ Rules:
   agent reporting it. A reader that counts those as clean finishes is inventing
   outcomes.
 - Writers prune to **30 days** and a hard cap of **5000 records**.
+
+### `weight` — what the session cost
+
+Optional and additive: a writer that cannot measure a session **omits the key**. A
+reader MUST treat an absent `weight` as *unmeasured*, never as zero — most sessions
+will not have one, because only three of the supported agents keep a per-session
+number on disk at all (Claude Code's transcript, Codex's rollout file, Copilot CLI's
+`session-store.db`). `src` names which of those produced it.
+
+The four counts are stored separately **because the agents do not agree on what a
+token is**. Claude reports cache reads alongside everything else; Codex folds cached
+input *into* its input count; Copilot keeps every category apart. Writers normalise to
+one shape — `in` excludes anything served from cache, `cacheRead` carries it — so that
+the components are comparable even though no single pre-summed total would be.
+
+Frontends show `in + out + cacheWrite` and **leave `cacheRead` out**. On one real
+session that is the difference between 2.1 M and 222.9 M: cache reads say how long a
+conversation is, not how much work it did. A frontend that wants the other number has
+it, but must say which one it is showing.
+
+Records for one session supersede each other (last line wins), so `weight` is always
+the session's **running total**, never a per-turn delta. That is what makes a total
+read before the agent flushed its last message self-correcting.
+
+### `change` — what moved in the repo
+
+Optional on the same terms. `base` is the short commit the span was measured from.
+
+The wording matters and is normative for frontends: this is **what changed in the
+repository while the session was open**, not what the agent did. The same working tree
+takes edits from the human and from any other session sharing the checkout, and
+nothing on disk can separate those — two sessions in one repo will report the same
+change. A frontend MUST NOT present it as the agent's own output.
+
+The measurement compares per-file line counts against a baseline, not content, so it
+errs low: work that rewrites lines already uncommitted when the session began is not
+counted. Exact when the tree was clean at the baseline.
+
+A writer emits it only when it observed the whole span. No baseline (the frontend
+started mid-session), a `cwd` that is not a repository, or a history rewritten under
+the baseline commit all mean the key is omitted.
 
 `history-seen.json` is an implementation detail of the CLI, not part of the
 protocol: a snapshot of the previous tick so that one-shot commands (`status`,

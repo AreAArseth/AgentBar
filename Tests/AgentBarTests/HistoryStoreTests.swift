@@ -107,14 +107,19 @@ import Testing
         let store = HistoryStore(url: url)
         // A relaunch sees every live session at once; those did not just end.
         store.observe([try session("a", state: "done")])
+        store.flush()
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
     @Test func recordsRoundTripThroughTheFile() throws {
         let url = dir.appendingPathComponent("rt.jsonl")
         let store = HistoryStore(url: url)
+        store.enrich = { $0 }   // no git, no transcripts: see `measure`
         store.observe([try session("a", state: "thinking")])   // baseline
         store.observe([try session("a", state: "done")])
+        // Records are measured and written on the store's own serial queue, so a
+        // test has to wait for it. Nothing on a surface ever does.
+        store.flush()
 
         let back = HistoryStore.read(url: url)
         #expect(back.count == 1)
@@ -128,9 +133,11 @@ import Testing
     @Test func theLastLineForASessionWins() throws {
         let url = dir.appendingPathComponent("dup.jsonl")
         let store = HistoryStore(url: url)
+        store.enrich = { $0 }
         store.observe([try session("a", state: "thinking")])          // baseline
         store.observe([try session("a", state: "done", ts: 1_000)])   // turn ended
         store.observe([])                                             // row disappeared
+        store.flush()
 
         let lines = try String(contentsOf: url, encoding: .utf8)
             .split(separator: "\n").count
@@ -163,5 +170,71 @@ import Testing
         let before = try Data(contentsOf: url)
         HistoryStore.prune(url: url, now: now)
         #expect(try Data(contentsOf: url) == before)
+    }
+    // MARK: - Weight and repo change
+
+    /// Both are optional, and "absent" has to survive the round trip as `nil` rather
+    /// than arriving as a zero somebody then quotes.
+    @Test func whatWasNotMeasuredStaysAbsent() throws {
+        let url = dir.appendingPathComponent("bare.jsonl")
+        let store = HistoryStore(url: url)
+        store.enrich = { $0 }
+        store.observe([try session("a", state: "thinking")])
+        store.observe([try session("a", state: "done")])
+        store.flush()
+
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(!text.contains("weight"))
+        #expect(!text.contains("change"))
+        let back = try #require(HistoryStore.read(url: url).first)
+        #expect(back.weight == nil)
+        #expect(back.change == nil)
+    }
+
+    @Test func weightAndChangeRoundTripThroughTheFile() throws {
+        let url = dir.appendingPathComponent("weighted.jsonl")
+        let store = HistoryStore(url: url)
+        store.enrich = { r in
+            var out = r
+            out.weight = Weight(input: 1_330, output: 622_024, cacheWrite: 1_453_897,
+                                cacheRead: 220_795_232, source: "claude-transcript")
+            out.change = RepoChange(files: 7, added: 210, removed: 80, base: "3a30264")
+            return out
+        }
+        store.observe([try session("a", state: "thinking")])
+        store.observe([try session("a", state: "done")])
+        store.flush()
+
+        let back = try #require(HistoryStore.read(url: url).first)
+        #expect(back.weight?.input == 1_330)
+        #expect(back.weight?.cacheRead == 220_795_232)
+        #expect(back.weight?.source == "claude-transcript")
+        // Cache reads are excluded from the number a person is shown.
+        #expect(back.weight?.total == 2_077_251)
+        #expect(back.change == RepoChange(files: 7, added: 210, removed: 80, base: "3a30264"))
+    }
+
+    /// Records supersede each other by session id, so a later one that could not be
+    /// measured must not quietly erase a number an earlier one had. It does erase it —
+    /// last line wins is the protocol — which is only safe because every reader takes
+    /// the running total, not a delta. Pinned here so the rule stays deliberate.
+    @Test func theNewestRecordIsTheOneThatCounts() throws {
+        let url = dir.appendingPathComponent("supersede.jsonl")
+        let withWeight = #"{"agent":"claude","sessionId":"a","state":"done","endedAt":1000,"weight":{"in":10,"out":20,"cacheWrite":0,"cacheRead":0,"src":"claude-transcript"}}"#
+        let later = #"{"agent":"claude","sessionId":"a","state":"done","endedAt":2000,"weight":{"in":30,"out":40,"cacheWrite":0,"cacheRead":0,"src":"claude-transcript"}}"#
+        try (withWeight + "\n" + later + "\n").write(to: url, atomically: true, encoding: .utf8)
+        #expect(HistoryStore.read(url: url).first?.weight?.total == 70)
+    }
+
+    /// The island footer reads this about once a second while an agent works.
+    @Test func theCacheReReadsOnlyWhenTheFileMoves() throws {
+        let url = dir.appendingPathComponent("cached.jsonl")
+        let one = #"{"agent":"codex","sessionId":"a","state":"done","endedAt":1000}"#
+        try (one + "\n").write(to: url, atomically: true, encoding: .utf8)
+        #expect(HistoryStore.cached(url: url).count == 1)
+
+        let two = #"{"agent":"codex","sessionId":"b","state":"done","endedAt":2000}"#
+        try (one + "\n" + two + "\n").write(to: url, atomically: true, encoding: .utf8)
+        #expect(HistoryStore.cached(url: url).count == 2)
     }
 }

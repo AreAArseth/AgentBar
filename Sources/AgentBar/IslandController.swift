@@ -510,6 +510,44 @@ final class IslandController: NSObject {
     /// into Settings, updates and Quit itself. The provider quota line rides
     /// along on the left — a glance, not a dashboard.
     private func footer() -> NSView {
+        let row = footerRow()
+        guard let strip = todayStrip() else { return row }
+        // A vertical pair rather than a taller single row: `setFooter` measures what
+        // it is handed (`fittingSize`) and `contentHeight` already carries the result,
+        // so the panel grows by exactly the strip and nothing else moves.
+        let stack = NSStackView(views: [strip, row])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+
+    /// Cached on what it is drawn from. `footer()` runs on every rebuild — about once
+    /// a second while an agent works — and the day only changes when a session ends.
+    private var todayStripCache: (signature: String, view: TodayStripView)?
+
+    private func todayStrip() -> TodayStripView? {
+        // Both halves off unless asked for in Appearance — the panel's whole argument
+        // is that it stays small, and the same numbers are a click away under ⋯ and in
+        // `agentbar history`. See TodayStripView for why they switch on separately.
+        guard TodayStripView.enabled else { todayStripCache = nil; return nil }
+        let (summary, entries) = HistoryDigest.today(HistoryStore.cached())
+        guard !summary.isEmpty else { todayStripCache = nil; return nil }
+        let signature = TodayStripView.signature(summary, entries)
+        if let cache = todayStripCache, cache.signature == signature {
+            // A view can only live in one place: `setRows`/`setFooter` tear the old
+            // hierarchy down, so the cached one has to be lifted out before reuse.
+            cache.view.removeFromSuperview()
+            return cache.view
+        }
+        let view = TodayStripView(summary: summary, entries: entries,
+                                  width: Self.expandedWidth - IslandContentView.hPad * 2)
+        todayStripCache = (signature, view)
+        return view
+    }
+
+    private func footerRow() -> NSView {
         let dots = NSButton(title: "⋯", target: self, action: #selector(showMenu(_:)))
         dots.isBordered = false
         dots.font = .systemFont(ofSize: 15, weight: .semibold)

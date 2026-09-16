@@ -29,9 +29,13 @@ open "build/AgentBar.app"
    (`StatusItemController`) and the island (`IslandController`) — both fed from the
    same stores through `MascotDriver` / `AgentActions`; never render one from the
    other's code. Native notifications are the one thing that may appear over the
-   screen, and only because the user switched them on (off by default, like sounds)
-   and because the banner is the system's surface, not one AgentBar draws — see
-   `Notifier`. Windows are the exception, not the pattern: only `WelcomeWindow`
+   screen, and three conditions earn it, not one: the user switched them on (off by
+   default, like sounds), the banner is the system's surface rather than one AgentBar
+   draws, **and what is being announced either wants an answer or happened while the
+   user was away**. That last one is a rule, not a preference — 1.17.0 fired on every
+   `done`, Claude Code enters `done` after every turn, and a fifty-turn conversation
+   posted fifty banners. An agent finishing is not news. See `Notifier`.
+   Windows are the exception, not the pattern: only `WelcomeWindow`
    and `SettingsWindow`, both small, both opened by the user.
 3. Hooks must never block the host agent: async, atomic writes, exit fast.
    Sole exception: `permission.js` blocks while the session is already waiting on

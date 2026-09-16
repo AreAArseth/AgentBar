@@ -29,12 +29,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.sessions = sessions
             self.mascot.update(sessions: sessions, systemColor: IconColor.system)
             SoundCenter.shared.observe(sessions)
+            // Takes the git baseline a session's record is later measured against.
+            // A session that appears and ends inside one tick gets none, which is
+            // correct: there is no span there to measure.
+            WorkDiff.shared.observe(sessions)
             self.history.observe(sessions)
             Notifier.shared.observe(sessions)
             self.controller.apply(sessions)
             if self.islandRunning {
                 self.island.apply(sessions: sessions, requests: self.requestStore.requests)
             }
+        }
+        TodayStripView.onChange = { [weak self] in
+            guard let self, self.islandRunning else { return }
+            self.island.settingsChanged()
         }
         IconColor.onChange = { [weak self] system in
             guard let self else { return }

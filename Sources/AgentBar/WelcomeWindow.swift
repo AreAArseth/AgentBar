@@ -20,6 +20,10 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
     private var colorRadios: [NSButton] = []
     private var displayRow: NSView!
     private var displayPicker: DisplayPicker!
+    private var todayRow: NSView!
+    private var todayTotalBox: NSButton!
+    private var todayBarsBox: NSButton!
+    private var todayCaption: NSTextField!
     private var displayCaption: NSTextField!
     private var modeCaption: NSTextField!
     private var wiredLabel: NSTextField!
@@ -61,7 +65,7 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         w.center()
 
         let stack = NSStackView(views: [header(), previewBox(), picker(), displayPickerRow(),
-                                        colorPicker(), footer()])
+                                        todayStripRow(), colorPicker(), footer()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -172,6 +176,66 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         return col
     }
 
+    /// The day's account along the bottom of the island. It lives here rather than
+    /// in Settings because this is the window that decides what the island *looks
+    /// like* — where it sits, which display, which marks — and this is one of those,
+    /// not a behaviour.
+    ///
+    /// Two switches, not one, because the halves cost different things: the line is a
+    /// row of small text that says what happened, the strip is taller and only pays
+    /// for itself on a day spread across several sessions. Both off by default, and
+    /// hidden entirely in menu-bar mode along with the display picker.
+    private func todayStripRow() -> NSView {
+        let label = NSTextField(labelWithString: "Today, along the bottom:")
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+
+        todayTotalBox = NSButton(checkboxWithTitle: "The day's total",
+                                 target: self, action: #selector(toggleTodayStrip))
+        todayBarsBox = NSButton(checkboxWithTitle: "A bar per session",
+                                target: self, action: #selector(toggleTodayStrip))
+        todayCaption = NSTextField(wrappingLabelWithString: "")
+        todayCaption.font = .systemFont(ofSize: 11)
+        todayCaption.textColor = .secondaryLabelColor
+        todayCaption.preferredMaxLayoutWidth = Self.rowWidth
+
+        let boxes = NSStackView(views: [todayTotalBox, todayBarsBox])
+        boxes.orientation = .horizontal
+        boxes.spacing = 18
+
+        let col = NSStackView(views: [label, boxes, todayCaption])
+        col.orientation = .vertical
+        col.alignment = .leading
+        col.spacing = 6
+        col.widthAnchor.constraint(equalToConstant: Self.rowWidth).isActive = true
+        todayRow = col
+        return col
+    }
+
+    @objc private func toggleTodayStrip() {
+        TodayStripView.showsTotal = todayTotalBox.state == .on
+        TodayStripView.showsBars = todayBarsBox.state == .on
+        reload()
+    }
+
+    /// Says what the current pair actually produces, rather than describing both and
+    /// leaving the reader to work out which half they switched on.
+    private func todayCaptionText() -> String {
+        switch (TodayStripView.showsTotal, TodayStripView.showsBars) {
+        case (true, true):
+            return "\"12 sessions · 3h 40m · 4.1M tokens\", and under it a bar per "
+                + "session — wider the longer it ran, red for what failed."
+        case (true, false):
+            return "One line: how many sessions finished, how long they took, what "
+                + "they cost and what failed."
+        case (false, true):
+            return "A bar per session that finished today — wider the longer it ran, "
+                + "red for what failed. Point at one for its numbers."
+        case (false, false):
+            return "The island stays as it is. Today's account is still under its ⋯, "
+                + "and in the menu bar's Today row."
+        }
+    }
+
     private func colorPicker() -> NSView {
         let label = NSTextField(labelWithString: "Mark color:")
         label.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -231,6 +295,11 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         preview.mode = mode
         modeCaption.stringValue = mode.caption
         showBox.state = Self.showOnLaunch ? .on : .off
+        // Same rule as the display picker: no island, nothing to decorate.
+        todayRow.isHidden = !mode.showsIsland
+        todayTotalBox.state = TodayStripView.showsTotal ? .on : .off
+        todayBarsBox.state = TodayStripView.showsBars ? .on : .off
+        todayCaption.stringValue = todayCaptionText()
         reloadDisplayRow(mode: mode)
         refreshWired()
     }

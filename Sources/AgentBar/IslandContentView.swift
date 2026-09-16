@@ -514,14 +514,7 @@ final class IslandRowView: NSView {
     private static func chip(_ text: String, tint: NSColor) -> NSView {
         let label = NSTextField(labelWithString: text)
         label.font = .monospacedSystemFont(ofSize: 9, weight: .semibold)
-        // A brand colour picked for a menu bar can be too dark on the island's
-        // near-black panel; lift it until it reads.
-        label.textColor = tint.usingColorSpace(.sRGB).map { c in
-            c.brightnessComponent < 0.55
-                ? NSColor(hue: c.hueComponent, saturation: c.saturationComponent * 0.9,
-                          brightness: 0.85, alpha: 1)
-                : c
-        } ?? tint
+        label.textColor = IconRenderer.legibleOnDark(tint)
         let box = ChipBox(label: label)
         return box
     }

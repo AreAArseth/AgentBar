@@ -13,8 +13,8 @@
 //                                   so hooks offer remote approval while it runs.
 //   agentbar waybar                 one-line JSON for waybar/polybar custom modules
 //                                   (each call refreshes the heartbeat; poll <= 30s)
-//   agentbar history [--days N]     what finished today — state.d forgets, this
-//                                   doesn't
+//   agentbar history [--days N]     what finished today, with what it cost and what
+//                                   moved in the repo — state.d forgets, this doesn't
 //   agentbar doctor [--json]        diagnose a silent integration: hooks wired?
 //                                   node path still there? dirs writable? when did
 //                                   each agent last report?
@@ -90,19 +90,41 @@ function recordHistory(ss) {
   try {
     const live = {};
     for (const s of ss) if (s.started !== false) live[s.id] = s;
-    const prev = readJSON(seenFile);
+    const sidecar = readJSON(seenFile);
+    // The sidecar used to be a bare map of sessions; a file written by an older CLI
+    // is read as exactly that, with no baselines yet.
+    const prev = sidecar && sidecar.sessions ? sidecar.sessions : sidecar;
+    const oldBases = (sidecar && sidecar.baselines) || {};
+
+    // A git baseline the first time a session is seen, kept here so a one-shot
+    // command can still measure a span it never watched. A session already running
+    // when this CLI first ran gets none, and therefore no numbers — see repoChange.
+    const baselines = {};
+    for (const id of Object.keys(live)) {
+      baselines[id] = Object.prototype.hasOwnProperty.call(oldBases, id)
+        ? oldBases[id] : repoBaseline(live[id].cwd || "");
+    }
     fs.mkdirSync(base, { recursive: true });
     const t = seenFile + "." + process.pid + ".tmp";
-    fs.writeFileSync(t, JSON.stringify(live));
+    fs.writeFileSync(t, JSON.stringify({ sessions: live, baselines }));
     fs.renameSync(t, seenFile);
     if (!prev) return; // first run is a baseline, not a hundred endings at once
 
-    const rec = (s, id) => ({
-      v: 1, agent: s.agent || "", sessionId: id, project: s.project || "",
-      cwd: s.cwd || "", label: s.label || "", prompt: s.prompt || "",
-      model: s.model || "", startedAt: Math.floor(s.started_at || 0),
-      endedAt: Math.floor(s.ts || now()), state: s.state || "", decayed: false,
-    });
+    const rec = (s, id) => {
+      const o = {
+        v: 1, agent: s.agent || "", sessionId: id, project: s.project || "",
+        cwd: s.cwd || "", label: s.label || "", prompt: s.prompt || "",
+        model: s.model || "", startedAt: Math.floor(s.started_at || 0),
+        endedAt: Math.floor(s.ts || now()), state: s.state || "", decayed: false,
+      };
+      // Both optional, both omitted rather than zeroed: a reader has to be able to
+      // tell "nobody measured this" from "this cost nothing".
+      const w = sessionWeight(s.agent || "", id, s.cwd || "");
+      if (w) o.weight = w;
+      const ch = repoChange(s.cwd || "", baselines[id] || oldBases[id]);
+      if (ch) o.change = ch;
+      return o;
+    };
     const out = [];
     for (const s of ss) {
       if (!FINISHED[s.state]) continue;
@@ -161,9 +183,10 @@ function printHistory(argv, json) {
   if (json) return console.log(JSON.stringify(rows, null, 2));
   if (!rows.length) return console.log(dim(days === 1 ? "Nothing finished yet today" : `Nothing in the last ${days} days`));
 
-  let measured = 0, seconds = 0;
+  let measured = 0, seconds = 0, tokensMeasured = 0, tokens = 0;
   for (const r of rows) {
     if (r.startedAt > 0 && r.endedAt >= r.startedAt) { seconds += r.endedAt - r.startedAt; measured++; }
+    if (r.weight) { tokens += weightTotal(r.weight); tokensMeasured++; }
   }
   const failed = rows.filter((r) => r.state === "error").length;
   for (const r of rows) {
@@ -172,14 +195,24 @@ function printHistory(argv, json) {
     const dur = r.startedAt > 0 && r.endedAt >= r.startedAt ? durationText(r.endedAt - r.startedAt) : "";
     const name = r.project || r.agent || "session";
     const mark = r.state === "error" ? red("✗") : green("✓");
-    console.log(`${mark} ${dim(when)}  ${bold(name.padEnd(22))} ${dim((dur || "").padStart(6))}  ${dim(r.agent)}`);
+    // Every trailing column is blank when it was not measured, never zero-filled.
+    const tok = r.weight ? compact(weightTotal(r.weight)) : "";
+    const ch = r.change ? changeText(r.change) : "";
+    console.log(`${mark} ${dim(when)}  ${bold(name.padEnd(22))} ${dim((dur || "").padStart(6))}`
+      + ` ${dim(tok.padStart(7))}  ${dim(ch.padEnd(17))} ${dim(r.agent)}`);
   }
   // A partial total presented as the day's work is a number someone would quote.
+  // Doubly so for tokens: only three of the ten agents publish one at all, so the
+  // partial form is the normal case here rather than the exception.
   const total = measured === rows.length
     ? durationText(seconds)
     : measured ? `${durationText(seconds)} across ${measured}` : "";
+  const tokenTotal = tokensMeasured === rows.length && tokens
+    ? `${compact(tokens)} tokens`
+    : tokensMeasured ? `${compact(tokens)} tokens across ${tokensMeasured}` : "";
   const parts = [`${rows.length} session${rows.length === 1 ? "" : "s"}`];
   if (total) parts.push(total);
+  if (tokenTotal) parts.push(tokenTotal);
   if (failed) parts.push(`${failed} failed`);
   console.log("\n" + parts.join(" · "));
 }
@@ -251,6 +284,201 @@ function gitBranch(cwd) {
     return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : head.slice(0, 7);
   } catch { return null; }
 }
+
+// MARK: - Weight and repo change (both optional per docs/protocol.md)
+
+// What a session cost, from the agent's own local files. Claude and Codex keep plain
+// JSONL and are read here; Copilot keeps a SQLite database, which needs a dependency
+// this CLI does not have, so a Copilot row simply carries no weight on Linux.
+// Absent always means "not measured" — never zero.
+
+// Claude Code's project folders: every character that is not a letter, digit or
+// underscore becomes a dash.
+const slugify = (p) => p.replace(/[^A-Za-z0-9_]/g, "-");
+
+// Any ~/.claude* holding a projects/ dir. Globbed, not listed: the split-config
+// layouts are named by whoever set them up.
+function claudeRoots() {
+  let names = []; try { names = fs.readdirSync(os.homedir()); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    if (n !== ".claude" && !n.startsWith(".claude-")) continue;
+    const p = path.join(os.homedir(), n, "projects");
+    try { if (fs.statSync(p).isDirectory()) out.push(fs.realpathSync(p)); } catch {}
+  }
+  return [...new Set(out)];
+}
+
+// The session id IS the transcript's file name. The slug is a fast path; the walk is
+// the answer when a session's cwd no longer maps to its folder.
+function claudeTranscript(sessionId, cwd) {
+  const file = sessionId + ".jsonl";
+  const roots = claudeRoots();
+  if (cwd) {
+    for (const r of roots) {
+      const guess = path.join(r, slugify(cwd), file);
+      if (fs.existsSync(guess)) return guess;
+    }
+  }
+  for (const r of roots) {
+    let dirs = []; try { dirs = fs.readdirSync(r); } catch { continue; }
+    for (const d of dirs) {
+      const guess = path.join(r, d, file);
+      if (fs.existsSync(guess)) return guess;
+    }
+  }
+  return null;
+}
+
+// One assistant message spans several transcript lines, each repeating the same usage
+// object — dedupe by message.id or the answer roughly doubles.
+function claudeWeight(sessionId, cwd) {
+  const file = claudeTranscript(sessionId, cwd);
+  if (!file) return null;
+  let text = ""; try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const w = { in: 0, out: 0, cacheWrite: 0, cacheRead: 0, src: "claude-transcript" };
+  const seen = new Set();
+  for (const line of text.split("\n")) {
+    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    const u = o && o.type === "assistant" && o.message && o.message.usage;
+    if (!u) continue;
+    if (o.message.id) { if (seen.has(o.message.id)) continue; seen.add(o.message.id); }
+    w.in += u.input_tokens || 0;
+    w.out += u.output_tokens || 0;
+    w.cacheWrite += u.cache_creation_input_tokens || 0;
+    w.cacheRead += u.cache_read_input_tokens || 0;
+  }
+  return w.in || w.out || w.cacheWrite || w.cacheRead ? w : null;
+}
+
+// Codex stamps a cumulative total_token_usage into its rollout file on every turn, so
+// the last one is the session total. The id link is the fragile part: the adapter
+// writes codex-<thread-id> and its fallbacks name no rollout at all, so a miss has to
+// produce nothing rather than a guess.
+function codexRollout(id) {
+  const base = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const walk = (dir, depth) => {
+    let names = []; try { names = fs.readdirSync(dir); } catch { return null; }
+    for (const n of names.sort().reverse()) {
+      const p = path.join(dir, n);
+      if (depth > 0) { const hit = walk(p, depth - 1); if (hit) return hit; continue; }
+      if (n.endsWith(`-${id}.jsonl`)) return p;
+    }
+    return null;
+  };
+  return walk(path.join(base, "sessions"), 3);
+}
+
+function codexWeight(sessionId) {
+  const id = sessionId.startsWith("codex-") ? sessionId.slice(6) : sessionId;
+  const file = id && codexRollout(id);
+  if (!file) return null;
+  let text = ""; try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  let out = null;
+  for (const line of text.split("\n")) {
+    if (!line.includes("token_count")) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    const t = o && o.payload && o.payload.type === "token_count"
+      && o.payload.info && o.payload.info.total_token_usage;
+    if (!t) continue;
+    const cached = t.cached_input_tokens || 0;
+    // Codex folds cached input INTO input_tokens, unlike the other two. Split it back
+    // out or the same conversation looks bigger under Codex for no reason but phrasing.
+    out = { in: Math.max(0, (t.input_tokens || 0) - cached), out: t.output_tokens || 0,
+            cacheWrite: t.cache_write_input_tokens || 0, cacheRead: cached,
+            src: "codex-rollout" };
+  }
+  return out && (out.in || out.out || out.cacheWrite) ? out : null;
+}
+
+function sessionWeight(agent, sessionId, cwd) {
+  try {
+    if (agent === "claude") return claudeWeight(sessionId, cwd);
+    if (agent === "codex") return codexWeight(sessionId);
+  } catch {}
+  return null;  // copilot needs SQLite; everyone else publishes nothing
+}
+
+// Cache reads are stored but never shown: two orders of magnitude bigger than the
+// rest, and a measure of how long a conversation is rather than what it did.
+const weightTotal = (w) => (w ? (w.in || 0) + (w.out || 0) + (w.cacheWrite || 0) : 0);
+const compact = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+
+// --- what moved in the repo ---
+// The wording is the feature: this is what changed in the REPO while the session was
+// open, not what the agent did. You edit in the same tree and two sessions can share
+// one checkout, and nothing here can separate those.
+
+// On macOS /usr/bin/git is a stub that pops the "install developer tools" dialog when
+// the tools are missing. A background CLI must never do that.
+const gitTool = (() => {
+  for (const p of ["/opt/homebrew/bin/git", "/usr/local/bin/git"]) {
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+  }
+  if (process.platform !== "darwin") return "git";
+  for (const p of ["/Library/Developer/CommandLineTools/usr/bin/git",
+                   "/Applications/Xcode.app/Contents/Developer/usr/bin/git"]) {
+    try { fs.accessSync(p, fs.constants.X_OK); return "/usr/bin/git"; } catch {}
+  }
+  return null;
+})();
+
+function git(args, cwd) {
+  if (!gitTool) return null;
+  try {
+    return require("child_process").execFileSync(gitTool, args, {
+      cwd, timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    });
+  } catch { return null; }
+}
+
+// "<added>\t<removed>\t<path>", with "-" in both numeric columns for a binary file.
+function numstat(text) {
+  const out = {};
+  for (const line of (text || "").split("\n")) {
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const file = parts.slice(2).join("\t");
+    out[file] = parts[0] === "-" || parts[1] === "-"
+      ? { binary: true } : { a: parseInt(parts[0], 10) || 0, r: parseInt(parts[1], 10) || 0 };
+  }
+  return out;
+}
+
+// Taken the first time a session is seen, and kept in the seen sidecar so one-shot
+// commands can still measure a span. No baseline later means no numbers at all.
+function repoBaseline(cwd) {
+  if (!cwd) return null;
+  const head = git(["rev-parse", "HEAD"], cwd);
+  if (!head || !head.trim()) return null;
+  return { head: head.trim(), dirt: numstat(git(["diff", "--numstat", "HEAD"], cwd)) };
+}
+
+function repoChange(cwd, baseline) {
+  if (!cwd || !baseline || !baseline.head) return null;
+  // A reset or a jump to an unrelated branch makes the span meaningless.
+  if (git(["merge-base", "--is-ancestor", baseline.head, "HEAD"], cwd) === null) return null;
+  const text = git(["diff", "--numstat", baseline.head], cwd);
+  if (text === null) return null;
+  const now2 = numstat(text), was = baseline.dirt || {};
+  let files = 0, added = 0, removed = 0;
+  for (const [file, st] of Object.entries(now2)) {
+    if (st.binary) { if (!was[file]) files++; continue; }
+    // Floored per file: a session that reverted earlier edits leaves a smaller diff
+    // than the baseline, and a negative line count is not readable.
+    const a = Math.max(0, st.a - ((was[file] && was[file].a) || 0));
+    const r = Math.max(0, st.r - ((was[file] && was[file].r) || 0));
+    if (!(a + r)) continue;
+    files++; added += a; removed += r;
+  }
+  return files ? { files, added, removed, base: baseline.head.slice(0, 7) } : null;
+}
+
+const changeText = (ch) =>
+  `${ch.files} file${ch.files === 1 ? "" : "s"}` +
+  (ch.added ? ` +${ch.added}` : "") + (ch.removed ? ` \u2212${ch.removed}` : "");
 
 // MARK: - Rendering
 

@@ -16,9 +16,18 @@ import Testing
     }
 
     private func record(_ id: String, agent: String = "claude", project: String = "AgentBar",
-                        state: String = "done", started: TimeInterval, ended: TimeInterval)
+                        state: String = "done", started: TimeInterval, ended: TimeInterval,
+                        tokens: Int? = nil, files: Int? = nil)
     -> HistoryStore.Record {
-        let json = #"{"agent":"\#(agent)","sessionId":"\#(id)","project":"\#(project)","state":"\#(state)","startedAt":\#(Int(started)),"endedAt":\#(Int(ended)),"cwd":"/tmp/x"}"#
+        var extra = ""
+        // Output only, so `total` is exactly what was asked for.
+        if let tokens {
+            extra += #","weight":{"in":0,"out":\#(tokens),"cacheWrite":0,"cacheRead":9999,"src":"claude-transcript"}"#
+        }
+        if let files {
+            extra += #","change":{"files":\#(files),"added":210,"removed":80,"base":"3a30264"}"#
+        }
+        let json = #"{"agent":"\#(agent)","sessionId":"\#(id)","project":"\#(project)","state":"\#(state)","startedAt":\#(Int(started)),"endedAt":\#(Int(ended)),"cwd":"/tmp/x"\#(extra)}"#
         return HistoryStore.Record(jsonLine: json)!
     }
 
@@ -104,5 +113,60 @@ import Testing
         let e = record("a", agent: "codex", project: "", started: 0, ended: Self.noon)
         let (_, entries) = HistoryDigest.digest([e], since: 0, until: Self.noon)
         #expect(HistoryDigest.line(entries[0]) == "Codex")
+    }
+    // MARK: - Weight
+
+    @Test func tokensJoinTheHeadlineWhenEverySessionWasMeasured() {
+        let a = record("a", started: Self.noon - 3_600, ended: Self.noon - 1_800, tokens: 2_100_000)
+        let b = record("b", started: Self.noon - 900, ended: Self.noon - 300, tokens: 2_000_000)
+        let (summary, _) = HistoryDigest.today([a, b], now: Self.noon, calendar: Self.utc)
+        #expect(summary.tokensMeasured == 2)
+        #expect(HistoryDigest.headline(summary) == "2 sessions · 40m · 4.1M tokens")
+    }
+
+    /// Seven of the ten agents publish nothing to measure, so a partial total is the
+    /// normal case here — not the exception. Quoting it as the day's spend would be
+    /// wrong most days.
+    @Test func aPartialTokenTotalSaysWhatItCovers() {
+        let measured = record("a", started: Self.noon - 3_600, ended: Self.noon - 1_800,
+                              tokens: 1_200_000)
+        let unmeasured = record("b", agent: "gemini", started: Self.noon - 900,
+                                ended: Self.noon - 300)
+        let (summary, _) = HistoryDigest.today([measured, unmeasured],
+                                               now: Self.noon, calendar: Self.utc)
+        #expect(summary.tokensMeasured == 1)
+        #expect(HistoryDigest.headline(summary) == "2 sessions · 40m · 1.2M tokens across 1")
+    }
+
+    @Test func aDayNobodyCouldMeasureDropsTheClauseRatherThanShowingZero() {
+        let e = record("a", agent: "gemini", started: Self.noon - 600, ended: Self.noon - 300)
+        let (summary, _) = HistoryDigest.today([e], now: Self.noon, calendar: Self.utc)
+        #expect(summary.tokensMeasured == 0)
+        #expect(HistoryDigest.headline(summary) == "1 session · 5m")
+    }
+
+    /// Cache reads are stored but never shown: they are two orders of magnitude bigger
+    /// than the rest and say how long a conversation is, not what it did.
+    @Test func cacheReadsDoNotReachTheHeadline() {
+        let e = record("a", started: Self.noon - 600, ended: Self.noon - 300, tokens: 1_000)
+        let (summary, _) = HistoryDigest.today([e], now: Self.noon, calendar: Self.utc)
+        #expect(summary.tokens == 1_000)
+    }
+
+    // MARK: - Rows
+
+    @Test func aRowCarriesEveryClauseItActuallyHas() {
+        let e = record("a", started: Self.noon - 2_040, ended: Self.noon,
+                       tokens: 1_200_000, files: 7)
+        let (_, entries) = HistoryDigest.digest([e], since: 0, until: Self.noon)
+        #expect(HistoryDigest.line(entries[0]) == "AgentBar · 34m · 1.2M · 7 files +210 −80")
+    }
+
+    /// The clauses are dropped, not zero-filled, so a row never pads itself out to
+    /// look more complete than it is.
+    @Test func aRowWithNothingMeasuredIsJustItsName() {
+        let e = record("a", agent: "gemini", started: 0, ended: Self.noon)
+        let (_, entries) = HistoryDigest.digest([e], since: 0, until: Self.noon)
+        #expect(HistoryDigest.line(entries[0]) == "AgentBar")
     }
 }

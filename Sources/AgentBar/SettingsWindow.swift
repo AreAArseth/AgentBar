@@ -25,7 +25,15 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var hideIslandBox: NSButton!
     private var diagnostics: DiagnosticsView!
     private var notifyApprovalsBox: NSButton!
-    private var notifyDoneBox: NSButton!
+    private var notifyFailuresBox: NSButton!
+    private var notifyQuietBox: NSButton!
+
+    /// Lives in one place because the caption is rebuilt from scratch whenever macOS
+    /// has something to say about authorization — two copies of it drifted once.
+    static let notifyCaptionText =
+        "A banner from macOS, with Allow and Deny on it. Only for what wants an\n"
+        + "answer — nothing is announced just for finishing. The summary waits until\n"
+        + "you've been away from the keyboard for two minutes. Sounds are separate, above."
     private var notifyCaption: NSTextField!
     private var notifySettingsButton: NSButton!
     private var notifyTestButton: NSButton!
@@ -127,10 +135,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // launch — see Notifier.start().
         notifyApprovalsBox = NSButton(checkboxWithTitle: "When an agent needs approval",
                                       target: self, action: #selector(toggleNotifications))
-        notifyDoneBox = NSButton(checkboxWithTitle: "When an agent finishes",
-                                 target: self, action: #selector(toggleNotifications))
-        notifyCaption = caption(
-            "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above.")
+        notifyFailuresBox = NSButton(checkboxWithTitle: "When a session fails",
+                                     target: self, action: #selector(toggleNotifications))
+        notifyQuietBox = NSButton(checkboxWithTitle: "When everything goes quiet, and you're away",
+                                  target: self, action: #selector(toggleNotifications))
+        notifyCaption = caption(Self.notifyCaptionText)
         // Telling someone where a switch lives is not the same as taking them there.
         // Shown only when macOS has actually refused, so it is never a button that
         // opens a pane with nothing to do in it.
@@ -168,8 +177,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let seps = (0..<4).map { _ in separator() }
         let stack = NSStackView(views: [
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
-            sectionLabel("Notifications"), notifyApprovalsBox, notifyDoneBox, notifyCaption,
-            notifyButtons, seps[1],
+            sectionLabel("Notifications"), notifyApprovalsBox, notifyFailuresBox,
+            notifyQuietBox, notifyCaption, notifyButtons, seps[1],
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
@@ -186,6 +195,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(8, after: notifyCaption)
         stack.setCustomSpacing(14, after: notifyButtons)
         stack.setCustomSpacing(2, after: notifyApprovalsBox)
+        stack.setCustomSpacing(2, after: notifyFailuresBox)
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -236,7 +246,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
-        notifyDoneBox.state = Notifier.Prefs.done ? .on : .off
+        notifyFailuresBox.state = Notifier.Prefs.failures ? .on : .off
+        notifyQuietBox.state = Notifier.Prefs.quiet ? .on : .off
         notifyTestButton.isEnabled = Notifier.Prefs.anyEnabled
         syncNotificationCaption()
         // Re-run on every show: the answer changes with what the user did outside
@@ -257,8 +268,17 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// the caption says where to change your mind.
     @objc private func toggleNotifications(_ sender: NSButton) {
         let turningOn = sender.state == .on
-        if sender === notifyApprovalsBox { Notifier.Prefs.approvals = turningOn }
-        else { Notifier.Prefs.done = turningOn }
+        // One selector, three boxes: the sender says which preference it owns, so
+        // adding a channel is a line here rather than a fourth near-identical method.
+        let write: (Bool) -> Void = { [weak self] on in
+            guard let self else { return }
+            switch sender {
+            case self.notifyApprovalsBox: Notifier.Prefs.approvals = on
+            case self.notifyFailuresBox: Notifier.Prefs.failures = on
+            default: Notifier.Prefs.quiet = on
+            }
+        }
+        write(turningOn)
 
         if turningOn {
             Notifier.shared.requestAuthorization { [weak self] granted, error in
@@ -271,8 +291,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                     self.notificationProblem = Notifier.problem(granted: granted, error: error,
                                                                 status: status)
                     if !granted {
-                        if sender === self.notifyApprovalsBox { Notifier.Prefs.approvals = false }
-                        else { Notifier.Prefs.done = false }
+                        write(false)
                         sender.state = .off
                     }
                     self.syncNotificationCaption()
@@ -306,7 +325,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     private func syncNotificationCaption() {
-        let base = "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above."
+        let base = Self.notifyCaptionText
         if let notificationProblem {
             notifyCaption.stringValue = notificationProblem
             notifyCaption.textColor = .systemOrange

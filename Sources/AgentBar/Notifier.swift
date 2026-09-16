@@ -35,21 +35,56 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var primed = false
     /// Identifiers currently on screen, so they can be taken back down.
     private var deliveredRequests: Set<String> = []
+    /// The run of work currently in progress, or the one that just ended.
+    private var burst = Burst()
+    /// A banner is the whole point while the screen is locked, but the lock is also
+    /// the strongest possible signal that nobody is watching the island.
+    private var screenLocked = false
+    private var quietTimer: Timer?
+
+    /// Seconds since the human last touched the machine. `kCGAnyInputEventType`
+    /// spelled out, because `CGEventType` has no case for it — it is the sentinel
+    /// `0xFFFFFFFF`, not a real event type. Needs no permission and no entitlement.
+    static func inputIdleSeconds() -> TimeInterval {
+        guard let any = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
+    }
 
     // MARK: - Preferences
 
-    /// Two switches, both off by default (`bool(forKey:)` gives false), owned here
+    /// Three switches, all off by default (`bool(forKey:)` gives false), owned here
     /// rather than as string literals because Settings and this class both read them.
+    ///
+    /// Each one answers a different question, and none of them is "an agent did
+    /// something". 1.17.0 shipped a switch called *When an agent finishes* that fired
+    /// on `state == .done`, which Claude Code enters at the end of **every turn** — a
+    /// fifty-turn conversation posted fifty banners. What earns a banner is wanting
+    /// an answer, failing, or finishing while nobody was there to see it.
     enum Prefs {
         static var approvals: Bool {
             get { UserDefaults.standard.bool(forKey: "notifyApprovals") }
             set { UserDefaults.standard.set(newValue, forKey: "notifyApprovals") }
         }
-        static var done: Bool {
-            get { UserDefaults.standard.bool(forKey: "notifyDone") }
-            set { UserDefaults.standard.set(newValue, forKey: "notifyDone") }
+        static var failures: Bool {
+            get { UserDefaults.standard.bool(forKey: "notifyFailures") }
+            set { UserDefaults.standard.set(newValue, forKey: "notifyFailures") }
         }
-        static var anyEnabled: Bool { approvals || done }
+        static var quiet: Bool {
+            get { UserDefaults.standard.bool(forKey: "notifyQuiet") }
+            set { UserDefaults.standard.set(newValue, forKey: "notifyQuiet") }
+        }
+        static var anyEnabled: Bool { approvals || failures || quiet }
+
+        /// `notifyDone` is gone. Someone who ticked it wanted to hear about endings,
+        /// so they get both of the switches that replaced it — once, and never again
+        /// even if they turn them back off.
+        static func migrate(_ defaults: UserDefaults = .standard) {
+            guard !defaults.bool(forKey: "notifyMigrated18") else { return }
+            defaults.set(true, forKey: "notifyMigrated18")
+            guard defaults.bool(forKey: "notifyDone") else { return }
+            defaults.set(true, forKey: "notifyFailures")
+            defaults.set(true, forKey: "notifyQuiet")
+        }
     }
 
     // MARK: - Lifecycle
@@ -63,6 +98,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// receives button taps — and a notification can outlive the setting that
     /// created it.
     func start() {
+        Prefs.migrate()
+        // See `stepQuiet`: nothing else ticks once everything has stopped.
+        quietTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.stepQuiet(self.sessions?() ?? [])
+        }
+        quietTimer?.tolerance = 3
+        // Same pair `SoundCenter` watches, for the opposite reason: a locked screen
+        // silences sounds and is exactly when a summary is worth posting.
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
+                        object: nil, queue: .main) { [weak self] _ in self?.screenLocked = true }
+        dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
+                        object: nil, queue: .main) { [weak self] _ in self?.screenLocked = false }
+
         let center = UNUserNotificationCenter.current()
         // A launch-time probe for diagnosing "the checkbox does nothing" without
         // making someone click it again; documented next to the other debug
@@ -144,7 +194,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - What deserves a notification (pure, so it can be tested)
 
     struct Event: Equatable {
-        enum Kind: Equatable { case approval, question, finished }
+        enum Kind: Equatable { case approval, question, failed, quiet }
         let id: String
         let kind: Kind
         let title: String
@@ -176,38 +226,140 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         return (post, previous.subtracting(live).map { $0 })
     }
 
-    /// Sessions that just finished. Edge-detected against the previous tick, the way
-    /// `SoundCenter.observe` does it, so a row sitting in `done` notifies once.
+    /// Turns that ended badly. Edge-detected against the previous tick, the way
+    /// `SoundCenter.observe` does it, so a row sitting in `error` notifies once.
+    ///
+    /// Only `error`, deliberately. A successful turn ending is the single most
+    /// frequent event AgentBar sees and it wants nothing from you; a failed one is
+    /// rare and is the reason you would go and look.
     ///
     /// `decayed` rows are skipped: a watchdog guessing that a quiet Antigravity
-    /// session is over is not the agent saying it finished, and a banner claiming
+    /// session is over is not the agent saying it failed, and a banner claiming
     /// otherwise would be inventing an outcome.
-    static func sessionEvents(previous: [String: Session.State], sessions: [Session],
+    static func failureEvents(previous: [String: Session.State], sessions: [Session],
                               enabled: Bool) -> [Event] {
         guard enabled else { return [] }
         return sessions.compactMap { s -> Event? in
-            guard s.started, !s.decayed, s.state == .done || s.state == .error else { return nil }
-            let was = previous[s.id]
-            guard was != .done, was != .error else { return nil }
-            let who = s.project.isEmpty ? s.agentID : s.project
-            return Event(id: "done:\(s.id):\(Int(s.ts))", kind: .finished,
-                         title: s.state == .error ? "\(who) failed" : "\(who) finished",
-                         body: s.state == .error ? (s.label.isEmpty ? "The turn ended with an error." : s.label)
-                                                 : (s.recap.isEmpty ? (s.prompt.isEmpty ? "" : s.prompt) : s.recap),
+            guard s.started, !s.decayed, s.state == .error else { return nil }
+            guard previous[s.id] != .error else { return nil }
+            // The display name, not the raw id — "claude failed" is a log line, not a
+            // notification. Matches what `requestEvents` above already does.
+            let who = s.project.isEmpty ? Agent.byID(s.agentID).name : s.project
+            return Event(id: "error:\(s.id):\(Int(s.ts))", kind: .failed,
+                         title: "\(who) failed",
+                         body: s.label.isEmpty ? "The turn ended with an error." : s.label,
                          sessionId: s.id)
         }
+    }
+
+    // MARK: - All quiet
+
+    /// One burst of work: from the moment something started running until everything
+    /// has stopped and stayed stopped.
+    ///
+    /// The unit is deliberately not the session. Sessions finish constantly — every
+    /// turn, in Claude's case — and none of those endings is news. A *burst* ending
+    /// is: you set some agents going, and now there is nothing left running.
+    struct Burst: Equatable {
+        /// When work began after the last quiet spell. 0 = nothing has run yet.
+        var startedAt: TimeInterval = 0
+        /// nil while anything is busy; otherwise when the quiet began.
+        var quietSince: TimeInterval?
+        /// This burst has already had its banner. Reset when work resumes.
+        var announced = false
+    }
+
+    /// How long everything must stay stopped, and how long the human must have been
+    /// away, before the day is called quiet. Two minutes is long enough that reading
+    /// an agent's output does not end the burst, and short enough to still be news.
+    static let quietSettle: TimeInterval = 120
+
+    /// Pure: no clock, no `UserDefaults`, no notification centre. Returns the next
+    /// burst state and, when this is the tick that earns one, the window the banner
+    /// should summarise.
+    ///
+    /// `inputIdle` is seconds since the human last touched the machine. It is the
+    /// difference between a notification and an interruption: if you are at the
+    /// keyboard, the island and the menu bar have been telling you this all along,
+    /// and a banner is just noise on top. Being away — or locked — is what makes the
+    /// same fact worth saying out loud.
+    static func quietStep(_ prev: Burst, sessions: [Session], now: TimeInterval,
+                          inputIdle: TimeInterval, locked: Bool, enabled: Bool,
+                          settle: TimeInterval = quietSettle,
+                          requireAway: Bool = true) -> (Burst, announce: (since: TimeInterval, until: TimeInterval)?) {
+        // Busy is "not finished", so a session parked on `permission` or `question`
+        // holds the burst open. Something waiting on you is not a day's work over.
+        let busy = sessions.contains { $0.started && !$0.state.isFinished }
+        var next = prev
+
+        if busy {
+            // A burst begins on the first work ever seen, and again whenever work
+            // resumes after a quiet spell. Otherwise this one is simply still running.
+            if next.startedAt == 0 || next.quietSince != nil {
+                next.startedAt = now
+                next.announced = false
+            }
+            next.quietSince = nil
+            return (next, nil)
+        }
+
+        guard enabled, next.startedAt > 0, !next.announced else {
+            if next.quietSince == nil { next.quietSince = now }
+            return (next, nil)
+        }
+        guard let since = next.quietSince else {
+            next.quietSince = now
+            return (next, nil)
+        }
+        guard now - since >= settle else { return (next, nil) }
+        guard !requireAway || locked || inputIdle >= settle else { return (next, nil) }
+
+        next.announced = true
+        return (next, (since: next.startedAt, until: now))
     }
 
     // MARK: - Wiring
 
     func observe(_ sessions: [Session]) {
         defer { lastStates = Dictionary(sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a }) }
-        // The launch snapshot is a baseline; every finished session already on disk
-        // did not just finish, and a relaunch must not fire a dozen banners.
+        // The launch snapshot is a baseline; every failed session already on disk did
+        // not just fail, and a relaunch must not fire a dozen banners.
         guard primed else { primed = true; return }
-        for e in Self.sessionEvents(previous: lastStates, sessions: sessions, enabled: Prefs.done) {
+
+        for e in Self.failureEvents(previous: lastStates, sessions: sessions, enabled: Prefs.failures) {
             post(e)
         }
+        stepQuiet(sessions)
+    }
+
+    /// The burst, advanced against the clock rather than against a change.
+    ///
+    /// `SessionStore` only calls back when something *visibly changed* — which is
+    /// precisely what a quiet spell is the absence of. The tick where the last
+    /// session went quiet is the last tick there is, so waiting for another one waits
+    /// forever. Hence a slow timer of its own, and the reason this is split out of
+    /// `observe` at all.
+    private func stepQuiet(_ sessions: [Session]) {
+        // `quietDebug` exists because the honest version of this feature is, by
+        // design, almost impossible to see on purpose: it waits two minutes and
+        // wants you to have walked away. Documented in CONTRIBUTING.
+        let debug = UserDefaults.standard.bool(forKey: "notifyQuietDebug")
+        let now = Date().timeIntervalSince1970
+        let (next, announce) = Self.quietStep(
+            burst, sessions: sessions, now: now,
+            inputIdle: Self.inputIdleSeconds(),
+            locked: screenLocked, enabled: Prefs.quiet,
+            settle: debug ? 10 : Self.quietSettle, requireAway: !debug)
+        burst = next
+        guard let announce else { return }
+        let (summary, _) = HistoryDigest.digest(HistoryStore.cached(),
+                                                since: announce.since, until: announce.until)
+        // Nothing was recorded for this burst — an agent we cannot time, or a session
+        // that never reached an end we trust. Saying "all quiet" with no account of
+        // what happened is a banner that costs attention and returns nothing.
+        guard !summary.isEmpty else { return }
+        post(Event(id: "quiet:\(Int(announce.until))", kind: .quiet,
+                   title: "All quiet", body: HistoryDigest.headline(summary), sessionId: ""))
     }
 
     func requestsChanged(_ requests: [ApprovalRequest], sessions: [Session]) {

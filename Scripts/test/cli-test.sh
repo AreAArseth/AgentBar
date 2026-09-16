@@ -96,6 +96,56 @@ check "history duration is not an age" '! echo "$OUT" | grep -qE "[0-9]{4,}h"'
 fresh_home
 check "history with no record says so" '"$CLI" history | grep -qi "nothing"'
 
+# --- history: what a session cost, and what moved in the repo. Both are optional
+# in the protocol, and "absent" has to survive as absent — a zero would be quoted.
+fresh_home
+NOW="$(date +%s)"
+{
+  printf '{"agent":"claude","sessionId":"w1","project":"Alpha","state":"done","startedAt":%s,"endedAt":%s,"weight":{"in":1330,"out":622024,"cacheWrite":1453897,"cacheRead":220795232,"src":"claude-transcript"},"change":{"files":7,"added":210,"removed":80,"base":"3a30264"}}\n' "$((NOW-3600))" "$((NOW-1800))"
+  printf '{"agent":"gemini","sessionId":"w2","project":"Beta","state":"done","startedAt":%s,"endedAt":%s}\n' "$((NOW-900))" "$((NOW-300))"
+} > "$HOME/.agentbar/history.jsonl"
+OUT="$("$CLI" history)"
+# 1330 + 622024 + 1453897 = 2_077_251. Cache reads are stored and never shown:
+# including them would make the same session read as 222.9M.
+check "history shows the token total"  'echo "$OUT" | grep -q "2.1M"'
+check "history hides cache reads"      '! echo "$OUT" | grep -q "222"'
+check "history shows what changed"     'echo "$OUT" | grep -q "7 files +210"'
+# Seven of the ten agents publish nothing to measure, so a partial total is the
+# normal case — presenting it as the day's spend would be wrong most days.
+check "partial token total says so"    'echo "$OUT" | grep -q "tokens across 1"'
+check "an unmeasured row stays blank"  '! echo "$OUT" | grep -E "Beta.*[0-9]+(k|M)"'
+
+# An agent that keeps a readable number gets one written for it. Claude Code's
+# session id IS its transcript's file name, which is what makes the lookup exact.
+fresh_home
+PROJ="$HOME/.claude/projects/-tmp-cliweight"
+mkdir -p "$PROJ"
+{
+  printf '{"type":"assistant","timestamp":"2026-09-16T12:00:00.000Z","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":900}}}\n'
+  # The same message again — one message spans several transcript lines, each
+  # repeating the usage object. Counting lines would double the answer.
+  printf '{"type":"assistant","timestamp":"2026-09-16T12:00:00.000Z","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":5,"cache_read_input_tokens":900}}}\n'
+} > "$PROJ/cw1.jsonl"
+mkdir -p "$HOME/.agentbar/state.d"
+printf '{"agent":"claude","state":"tool","started":true,"ts":%s,"pid":%s,"cwd":"/tmp/cliweight","project":"CliWeight","sessionId":"cw1"}' "$(date +%s)" "$$" \
+  > "$HOME/.agentbar/state.d/cw1.json"
+"$CLI" status >/dev/null 2>&1
+printf '{"agent":"claude","state":"done","started":true,"ts":%s,"pid":%s,"cwd":"/tmp/cliweight","project":"CliWeight","sessionId":"cw1"}' "$(date +%s)" "$$" \
+  > "$HOME/.agentbar/state.d/cw1.json"
+"$CLI" status >/dev/null 2>&1
+check "weight is recorded for claude"  'grep -q "\"src\":\"claude-transcript\"" "$HOME/.agentbar/history.jsonl"'
+check "duplicate lines counted once"   'grep -q "\"out\":20" "$HOME/.agentbar/history.jsonl"'
+
+# An agent with nothing on disk must leave the field out entirely rather than
+# writing zeroes somebody then reads as "it cost nothing".
+fresh_home
+seed_session nw tool $$
+"$CLI" status >/dev/null 2>&1
+rm -f "$HOME/.agentbar/state.d/nw.json"
+"$CLI" status >/dev/null 2>&1
+check "no source means no weight key"  '! grep -q "weight" "$HOME/.agentbar/history.jsonl"'
+check "no repo means no change key"    '! grep -q "change" "$HOME/.agentbar/history.jsonl"'
+
 # --- requests + approve/deny
 fresh_home
 seed_request r1 $$

@@ -162,19 +162,12 @@ final class UsageCenter {
     private func claudeReading() -> Reading? {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
-        // Split-config layouts (~/.claude-work, ~/.claude-personal) coexist with
-        // the default; whichever exist contribute. Merged into one line — this
-        // is "what this machine spent", not per-account bookkeeping.
-        // Resolved and deduped: these directories are commonly symlinked to one
-        // another (a split config pointing at a shared projects dir), and
-        // enumerating the same transcripts under two path strings counted every
-        // token twice.
-        var seenRoots = Set<String>()
-        let roots = [".claude", ".claude-work", ".claude-personal"]
-            .map { home.appendingPathComponent($0).appendingPathComponent("projects") }
-            .filter { fm.fileExists(atPath: $0.path) }
-            .map { $0.resolvingSymlinksInPath() }
-            .filter { seenRoots.insert($0.path).inserted }
+        // Split-config layouts (~/.claude-work and friends) coexist with the
+        // default; whichever exist contribute. Merged into one line — this is
+        // "what this machine spent", not per-account bookkeeping. Discovery,
+        // resolution and deduping live in WeightReader.claudeRoots, so the live
+        // quota and the per-session weight read the same set of transcripts.
+        let roots = WeightReader.claudeRoots(home: home)
         guard !roots.isEmpty else { return nil }
 
         // Only files touched inside the scan window can contribute; everything
@@ -279,17 +272,15 @@ final class UsageCenter {
             guard line.contains("\"usage\""), line.contains("\"assistant\""),
                   let lineData = line.data(using: .utf8),
                   let o = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  o["type"] as? String == "assistant",
-                  let stamp = o["timestamp"] as? String, let t = parseISO(stamp),
-                  let message = o["message"] as? [String: Any],
-                  let usage = message["usage"] as? [String: Any]
+                  // One decode of `message.usage`, shared with the per-session reader.
+                  // Two copies of these field names drift the moment a provider adds
+                  // a fifth category.
+                  let parsed = WeightReader.usage(inLine: o), let t = parsed.at
             else { continue }
-            if let id = message["id"] as? String {
+            if let id = parsed.id {
                 guard seen.insert(id).inserted else { continue }
             }
-            out.append((t, (usage["input_tokens"] as? Int ?? 0)
-                + (usage["output_tokens"] as? Int ?? 0)
-                + (usage["cache_creation_input_tokens"] as? Int ?? 0)))
+            out.append((t, parsed.weight.total))
         }
         return (out, consumed)
     }
@@ -330,7 +321,9 @@ final class UsageCenter {
         return f.string(from: d)
     }
 
-    private static func compact(_ n: Int) -> String {
+    /// "4.1M" / "820k" / "412". Internal because the day's digest quotes token
+    /// counts too, and two formatters that must agree are one that will not.
+    static func compact(_ n: Int) -> String {
         switch n {
         case 1_000_000...: return String(format: "%.1fM", Double(n) / 1_000_000)
         case 1_000...:     return String(format: "%.0fk", Double(n) / 1_000)
