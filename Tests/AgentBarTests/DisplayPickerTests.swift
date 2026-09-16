@@ -2,38 +2,50 @@ import AppKit
 import Testing
 @testable import AgentBar
 
-/// The display row's fit. Rendering needs real hardware, but the arithmetic that
-/// decides whether every tile lands on the row does not — and it is what broke:
-/// at the fixed ideal width, four displays ran 80pt past the window edge.
+/// The display row's fit. Rendering needs real hardware, but the geometry that
+/// decides whether every tile lands on screen does not — and it is what broke:
+/// at a fixed tile width and a single line, four displays ran 80pt past the
+/// window edge and the last tile was simply cut off.
 @Suite struct DisplayPickerTests {
     /// The welcome window's content width for this row.
     private let available: CGFloat = 480
 
-    @Test(arguments: 1...6)
-    func everyDisplayCountFitsOnTheRow(_ displays: Int) {
-        let tiles = displays + 1   // + the "Follow pointer" tile
-        let width = DisplayPicker.rowWidth(tiles: tiles, available: available)
-        #expect(width <= available,
-                "\(displays) display(s) need \(width)pt of \(available)pt")
+    /// Tiles keep their size at every display count. Shrinking them to fit was
+    /// the first fix and the wrong one: they get illegible exactly on the
+    /// crowded desks the picker exists for. The row wraps instead.
+    @Test func tilesNeverShrink() {
+        #expect(DisplayPicker.tileWidth == 104)
     }
 
-    /// Few displays must not blow the tiles up to fill the row — they stay at the
-    /// ideal size and the row simply ends early.
-    @Test func smallSetupsKeepTheIdealTileWidth() {
-        #expect(DisplayPicker.tileWidth(tiles: 2, available: available) == 104)
-        #expect(DisplayPicker.tileWidth(tiles: 4, available: available) == 104)
+    @Test func fourTilesFitOnOneLineAtTheWindowWidth() {
+        #expect(DisplayPicker.tilesPerRow(available: available) == 4)
+        #expect(DisplayPicker.lineWidth(tiles: 4) <= available)
+        // Five would not, which is the wrap that has to happen.
+        #expect(DisplayPicker.lineWidth(tiles: 5) > available)
     }
 
-    /// Many displays shrink the tiles rather than overflowing.
-    @Test func crowdedSetupsShrinkInstead() {
-        let five = DisplayPicker.tileWidth(tiles: 5, available: available)
-        #expect(five < 104)
-        #expect(five > DisplayPicker.tileWidth(tiles: 7, available: available))
+    /// Every display count lands on screen once wrapping is accounted for: no
+    /// line is wider than the window, whatever the desk looks like.
+    @Test(arguments: 1...8)
+    func everyDisplayCountWrapsWithinTheWindow(_ displays: Int) {
+        let tiles = displays + 1            // + the "Follow pointer" tile
+        let perRow = DisplayPicker.tilesPerRow(available: available)
+        for start in stride(from: 0, to: tiles, by: perRow) {
+            let onThisLine = min(perRow, tiles - start)
+            #expect(DisplayPicker.lineWidth(tiles: onThisLine) <= available,
+                    "\(displays) display(s): a line of \(onThisLine) tiles overflows")
+        }
     }
 
-    /// There is a floor: past it the drawing stops reading as a display, so the
-    /// row is allowed to overflow rather than shrink into confetti.
-    @Test func shrinkingStopsAtAReadableSize() {
-        #expect(DisplayPicker.tileWidth(tiles: 40, available: available) == 56)
+    /// A three-display desk — the case this was built for — still sits on one
+    /// line, so the common setup looks exactly as it did.
+    @Test func threeDisplaysStayOnASingleLine() {
+        #expect(3 + 1 <= DisplayPicker.tilesPerRow(available: available))
+    }
+
+    /// A window too narrow for even one tile must still lay out a line rather
+    /// than dividing by zero or producing an empty row.
+    @Test func absurdlyNarrowWindowsStillGetOneTilePerLine() {
+        #expect(DisplayPicker.tilesPerRow(available: 10) == 1)
     }
 }

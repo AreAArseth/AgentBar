@@ -11,58 +11,49 @@ final class DisplayPicker: NSView {
     /// Called after the user picks; the window uses it to refresh its caption.
     var onPick: (() -> Void)?
 
-    private let row = NSStackView()
+    /// Rows of tiles, stacked. More than one only when they don't fit on a line.
+    private let rows = NSStackView()
     private static let tileHeight: CGFloat = 62
     private static let spacing: CGFloat = 10
     /// Wide enough for a short display name on one line. Names are kept short on
     /// purpose rather than wrapped: a two-line label inside a stack fights
     /// AppKit's intrinsic width and loses, and System Settings labels them
     /// briefly too. The full name is in the tooltip.
-    private static let idealTileWidth: CGFloat = 104
-    /// Below this the drawing stops reading as a display at all, so the row is
-    /// allowed to overflow rather than shrink into confetti. It takes seven
-    /// displays to get there, which is past what macOS drives.
-    private static let minTileWidth: CGFloat = 56
+    ///
+    /// Fixed, never scaled down. Tiles that shrink to fit a crowded desk get
+    /// illegible exactly where the picker matters most, so the row wraps instead.
+    static let tileWidth: CGFloat = 104
 
-    /// How much room the row has. The welcome window sets it to its content
-    /// width; tiles shrink to fit rather than running off the edge, which is what
-    /// happened from four displays up — 5 tiles at the ideal width is 560pt
-    /// against 480pt of window.
+    /// How much room the row has; the welcome window sets it to its content width.
     var availableWidth: CGFloat = 480 {
         didSet { if availableWidth != oldValue { rebuild() } }
     }
 
-    /// Ideal width, shrunk just enough that every tile fits on the row.
-    /// `tiles` counts the displays plus the *Follow pointer* tile.
-    static func tileWidth(tiles: Int, available: CGFloat) -> CGFloat {
-        let n = CGFloat(max(1, tiles))
-        let fits = (available - spacing * (n - 1)) / n
-        return max(minTileWidth, min(idealTileWidth, fits))
+    /// How many tiles fit on one line at full size — the rest wrap to the next.
+    /// At the welcome window's 480pt that is four, so a three-display desk (plus
+    /// the *Follow pointer* tile) still sits on a single line.
+    static func tilesPerRow(available: CGFloat) -> Int {
+        max(1, Int((available + spacing) / (tileWidth + spacing)))
     }
 
-    /// Total width the row will occupy at that tile count — what the fit is
-    /// actually judged on, and what the tests assert against.
-    static func rowWidth(tiles: Int, available: CGFloat) -> CGFloat {
+    /// Width a line of `tiles` occupies — what the fit is judged on in the tests.
+    static func lineWidth(tiles: Int) -> CGFloat {
         let n = CGFloat(max(1, tiles))
-        return tileWidth(tiles: tiles, available: available) * n + spacing * (n - 1)
-    }
-
-    private var tileWidth: CGFloat {
-        Self.tileWidth(tiles: NSScreen.screens.count + 1, available: availableWidth)
+        return tileWidth * n + spacing * (n - 1)
     }
 
     init() {
         super.init(frame: .zero)
-        row.orientation = .horizontal
-        row.spacing = Self.spacing
-        row.alignment = .top
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
+        rows.orientation = .vertical
+        rows.spacing = Self.spacing
+        rows.alignment = .leading
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rows)
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
-            row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rows.topAnchor.constraint(equalTo: topAnchor),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rows.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
         ])
         rebuild()
         NotificationCenter.default.addObserver(
@@ -84,9 +75,20 @@ final class DisplayPicker: NSView {
     static var singleDisplay: Bool { NSScreen.screens.count < 2 }
 
     @objc func rebuild() {
-        row.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        row.addArrangedSubview(tile(for: nil))
-        for screen in NSScreen.screens { row.addArrangedSubview(tile(for: screen)) }
+        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        // nil is the "Follow pointer" tile, and it leads.
+        let all: [NSScreen?] = [nil] + NSScreen.screens.map { Optional($0) }
+        let perRow = Self.tilesPerRow(available: availableWidth)
+        for chunk in stride(from: 0, to: all.count, by: perRow) {
+            let line = NSStackView()
+            line.orientation = .horizontal
+            line.spacing = Self.spacing
+            line.alignment = .top
+            for screen in all[chunk..<min(chunk + perRow, all.count)] {
+                line.addArrangedSubview(tile(for: screen))
+            }
+            rows.addArrangedSubview(line)
+        }
     }
 
     /// `screen == nil` is the *Follow the pointer* tile.
@@ -104,7 +106,7 @@ final class DisplayPicker: NSView {
         let art = DisplayTileView(screen: screen, selected: selected)
         art.translatesAutoresizingMaskIntoConstraints = false
         art.heightAnchor.constraint(equalToConstant: Self.tileHeight).isActive = true
-        let width = tileWidth
+        let width = Self.tileWidth
 
         let name = NSTextField(labelWithString: label(for: screen))
         name.font = .systemFont(ofSize: 10)

@@ -16,7 +16,7 @@ how to add to it.
 | `Scripts/test/bridge-hooks-test.sh` | The Cursor, Gemini, Antigravity and Codex bridges: dead-only stale sweep, app-launch guard (fake `open` in `PATH`), event → state mapping, project/prompt merge across events, the 64-char id cap, surrogate-safe cuts, and Antigravity's fail-open `PreToolUse` decision | 49 | node, python3 |
 | `Scripts/test/opencode-plugin-test.sh` | The OpenCode plugin, loaded as ESM and driven through its event bus: created/prompt/tool/permission/idle/error/title/child/deleted — including "the idle that trails an error stays an error" | 23 | node |
 | `Scripts/test/cli-test.sh` | `Scripts/cli/agentbar`: status/requests rendering, pruning rules, approve/deny/answer (incl. plan and multi-question refusals, `hookPid` stamping), waybar classes and heartbeat, the hook blocking on the CLI's presence, `install-hooks` for every agent (idempotent, unparseable config untouched, `CLAUDE_CONFIG_DIR`, Copilot's own hooks file left alone, the written node path stable and the same interpreter) | 48 | node, python3 |
-| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script — new bundle opens, new bundle refuses and the backup is restored and launched, both refuse and the old bundle stays with the staging dir kept for inspection, and a hostile bundle path stays out of the shell's parser; and the island's display choice — defaults, round-trip, a pinned display that is unplugged falling back to the pointer without losing the pin; and the display row fitting every tile on screen from one display to six | 12 | Swift 6 toolchain |
+| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script — new bundle opens, new bundle refuses and the backup is restored and launched, both refuse and the old bundle stays with the staging dir kept for inspection, and a hostile bundle path stays out of the shell's parser; and the island's display choice — defaults, round-trip, a pinned display that is unplugged falling back to the pointer without losing the pin; and the display row wrapping so no line overflows the window, at one display through eight | 13 | Swift 6 toolchain |
 | `Scripts/test/antigravity-watcher-test.sh` | `AntigravityWatcher` against a staged `brain/` transcript: thinking → permission → done | — | macOS, app running |
 | `Scripts/test/cowork-watcher-test.sh` | `CoworkWatcher` against a staged audit log | — | macOS, app + Claude.app running |
 
@@ -70,8 +70,8 @@ ships with the toolchain — so `swift test` works on a machine that has nothing
 the Command Line Tools. It needs Swift 6, which is why that job runs on `macos-15`.
 
 Two local caveats worth knowing. A failed build can leave a stale module cache
-that reports `plugin for module 'TestingMacros' not found`; `swift package clean`
-fixes it. And `./Scripts/build.sh` builds universal, so it needs an x86_64 Swift
+that reports `plugin for module 'TestingMacros' not found`. `swift package clean` is
+sometimes not enough — `swift package reset` is what clears it. And `./Scripts/build.sh` builds universal, so it needs an x86_64 Swift
 runtime — Command Line Tools alone ships `libswiftCompatibility56.a` for arm64
 only, and the link fails there with `Undefined symbols for architecture x86_64`.
 Use `./Scripts/build.sh --native` for a runnable dev bundle (this Mac's
