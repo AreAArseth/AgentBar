@@ -134,6 +134,15 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-sounds"),
         to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
 }
 
+// The same idea for the one drawn surface in the menu: render the usage meters to
+// a PNG so they can be looked at without opening a menu and losing it to the
+// screenshot. See UsageMeterView.renderForVerification.
+if let i = CommandLine.arguments.firstIndex(of: "--render-usage"),
+   CommandLine.arguments.indices.contains(i + 1) {
+    exit(UsageMeterView.renderForVerification(
+        to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
+}
+
 // Two copies running at once — a dev build next to the /Applications install —
 // fight over the same island: each draws its own panel in the same spot and
 // whichever window is stacked on top wins, so fixes appear and disappear at

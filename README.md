@@ -48,9 +48,12 @@ That's the whole loop. More install options below; troubleshooting at the bottom
 
 ### What the installer changes (and how to undo it)
 
-AgentBar is local-only — no telemetry, and the only network call it ever makes is the
-update check against GitHub Releases. The install touches exactly these,
-all reversible (see [Uninstall](#uninstall)):
+AgentBar is local-only — no telemetry, and it makes exactly two network calls, one of
+which is off until you switch it on: the daily update check against GitHub Releases, and
+— only if you tick **Settings ▸ Usage** — a request to Anthropic for Claude's own quota,
+using the login Claude Code already stored. Everything else, including every token count
+and every other provider's quota, is read from files already on your disk.
+The install touches exactly these, all reversible (see [Uninstall](#uninstall)):
 
 - Copies the hook scripts to `~/.agentbar/hooks/`.
 - Merges AgentBar hook entries into your Claude Code settings — `~/.claude/settings.json`,
@@ -118,11 +121,19 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   island as formatted Markdown (scrollable when long). **Keep planning** sends
   Claude back to refine it without touching the terminal; **Approve plan** jumps
   to the session's exact tab and answers the plan dialog for you.
-- **Usage at a glance** — provider quota read from the CLIs' own local files (no
-  network, no keychain). Codex reports the exact percentage of its 5-hour and
-  weekly windows with real reset times; Claude publishes no quota locally, so
-  its line is the honest half-measure — the tokens its transcripts record for
-  the current 5-hour block. Shown while the data is fresh, hidden when it isn't.
+- **What's left, at a glance** — one small meter per provider in the menu, answering
+  one question: how much is spent and how much is left. **Codex** reports the exact
+  percentage of its 5-hour and weekly windows with real reset times, plus a credit
+  balance when the account has one. **Copilot** carries its own priced ledger, so its
+  line is what it actually charged today in its own AIU — and it gets *no* bar, because
+  the ceiling lives on github.com and a meter drawn against a guessed one would be a
+  picture of a number that doesn't exist. **Claude** keeps its windows on its own
+  servers: tick **Settings ▸ Usage** and AgentBar asks for them with the login Claude
+  Code already stored (off by default, five-minute polling, and it never touches your
+  refresh token); leave it off and you get the tokens its transcripts record for the
+  current 5-hour block. A window past its reset says so rather than repeating the old
+  number, everything is hidden the moment it goes stale, and `agentbar usage` says the
+  same in a terminal.
 - **A failure looks like one** — a turn that errors out shows red and named
   instead of a green "Done", and never plays the finish chime.
 - **Precise jump-back** — clicking a session row selects the exact terminal tab
@@ -220,6 +231,7 @@ agentbar requests        # pending approvals & questions with the mini-diff / op
 agentbar approve --always
 agentbar answer Blue     # answer a pending question by option label (or number)
 agentbar history         # what finished today (--days N, --json)
+agentbar usage           # what's left of each provider's quota
 agentbar doctor          # why an agent isn't showing up; --json for a bug report
 ```
 

@@ -1,18 +1,60 @@
 import Foundation
 
-/// Provider quota readings from data the CLIs already keep on disk — no network,
-/// no keychain, nothing leaves the machine. Codex rollout files carry the exact
-/// `used_percent` of the account's 5-hour and weekly windows; Claude transcripts
-/// yield the tokens spent in the current 5-hour block. Stale data is worse than
-/// none (a March window shown in August), so every reading carries a freshness
-/// guard and quietly disappears when its source stops updating.
+/// One quota window that has a known ceiling: a percentage spent, and when it
+/// starts over. Only windows a provider actually publishes get one — a meter drawn
+/// against a ceiling nobody stated would be a picture of a number that does not
+/// exist.
+struct UsageWindow: Equatable {
+    let name: String            // "5h" / "weekly"
+    let usedPercent: Double     // 0...100
+    let resetsAt: Date?
+
+    /// The question people actually ask. The meter shows what is spent; the
+    /// number beside it says what is left, because that is the half you act on.
+    var remainingPercent: Double { max(0, 100 - usedPercent) }
+
+    func expired(now: Date = Date()) -> Bool {
+        guard let resetsAt else { return false }
+        return resetsAt <= now
+    }
+}
+
+/// What each provider says you have spent, and what is left of it.
+///
+/// Almost all of it is read off this machine: Codex writes the exact
+/// `used_percent` of its 5-hour and weekly windows into every rollout file,
+/// Copilot keeps its own priced ledger in a SQLite database, Claude's transcripts
+/// carry tokens. The one exception is Claude's *windows*, which exist nowhere
+/// local and are asked for over the network only when someone switches that on —
+/// see `ClaudeQuota`.
+///
+/// Stale data is worse than none (a March window shown in August), so every
+/// reading carries a freshness guard and quietly disappears when its source stops
+/// updating. A provider that publishes no ceiling gets no meter rather than a
+/// meter against a guess.
 final class UsageCenter {
     static let shared = UsageCenter()
 
     struct Reading {
-        let provider: String   // "Codex", "Claude"
-        let text: String       // "5% of 5h · resets 14:00"
-        let detail: String?    // longer companion line for tooltips (weekly window)
+        let provider: String        // "Codex", "Claude", "Copilot"
+        let text: String            // "3% left · resets 14:00" — the one-line form
+        let detail: String?         // longer companion line for tooltips
+        /// Zero, one or two meters. Empty means this provider publishes no
+        /// ceiling and `text` is the whole truth it has.
+        let windows: [UsageWindow]
+        /// Something true that isn't a window — a credit balance. Kept apart from
+        /// `text` so a surface that draws meters can place it without having to
+        /// take a sentence back apart.
+        let note: String?
+
+        init(provider: String, text: String, detail: String? = nil,
+             windows: [UsageWindow] = [], note: String? = nil) {
+            self.provider = provider
+            self.text = text
+            self.detail = detail
+            self.windows = windows
+            self.note = note
+        }
     }
 
     private(set) var readings: [Reading] = []
@@ -24,7 +66,7 @@ final class UsageCenter {
 
     /// How old a data point may be and still speak for the present. Codex only
     /// writes while a session runs; beyond this the window has long rolled over.
-    private static let maxAge: TimeInterval = 24 * 3600
+    static let maxAge: TimeInterval = 24 * 3600
 
     func start() {
         refresh()
@@ -53,8 +95,12 @@ final class UsageCenter {
             var fresh: [Reading] = []
             if let codex = Self.codexReading() { fresh.append(codex) }
             if let claude = self.claudeReading() { fresh.append(claude) }
+            if let copilot = Self.copilotReading() { fresh.append(copilot) }
+            // Off by default and rate-limited from the inside; when it lands it
+            // asks for another pass rather than editing anything from under us.
+            ClaudeQuota.shared.refreshIfDue { [weak self] in self?.refresh() }
             DispatchQueue.main.async {
-                let changed = fresh.map(\.text) != self.readings.map(\.text)
+                let changed = fresh.map(Self.signature) != self.readings.map(Self.signature)
                 self.readings = fresh
                 if changed { self.onChange?() }
             }
@@ -95,11 +141,34 @@ final class UsageCenter {
     }
 
     private static func codexReading() -> Reading? {
-        guard let file = newestRollout(), let tail = tail(of: file, bytes: 64 * 1024)
+        guard let file = newestRollout(), let tail = tail(of: file, bytes: 64 * 1024),
+              let usage = codexUsage(tail: tail)
         else { return nil }
-        // Newest matching line wins; model-specific buckets (limit_id
-        // "codex_<model>") are skipped in favour of the account-wide "codex" one.
-        // limit_id is absent entirely in pre-0.106 rollouts — treat nil as match.
+        return reading(provider: "Codex", windows: usage.windows, note: usage.creditsNote)
+    }
+
+    struct CodexUsage: Equatable {
+        var windows: [UsageWindow] = []
+        /// Only for an account that actually has credits — for that account the
+        /// balance *is* "what is left", and for every other one it is a zero that
+        /// would read as bad news.
+        var creditsNote: String?
+    }
+
+    /// What a rollout's tail says about the account, as a pure function.
+    ///
+    /// A rollout carries **more than one bucket**: the account-wide `codex` one
+    /// with the 5-hour and weekly windows, and a `premium` one that is mostly
+    /// nulls but holds the credit balance. Which lands *last* is arbitrary — on
+    /// the machine this was written the final `token_count` line was `premium`,
+    /// with both windows null. Taking the newest matching line was enough when
+    /// there was one bucket; with two it is how a 97 % window can read as nothing
+    /// at all. So walk back once, keep the newest entry per `limit_id`, merge.
+    static func codexUsage(tail: String, now: Date = Date(),
+                           maxAge: TimeInterval = UsageCenter.maxAge) -> CodexUsage? {
+        var seen = Set<String>()
+        var out = CodexUsage()
+        var found = false
         for line in tail.split(separator: "\n").reversed() {
             guard line.contains("\"token_count\""), line.contains("\"rate_limits\""),
                   let data = line.data(using: .utf8),
@@ -108,39 +177,129 @@ final class UsageCenter {
                   payload["type"] as? String == "token_count",
                   let limits = payload["rate_limits"] as? [String: Any]
             else { continue }
-            if let id = limits["limit_id"] as? String, id != "codex" { continue }
-            guard let primary = limits["primary"] as? [String: Any],
-                  let percent = primary["used_percent"] as? Double
-            else { continue }
-            guard let stamp = o["timestamp"] as? String,
-                  let seen = parseISO(stamp), Date().timeIntervalSince(seen) < maxAge
-            else { return nil } // the newest data is stale — better silent than wrong
-            var text = "\(Int(percent.rounded()))% of \(windowName(primary))"
-            if let resets = primary["resets_at"] as? Double {
-                let reset = Date(timeIntervalSince1970: resets)
-                if reset < Date() {
-                    text = "window reset"
-                } else {
-                    text += " · resets \(clock(reset))"
+            // Stale is worse than absent — a March window shown in August. Lines
+            // run newest-first here, so the first old one ends the walk.
+            if let stamp = o["timestamp"] as? String, let at = parseISO(stamp),
+               now.timeIntervalSince(at) >= maxAge { break }
+            // Model-specific buckets ("codex_<model>") answer a different
+            // question; a missing id predates the field and is the account one.
+            let id = limits["limit_id"] as? String ?? "codex"
+            guard seen.insert(id).inserted else { continue }
+            found = true
+            if id == "codex" {
+                if let w = codexWindow(limits["primary"], fallback: "5h") { out.windows.append(w) }
+                if let w = codexWindow(limits["secondary"], fallback: "weekly") {
+                    out.windows.append(w)
                 }
             }
-            var detail: String?
-            if let secondary = limits["secondary"] as? [String: Any],
-               let weekly = secondary["used_percent"] as? Double {
-                detail = "\(Int(weekly.rounded()))% of \(windowName(secondary)) window"
+            if let credits = limits["credits"] as? [String: Any],
+               credits["has_credits"] as? Bool == true,
+               let balance = credits["balance"] as? String, !balance.isEmpty {
+                out.creditsNote = "\(balance) credits left"
             }
-            return Reading(provider: "Codex", text: text, detail: detail)
         }
-        return nil
+        guard found, !(out.windows.isEmpty && out.creditsNote == nil) else { return nil }
+        return out
     }
 
-    private static func windowName(_ window: [String: Any]) -> String {
+    private static func codexWindow(_ any: Any?, fallback: String) -> UsageWindow? {
+        // A window the account doesn't have comes back as null, and that is an
+        // answer: no window, no meter, never a confident zero.
+        guard let o = any as? [String: Any],
+              let percent = o["used_percent"] as? Double, percent.isFinite
+        else { return nil }
+        return UsageWindow(name: windowName(o, fallback: fallback),
+                           usedPercent: min(max(percent, 0), 100),
+                           resetsAt: (o["resets_at"] as? Double)
+                               .map { Date(timeIntervalSince1970: $0) })
+    }
+
+    private static func windowName(_ window: [String: Any], fallback: String) -> String {
         switch window["window_minutes"] as? Int {
         case .some(10080): return "weekly"
         case .some(let m) where m % 60 == 0: return "\(m / 60)h"
         case .some(let m): return "\(m)m"
-        case nil: return "5h"
+        case nil: return fallback
         }
+    }
+
+    // MARK: - Copilot (what it charged itself, in its own unit)
+
+    /// Copilot keeps an exact ledger of its own spend, priced in its own AIU, and
+    /// no entitlement at all — the ceiling lives on github.com, not on this
+    /// machine. So this reading carries **no meter**: a number sitting plainly
+    /// beside two bars reads, correctly, as "this one has no known limit", where
+    /// a bar drawn against a ceiling nobody stated would be a picture of a number
+    /// that does not exist.
+    private static func copilotReading() -> Reading? {
+        guard let spend = WeightReader.copilotSpend(), spend.events > 0 else { return nil }
+        return Reading(provider: "Copilot",
+                       text: "\(aiu(spend.nanoAIU)) AIU today",
+                       detail: "\(compact(spend.tokens)) tokens across \(spend.events) requests")
+    }
+
+    /// Nano-AIU as the unit people are billed in. Two decimals under 1, because a
+    /// morning of small edits is 0.03 and "0" would be a lie by rounding.
+    static func aiu(_ nano: Int) -> String {
+        let v = Double(nano) / 1e9
+        switch v {
+        case 10...: return String(format: "%.0f", v)
+        case 1...:  return String(format: "%.1f", v)
+        default:    return String(format: "%.2f", v)
+        }
+    }
+
+    // MARK: - Shaping a reading
+
+    /// The one-line form, for the island footer and any surface too narrow for
+    /// meters. The short window leads, because it is the one about to run out —
+    /// **unless it has just rolled over**, in which case it has nothing to say and
+    /// the weekly one leads instead. "Codex window reset" on its own is a whole
+    /// line spent on the absence of news while "74 % of the week left" sits in a
+    /// tooltip nobody opens.
+    static func reading(provider: String, windows: [UsageWindow], now: Date = Date(),
+                        note: String? = nil, account: String? = nil) -> Reading? {
+        let lead = windows.first { !$0.expired(now: now) } ?? windows.first
+        var parts: [String] = []
+        if let lead { parts.append(short(lead, now: now)) }
+        if let note { parts.append(note) }
+        guard !parts.isEmpty else { return nil }
+        var extras = windows.filter { $0.name != lead?.name }
+            .map { "\($0.name): \(short($0, now: now))" }
+        if let account { extras.append("account: \(account)") }
+        return Reading(provider: provider, text: parts.joined(separator: " · "),
+                       detail: extras.isEmpty ? nil : extras.joined(separator: "\n"),
+                       windows: windows, note: note)
+    }
+
+    /// What is left, and when it starts over.
+    static func short(_ w: UsageWindow, now: Date = Date()) -> String {
+        guard !w.expired(now: now) else { return "window reset" }
+        var out = "\(Int(w.remainingPercent.rounded()))% left"
+        if let r = w.resetsAt { out += " · resets \(when(r, now: now))" }
+        return out
+    }
+
+    /// A clock for something happening today, a weekday for anything further out
+    /// — "resets 14:31" and "resets Thu" are both answers; "resets 14:31" for next
+    /// Thursday is not.
+    static func when(_ d: Date, now: Date = Date()) -> String {
+        if d.timeIntervalSince(now) < 18 * 3600 { return clock(d) }
+        let f = DateFormatter()
+        // A weekday is a word, and every other word in this app is English — a
+        // Czech "po" sitting inside an English sentence reads as a truncation.
+        // Clock times stay with the system, because those are numbers.
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "EEE"
+        return f.string(from: d)
+    }
+
+    /// Everything a redraw would depend on. `text` alone missed a meter moving
+    /// while its sentence stayed the same.
+    static func signature(_ r: Reading) -> String {
+        r.provider + "|" + r.text + "|" + r.windows.map {
+            "\($0.name):\(Int($0.usedPercent.rounded())):\(Int($0.resetsAt?.timeIntervalSince1970 ?? 0))"
+        }.joined(separator: ",")
     }
 
     // MARK: - Claude (tokens in the current 5h block, from local transcripts)
@@ -160,6 +319,13 @@ final class UsageCenter {
     private static let scanWindow: TimeInterval = maxAge
 
     private func claudeReading() -> Reading? {
+        // The real windows when the switch is on and the answer arrived; the
+        // local half-measure otherwise. Never both — two Claude rows saying
+        // different things is worse than either of them alone.
+        if let snap = ClaudeQuota.shared.latest() {
+            return Self.reading(provider: "Claude", windows: snap.windows,
+                                account: snap.account)
+        }
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         // Split-config layouts (~/.claude-work and friends) coexist with the

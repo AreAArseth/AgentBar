@@ -57,17 +57,13 @@ enum MenuBuilder {
             }
         }
 
-        // Provider quota, read from the CLIs' own local files — shown only while
-        // the data is fresh enough to be true.
-        for r in UsageCenter.shared.readings {
+        // What each provider has left: read from the CLIs' own local files, and —
+        // only if that switch was turned on — from Claude's own account. Shown
+        // while the data is fresh enough to be true, and absent otherwise.
+        if let meters = UsageMeterView(readings: UsageCenter.shared.readings) {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             item.isEnabled = false
-            item.toolTip = r.detail.map { "\(r.provider): \($0)" }
-            item.attributedTitle = NSAttributedString(string: "\(r.provider)  \(r.text)",
-                                                      attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.tertiaryLabelColor,
-            ])
+            item.view = meters
             menu.addItem(item)
         }
         let today = todayRow(target: controller,

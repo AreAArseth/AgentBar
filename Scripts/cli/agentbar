@@ -405,6 +405,177 @@ function sessionWeight(agent, sessionId, cwd) {
 const weightTotal = (w) => (w ? (w.in || 0) + (w.out || 0) + (w.cacheWrite || 0) : 0);
 const compact = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
 
+// --- what's left of the quota ---
+// The same local sources the app reads, and the same refusals. Codex stamps the
+// exact percentages of both its windows into every rollout; Copilot prices its own
+// spend in a SQLite database this dependency-free script can only open when the
+// sqlite3 binary happens to be around; Claude keeps its windows on a server, and
+// this command does not call servers. What can't be read is said out loud, because
+// an absent row and a zero row must never look the same.
+
+function newestRollout() {
+  const base = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  let dir = path.join(base, "sessions");
+  for (let i = 0; i < 3; i++) {          // year / month / day, zero-padded so max = newest
+    let names = [];
+    try { names = fs.readdirSync(dir).filter((n) => !n.startsWith(".")).sort(); } catch { return null; }
+    if (!names.length) return null;
+    dir = path.join(dir, names[names.length - 1]);
+  }
+  // Within the day pick by mtime: a RESUMED session appends to an old-named file.
+  let best = null, bestAt = -1, items = [];
+  try { items = fs.readdirSync(dir); } catch { return null; }
+  for (const n of items) {
+    if (!n.startsWith("rollout-") || !n.endsWith(".jsonl")) continue;
+    const f = path.join(dir, n);
+    let at = 0; try { at = fs.statSync(f).mtimeMs; } catch { continue; }
+    if (at >= bestAt) { bestAt = at; best = f; }
+  }
+  return best;
+}
+
+// A rollout carries more than one bucket — the account-wide "codex" one with the
+// windows, and a "premium" one that is mostly nulls but holds the credit balance —
+// and which lands last is arbitrary. Walk back once, keep the newest per limit_id.
+function codexUsage() {
+  const file = newestRollout();
+  if (!file) return null;
+  let text = ""; try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const win = (w, fallback) => {
+    if (!w || typeof w.used_percent !== "number") return null;   // no window, no meter
+    const m = w.window_minutes;
+    const name = m === 10080 ? "weekly" : m ? (m % 60 === 0 ? `${m / 60}h` : `${m}m`) : fallback;
+    return { name, used: Math.min(100, Math.max(0, w.used_percent)),
+             resetsAt: typeof w.resets_at === "number" ? w.resets_at : null };
+  };
+  const lines = text.split("\n");
+  const seen = new Set();
+  const out = { windows: [], credits: null };
+  let found = false;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes("token_count") || !line.includes("rate_limits")) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    const limits = o && o.payload && o.payload.type === "token_count" && o.payload.rate_limits;
+    if (!limits) continue;
+    const at = Date.parse(o.timestamp || "");
+    if (at && Date.now() - at >= 24 * 3600 * 1000) break;   // stale beats wrong
+    const id = limits.limit_id || "codex";
+    if (seen.has(id)) continue;
+    seen.add(id);
+    found = true;
+    if (id === "codex") {
+      const a = win(limits.primary, "5h"), b = win(limits.secondary, "weekly");
+      if (a) out.windows.push(a);
+      if (b) out.windows.push(b);
+    }
+    const cr = limits.credits;
+    if (cr && cr.has_credits && cr.balance) out.credits = `${cr.balance} credits left`;
+  }
+  return found && (out.windows.length || out.credits) ? out : null;
+}
+
+const sqliteTool = (() => {
+  const dirs = (process.env.PATH || "").split(path.delimiter).concat(["/usr/bin", "/opt/homebrew/bin"]);
+  for (const d of dirs) {
+    if (!d) continue;
+    const f = path.join(d, "sqlite3");
+    try { fs.accessSync(f, fs.constants.X_OK); return f; } catch {}
+  }
+  return null;
+})();
+
+const utcStamp = (d) => d.toISOString().replace(/Z$/, "Z");
+
+// `created_at` is UTC text, so the local day is turned into a range here rather
+// than matched as a prefix — a prefix takes somebody else's day either side of
+// midnight, and is wrong by a whole evening in half the world.
+function copilotSpend() {
+  const home = process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
+  const db = path.join(home, "session-store.db");
+  if (!fs.existsSync(db)) return null;
+  if (!sqliteTool) return { needsSqlite: true };
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime() + 24 * 3600 * 1000);
+  const sql = "SELECT coalesce(sum(total_nano_aiu),0)||'|'||"
+    + "coalesce(sum(input_tokens+output_tokens+cache_write_tokens),0)||'|'||count(*)"
+    + ` FROM assistant_usage_events WHERE created_at >= '${utcStamp(start)}'`
+    + ` AND created_at < '${utcStamp(end)}';`;
+  let raw = "";
+  try {
+    // -readonly, always: a normal open of a WAL database lets this process
+    // checkpoint a log the Copilot CLI is still writing.
+    raw = require("child_process").execFileSync(sqliteTool, ["-readonly", db, sql],
+      { timeout: 4000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return null; }
+  const [nano, tokens, events] = String(raw).trim().split("|").map((n) => parseInt(n, 10) || 0);
+  return events ? { nano, tokens, events } : null;
+}
+
+const aiu = (nano) => {
+  const v = nano / 1e9;
+  return v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
+};
+
+const resetText = (epoch) => {
+  if (!epoch) return "";
+  const d = new Date(epoch * 1000);
+  const far = d.getTime() - Date.now() >= 18 * 3600 * 1000;
+  // The weekday is a word and the rest of this output is English; the clock is a
+  // number and follows the machine.
+  return far
+    ? d.toLocaleDateString("en-US", { weekday: "short" })
+    : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+};
+
+const windowText = (w) => {
+  if (w.resetsAt && w.resetsAt * 1000 <= Date.now()) return "window reset";
+  const left = `${Math.round(100 - w.used)}% left`;
+  const r = resetText(w.resetsAt);
+  return r ? `${left} · resets ${r}` : left;
+};
+
+// Ten cells, because the number beside it is the precise half. Colour only where it
+// means something: a bar that is always yellow has said nothing.
+const meter = (used) => {
+  const filled = Math.min(10, Math.max(used > 0 ? 1 : 0, Math.round(used / 10)));
+  const bar = "█".repeat(filled) + "░".repeat(10 - filled);
+  return used >= 95 ? red(bar) : used >= 80 ? yellow(bar) : dim(bar);
+};
+
+function printUsage(json) {
+  const codex = codexUsage();
+  const copilot = copilotSpend();
+  if (json) {
+    console.log(JSON.stringify({ codex, copilot }, null, 2));
+    return;
+  }
+  const rows = [];
+  if (codex) {
+    // A window past its reset gets NO bar. Nobody has written a number since it
+    // rolled over, so a full bar would be last window's news and an empty one
+    // would be a zero nobody measured.
+    codex.windows.forEach((w, i) => rows.push([i ? "" : "Codex", w.name,
+      w.resetsAt && w.resetsAt * 1000 <= Date.now() ? "" : meter(w.used), windowText(w)]));
+    if (codex.credits) rows.push([codex.windows.length ? "" : "Codex", "", "", codex.credits]);
+  }
+  if (copilot && !copilot.needsSqlite) {
+    rows.push(["Copilot", "", "", `${aiu(copilot.nano)} AIU today · ${compact(copilot.tokens)} tokens`]);
+  }
+  if (!rows.length) console.log(dim("No quota anyone publishes locally could be read."));
+  for (const [name, win, bar, text] of rows) {
+    // The bar's column is held open whether or not there is a bar, so every
+    // sentence starts at the same place and a missing meter reads as missing.
+    const cell = bar || " ".repeat(10);
+    console.log(`${bold(name.padEnd(9))}${dim(win.padEnd(8))}${cell}  ${text}`);
+  }
+  // What could not be read, named — never left to look like a zero.
+  const notes = [];
+  if (copilot && copilot.needsSqlite) notes.push("Copilot's ledger needs the sqlite3 binary; it isn't on PATH.");
+  notes.push("Claude keeps its windows on its own servers; the macOS app can ask for them (Settings ▸ Usage).");
+  console.log("\n" + notes.map((n) => dim(n)).join("\n"));
+}
+
 // --- what moved in the repo ---
 // The wording is the feature: this is what changed in the REPO while the session was
 // open, not what the agent did. You edit in the same tree and two sessions can share
@@ -1189,6 +1360,7 @@ switch (cmd) {
   case "watch": watch(argv); break;
   case "waybar": waybar(); break;
   case "history": printHistory(argv, json); break;
+  case "usage": printUsage(json); break;
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
   case "--help": case "help": default:
@@ -1203,6 +1375,7 @@ switch (cmd) {
                                   enables remote approval
   agentbar waybar                 JSON for waybar/polybar (poll <= 30s)
   agentbar history [--days N]     what finished today (or over N days) [--json]
+  agentbar usage [--json]         what's left of each provider's quota
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
     break;

@@ -98,6 +98,19 @@ defaults write com.michalstrnadel.agentbar notifyQuietDebug -bool true      # "a
                                                                            # without waiting for you to leave the keyboard
 ```
 
+Two surfaces can be rendered offline instead of being caught on screen:
+
+```bash
+swift run AgentBar --render-sounds /tmp/cues       # the four cues, as WAVs, with assertions
+swift run AgentBar --render-usage /tmp/meters.png  # the usage meters, every case at once
+```
+
+`--render-usage` draws a fixed set — a calm window, one near its limit, one past its
+reset, a credit balance, a provider with no ceiling — because a drawn surface nobody
+looks at ships with whatever it happens to look like. It is how the rows in that block
+were caught being laid out bottom-up, and it is the same lesson 1.18.0's island strip
+taught when one bar took 97 % of the width.
+
 `notifyQuietDebug` exists because the honest version of that notification is close
 to impossible to observe deliberately: it waits two minutes of nothing running
 **and** two minutes of you not touching the machine (or a locked screen), which is

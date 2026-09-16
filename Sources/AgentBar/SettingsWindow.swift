@@ -1,8 +1,9 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: one small window, five quiet sections — Sounds,
-/// Notifications, the global Allow/Deny shortcut, the island, and Diagnostics.
+/// AgentBar's Settings: one small window, six quiet sections — Sounds,
+/// Notifications, the global Allow/Deny shortcut, the island, usage, and
+/// Diagnostics.
 /// Every control writes
 /// UserDefaults directly and fires `onChange`, so changes apply live; the app
 /// delegate owns the fan-out to whichever surfaces care. Diagnostics is the odd
@@ -24,6 +25,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var volumeRow: NSStackView!
     private var hideIslandBox: NSButton!
     private var diagnostics: DiagnosticsView!
+    private var claudeQuotaBox: NSButton!
     private var notifyApprovalsBox: NSButton!
     private var notifyFailuresBox: NSButton!
     private var notifyQuietBox: NSButton!
@@ -165,6 +167,17 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         notifyButtons.orientation = .horizontal
         notifyButtons.spacing = 8
 
+        // ---- Usage ----
+        // The one switch in this window that lets anything off the machine, so it
+        // says so in the caption rather than in a doc nobody opens.
+        claudeQuotaBox = NSButton(checkboxWithTitle: "Ask Anthropic for Claude's usage",
+                                  target: self, action: #selector(toggleClaudeQuota))
+        let quotaCaption = caption(
+            "Claude keeps its 5-hour and weekly percentages on its own servers, not on\n"
+            + "this Mac — this is the only way to show them. It uses the login Claude Code\n"
+            + "already stored, asks every five minutes, and is the one network call\n"
+            + "AgentBar makes besides checking for updates. Codex and Copilot need none.")
+
         // ---- Diagnostics ----
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
@@ -174,13 +187,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // A rule, not a per-section variable: each one is width-constrained
         // individually, and naming them sep1…sepN meant remembering a constraint
         // every time a section was added.
-        let seps = (0..<4).map { _ in separator() }
+        let seps = (0..<5).map { _ in separator() }
         let stack = NSStackView(views: [
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
             sectionLabel("Notifications"), notifyApprovalsBox, notifyFailuresBox,
             notifyQuietBox, notifyCaption, notifyButtons, seps[1],
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
+            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, seps[4],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
         stack.orientation = .vertical
@@ -192,6 +206,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: enableCaption)
         stack.setCustomSpacing(16, after: grid)
         stack.setCustomSpacing(16, after: islandCaption)
+        stack.setCustomSpacing(16, after: quotaCaption)
         stack.setCustomSpacing(8, after: notifyCaption)
         stack.setCustomSpacing(14, after: notifyButtons)
         stack.setCustomSpacing(2, after: notifyApprovalsBox)
@@ -245,6 +260,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         soundsBox.state = SoundCenter.enabled ? .on : .off
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
+        claudeQuotaBox.state = ClaudeQuota.enabled ? .on : .off
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
         notifyFailuresBox.state = Notifier.Prefs.failures ? .on : .off
         notifyQuietBox.state = Notifier.Prefs.quiet ? .on : .off
@@ -255,6 +271,16 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         diagnostics.refresh()
         syncRecorderState()
         syncSoundControls()
+    }
+
+    /// Switching it on asks for the number now rather than in five minutes — a
+    /// switch that appears to do nothing for the first tick reads as broken. macOS
+    /// raises its own Keychain prompt on that first attempt; a refusal there simply
+    /// means no reading, and the local token line stays.
+    @objc private func toggleClaudeQuota() {
+        ClaudeQuota.enabled = claudeQuotaBox.state == .on
+        UsageCenter.shared.refresh()
+        onChange?()
     }
 
     @objc private func toggleEnabled() {

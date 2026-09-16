@@ -122,15 +122,28 @@ enum WeightReader {
     /// strings counted every token twice.
     static func claudeRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let fm = FileManager.default
-        guard let items = try? fm.contentsOfDirectory(atPath: home.path) else { return [] }
         var seen = Set<String>()
-        return items
-            .filter { $0 == ".claude" || $0.hasPrefix(".claude-") }
-            .sorted()
-            .map { home.appendingPathComponent($0).appendingPathComponent("projects") }
+        return claudeConfigDirs(home: home)
+            .map { $0.appendingPathComponent("projects") }
             .filter { fm.fileExists(atPath: $0.path) }
             .map { $0.resolvingSymlinksInPath() }
             .filter { seen.insert($0.path).inserted }
+    }
+
+    /// Every Claude Code config directory on the machine, transcripts or not —
+    /// `~/.claude` plus any `~/.claude-<something>` a `CLAUDE_CONFIG_DIR` created.
+    /// `claudeRoots` is this list narrowed to the ones holding transcripts; things
+    /// that live beside the transcripts (the credential file, the version marker)
+    /// need the unnarrowed one. One rule for "where does Claude Code live", in one
+    /// place, because two would disagree the first time someone adds a suffix.
+    static func claudeConfigDirs(home: URL = FileManager.default.homeDirectoryForCurrentUser)
+    -> [URL] {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(atPath: home.path) else { return [] }
+        return items
+            .filter { $0 == ".claude" || $0.hasPrefix(".claude-") }
+            .sorted()
+            .map { home.appendingPathComponent($0) }
     }
 
     /// Claude Code's session id **is** its transcript's file name — verified against
@@ -312,15 +325,7 @@ enum WeightReader {
     /// normal open of a WAL database can checkpoint the log of the process that owns
     /// it. Read-only or not at all.
     static func copilot(sessionId: String, base: URL? = nil) -> Weight? {
-        let home = ProcessInfo.processInfo.environment["COPILOT_HOME"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".copilot")
-        let db = (base ?? home).appendingPathComponent("session-store.db")
-        guard FileManager.default.fileExists(atPath: db.path), !sessionId.isEmpty else { return nil }
-
-        var handle: OpaquePointer?
-        let uri = "file:\(db.path)?mode=ro"
-        guard sqlite3_open_v2(uri, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
-        else { sqlite3_close(handle); return nil }
+        guard !sessionId.isEmpty, let handle = openCopilotDB(base: base) else { return nil }
         defer { sqlite3_close(handle) }
 
         let sql = """
@@ -340,5 +345,71 @@ enum WeightReader {
                        cacheRead: Int(sqlite3_column_int64(stmt, 3)),
                        source: "copilot-db")
         return w.isEmpty ? nil : w
+    }
+
+    /// **Read-only, and it has to stay that way.** A plain open of a WAL database
+    /// lets this process checkpoint a log another process is still writing; the
+    /// URI form with `mode=ro` is the one that promises not to. One opener, so
+    /// there is no second place for that promise to be forgotten.
+    static func openCopilotDB(base: URL? = nil) -> OpaquePointer? {
+        let home = ProcessInfo.processInfo.environment["COPILOT_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".copilot")
+        let db = (base ?? home).appendingPathComponent("session-store.db")
+        guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2("file:\(db.path)?mode=ro", &handle,
+                              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
+        else { sqlite3_close(handle); return nil }
+        return handle
+    }
+
+    /// What Copilot charged itself over one **local** day, in the unit it bills
+    /// in. `created_at` is UTC ISO-8601 text, so the boundary is computed here and
+    /// passed as a range: a string prefix would take somebody else's day on either
+    /// side of midnight, and be wrong by a whole evening in half the world.
+    struct CopilotSpend: Equatable {
+        var nanoAIU = 0
+        var tokens = 0
+        var events = 0
+    }
+
+    static func copilotSpend(day: Date = Date(), calendar: Calendar = .current,
+                             base: URL? = nil) -> CopilotSpend? {
+        guard let handle = openCopilotDB(base: base) else { return nil }
+        defer { sqlite3_close(handle) }
+
+        let start = calendar.startOfDay(for: day)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)
+            ?? start.addingTimeInterval(24 * 3600)
+        let sql = """
+            SELECT coalesce(sum(total_nano_aiu), 0),
+                   coalesce(sum(input_tokens + output_tokens + cache_write_tokens), 0),
+                   count(*)
+            FROM assistant_usage_events WHERE created_at >= ? AND created_at < ?
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, utcStamp(start), -1, transient)
+        sqlite3_bind_text(stmt, 2, utcStamp(end), -1, transient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        // Cache reads are left out of `tokens` for the same reason `Weight.total`
+        // leaves them out: they are two orders of magnitude larger than the rest
+        // and are not what a turn spends.
+        return CopilotSpend(nanoAIU: Int(sqlite3_column_int64(stmt, 0)),
+                            tokens: Int(sqlite3_column_int64(stmt, 1)),
+                            events: Int(sqlite3_column_int64(stmt, 2)))
+    }
+
+    /// The exact text shape the column uses ("2026-09-16T19:36:51.160Z"), so the
+    /// comparison is a plain lexicographic one and SQLite needs no date support.
+    static func utcStamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        return f.string(from: d)
     }
 }

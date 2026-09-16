@@ -333,6 +333,45 @@ fresh_home
 printf '{"agent":"claude","state":"error","label":"provider returned 429","project":"proj","pid":%s,"started":true,"ts":%s}' $$ "$(date +%s)" > "$HOME/.agentbar/state.d/err.json"
 check "status shows failed + reason"        '"$CLI" status | grep -q "failed" && "$CLI" status | grep -q "provider returned 429"'
 
+# --- usage: what's left of each provider's quota
+# A rollout carries more than one bucket and the LAST token_count line is often the
+# "premium" one, whose windows are null. Reading only that line loses the whole row.
+fresh_home
+export CODEX_HOME="$HOME/.codex"
+export COPILOT_HOME="$HOME/.copilot-empty"
+mkdir -p "$CODEX_HOME/sessions/2026/09/17"
+STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SOON=$(($(date +%s) + 3600))
+LATER=$(($(date +%s) + 86400))
+{
+  printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":97.0,"window_minutes":300,"resets_at":%s},"secondary":{"used_percent":27.0,"window_minutes":10080,"resets_at":%s},"credits":null}}}\n' "$STAMP" "$SOON" "$LATER"
+  printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"credits":{"has_credits":false,"balance":"0"}}}}\n' "$STAMP"
+} > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+OUT="$("$CLI" usage)"
+check "usage reads past the premium line"   'echo "$OUT" | grep -q "3% left"'
+check "usage shows the weekly window too"   'echo "$OUT" | grep -q "73% left"'
+check "usage says who it cannot ask"        'echo "$OUT" | grep -q "Claude keeps its windows"'
+check "usage omits a Copilot with no db"    '! echo "$OUT" | grep -q "AIU"'
+check "usage --json carries the windows"    '"$CLI" usage --json | grep -q "\"used\": 97"'
+check "no credit line without credits"      '! echo "$OUT" | grep -q "credits left"'
+
+# A window whose reset has passed: nobody has written a number since it rolled
+# over, so there must be no bar and no percentage — only the fact.
+printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":97.0,"window_minutes":300,"resets_at":%s},"secondary":null,"credits":null}}}\n' \
+  "$STAMP" "$(($(date +%s) - 60))" > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T11-00-00-def.jsonl"
+OUT="$("$CLI" usage)"
+check "a rolled-over window says so"        'echo "$OUT" | grep -q "window reset" && ! echo "$OUT" | grep -q "3% left"'
+
+# Stale beats wrong: a rollout nobody has touched for two days speaks for nothing.
+fresh_home
+export CODEX_HOME="$HOME/.codex"
+mkdir -p "$CODEX_HOME/sessions/2026/09/17"
+OLD="$(date -u -r $(($(date +%s) - 172800)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d @$(($(date +%s) - 172800)) +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":97.0,"window_minutes":300,"resets_at":%s},"secondary":null,"credits":null}}}\n' \
+  "$OLD" "$SOON" > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T10-00-00-old.jsonl"
+check "a stale rollout speaks for nothing"  '! "$CLI" usage | grep -q "% left"'
+unset CODEX_HOME COPILOT_HOME
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

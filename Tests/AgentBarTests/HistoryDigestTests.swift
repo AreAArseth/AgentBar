@@ -5,7 +5,7 @@ import Testing
 /// The day's account. Every number here is one a person would quote back, so the
 /// tests are mostly about the cases where the honest answer is to say less.
 @Suite struct HistoryDigestTests {
-    /// 2026-09-16 12:00:00 UTC, and a fixed UTC calendar — "today" is defined by
+    /// 2026-09-17 12:00:00 UTC, and a fixed UTC calendar — "today" is defined by
     /// local midnight, and a test that inherits the runner's timezone would pass in
     /// Prague and fail in CI.
     private static let noon: TimeInterval = 1_789_646_400

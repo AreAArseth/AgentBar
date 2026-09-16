@@ -3,6 +3,55 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.19.0 - 2026-09-17
+
+### Added
+
+- **What's left, not just what was spent.** The menu carries one small meter per
+  provider now, answering one question and no other: how much of the window is gone
+  and how much is left, with the time it starts over. No forecast, no history graph,
+  no per-model table — those are different questions.
+
+  **Codex** was already exact and is now complete. A rollout file carries more than
+  one bucket — the account's windows and a `premium` one holding the credit balance —
+  and which of them is written *last* is arbitrary. Reading only the newest matching
+  line was enough when there was one bucket; with two, a 97 % window could read as
+  nothing at all. It now walks back once and keeps the newest entry per bucket, which
+  also brings the credit balance along for accounts that have one.
+
+  **Copilot** is new here. Its own database prices every request it makes, so its line
+  is what it actually charged today in its own AIU. It gets **no bar**: the
+  entitlement lives on github.com, not on this machine, and a meter drawn against a
+  ceiling nobody stated would be a picture of a number that does not exist. A plain
+  number beside two bars says "this one has no known limit", which is the truth.
+
+- **Claude's real windows, if you ask for them.** Claude keeps its 5-hour and weekly
+  percentages on its own servers — no file under any `~/.claude*` carries them, which
+  was checked twice before this was written. **Settings ▸ Usage** now has one switch
+  that lets AgentBar ask for them, using the login Claude Code already stored.
+
+  It is off until you turn it on, and it is the second network call the app can make
+  — the README says so next to the first one. The token is borrowed for the length of
+  one request and never kept, never logged, and never refreshed (that is Claude Code's
+  job; two processes racing on one refresh token is how people get logged out). macOS
+  raises its own Keychain consent dialog the first time, and a refusal, an expired
+  login, a rate limit or no network all end the same way: no reading, nothing on
+  screen, and the local token line stays where it was. Leave the switch off and
+  nothing changes at all.
+
+- `agentbar usage` says the same in a terminal, from the same local files. Copilot's
+  ledger needs the `sqlite3` binary, and when it isn't there the command says so
+  rather than leaving a gap that looks like a zero.
+
+### Changed
+
+- A quota window whose reset has passed now carries **no meter and no percentage**,
+  only the words. Nobody has written a number since it rolled over: a full bar would
+  be the last window's news, and an empty one a zero nobody measured.
+- Claude Code's config directories are discovered in one place for everything that
+  lives beside the transcripts, not just the transcripts themselves — the credential
+  and the version marker sit in `~/.claude*` next to `projects/`, not inside it.
+
 ## 1.18.0 - 2026-09-16
 
 ### Fixed
