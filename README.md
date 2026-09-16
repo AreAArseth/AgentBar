@@ -305,8 +305,10 @@ the notch:
   screen limit the rows scroll while the **⋯** menu and the quota line stay
   pinned along the bottom.
 - **No notch, or an external display?** Same panel, centred at the top of whichever
-  screen your pointer is on. It steps aside for fullscreen windows, and it never
-  takes focus — you can keep typing in your editor with the panel open.
+  screen your pointer is on. It stays put over fullscreen windows — that is where
+  the agents are actually running — and it never takes focus, so you can keep
+  typing in your editor with the panel open. The pill is 30pt tall and only opens
+  when you point at it.
 
 In Island-only mode the menu bar item is hidden, so the panel's **⋯** button carries
 Appearance, Color, the Sounds toggle, Settings, Check for Updates and Quit.

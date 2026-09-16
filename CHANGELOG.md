@@ -3,6 +3,64 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+- **GitHub Copilot CLI reports live status.** The long-standing blocker is gone:
+  Copilot has had hooks since 0.0.396 and personal ones (`~/.copilot/hooks/`)
+  since 0.0.422. Its PascalCase events deliver the Claude payload shape — tool
+  ids remapped and all — so the existing `claude/` scripts serve it unchanged
+  under `AGENTBAR_AGENT=copilot`, the same reuse Qwen Code gets. AgentBar writes
+  its own `~/.copilot/hooks/agentbar.json` and owns only that file; Copilot loads
+  every `*.json` in the directory, so your own hooks are never touched. Wired:
+  session start/end, prompt, pre/post tool, tool failure, stop, and
+  `ErrorOccurred` — whose `recoverable` flag is read, so an error Copilot means
+  to retry no longer ends the turn early. Needs CLI 1.0.67+ and a fresh session
+  (Copilot reads hook config once, at startup). Remote approval stays unwired:
+  `permissionRequest` can block and decide, but its input payload is
+  undocumented, and a blocking hook is not something to wire on faith.
+
+### Fixed
+- **A failed update can no longer leave you with no AgentBar.** The relaunch
+  script deleted the backup unconditionally — the three commands were separated
+  by `;`, so the cleanup ran whether or not the new bundle actually opened,
+  contradicting the comment right above it. It now opens the new bundle, and only
+  on success removes the backup; if the new one refuses to open, the old bundle
+  is moved back and launched instead, with the staging directory kept for
+  inspection. Covered by the first Swift unit tests in the repo, hostile bundle
+  path included.
+- **Codex no longer stacks up one row per turn.** Codex has no session-end event
+  and builds its row id from the thread/turn id, so every finished turn left its
+  own row behind — and because a `codex` that stays open keeps its pid alive,
+  the pid sweep (which is what normally retires a row) never reached them. They
+  sat in the bar until the 24-hour staleness cut, several deep for a single
+  session. A completed turn now retires the earlier rows belonging to the same
+  `codex` process; other agents, and a second `codex` in another tab, are left
+  alone.
+- **The Antigravity bridge can no longer deny a tool call.** `agy` is fail-closed
+  on `PreToolUse`: a non-zero exit, a crash, or stdout that isn't a valid
+  decision all read as *deny*. Our bridge wrote nothing at all — one parser
+  change away from blocking every tool call in the CLI. It now answers
+  `{"decision":"allow"}` synchronously before doing any work, and can no longer
+  exit non-zero.
+- **Keystroke approval aims at the session's own tab.** Approving a Codex,
+  Copilot or Antigravity prompt brought the terminal *app* forward and typed,
+  which on iTerm2/Terminal.app/WezTerm could land the key in whichever tab
+  happened to be open. It now waits for the tty match first and sends nothing if
+  the session's tab can't be found — the same discipline plan approval has
+  followed since 1.12.0. Terminals with no tab targeting (Warp, Ghostty, kitty)
+  keep the app-level behaviour.
+
+### Documentation
+- The README claimed the island steps aside for fullscreen windows; it has
+  deliberately done the opposite since the island shipped — a fullscreen terminal
+  is exactly where the agents run.
+- The cloud poller's README said Devin had no per-session deep link, while the
+  adapter has always built one (`devin://acp/session`), and omitted `orgId`,
+  which `cog_` keys require for the org-scoped v3 API.
+- `docs/testing.md` covers the new Swift suite, why it uses swift-testing rather
+  than XCTest (it runs without a full Xcode), and the two local build caveats.
+
 ## 1.13.0 - 2026-09-06
 
 ### Added

@@ -24,8 +24,14 @@ Config `~/.agentbar/cloud.json` (chmod 600 — it holds API keys):
               "openIn": "app",                 // cursor:// run deep link; "web" = cursor.com/agents/<id>
               "apiVersion": "v1" },            // "v0" = legacy status-on-agent endpoint
   "devin":  { "enabled": true, "apiKey": "…",  // app.devin.ai Settings -> API Keys
-              "openIn": "app",                 // focuses Devin Desktop (no per-session deep link
-                                               // exists); "web" = app.devin.ai/sessions/<id>, thread-precise
+              "orgId": "…",                    // REQUIRED for cog_ keys (service users / PATs):
+                                               // they authorize only the org-scoped v3 API. Find it
+                                               // under Settings -> Service Users. Legacy apk_ keys
+                                               // use v1 and need no orgId — omit it there.
+              "openIn": "app",                 // devin://acp/session deep link — opens the exact
+                                               // thread in Devin Desktop, falling back to the web
+                                               // thread when the session isn't synced into the
+                                               // Agent Command Center. "web" = app.devin.ai/sessions/<id>
               "recentHours": 48, "showSuspended": false },
   "codex":  { "enabled": true }                // rides `codex login`, no key needed
 }
