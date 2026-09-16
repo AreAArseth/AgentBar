@@ -477,6 +477,23 @@ printf '{"session_id":"recsess","tool_name":"Bash"}' \
   | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js pre
 check "copilot: tool label mapped"  'grep -q "\"label\":\"Running command\"" "$HOME/.agentbar/state.d/recsess.json"'
 
+# 19c. A session that opens with a prompt already in flight is working at once.
+# Copilot fires SessionStart and UserPromptSubmit concurrently and SessionStart
+# can land second, so a seed that ignored initial_prompt dragged a working row
+# back to idle/started:false — which hides it from every frontend.
+fresh_home
+printf '{"session_id":"racesess","cwd":"/tmp/proj","prompt":"do the thing"}' \
+  | AGENTBAR_AGENT=copilot AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/update.js prompt
+printf '{"session_id":"racesess","cwd":"/tmp/proj","source":"new","initial_prompt":"do the thing"}' \
+  | AGENTBAR_AGENT=copilot AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "late seed keeps started"     'grep -q "\"started\":true" "$HOME/.agentbar/state.d/racesess.json"'
+check "late seed keeps working"     'grep -q "\"state\":\"thinking\"" "$HOME/.agentbar/state.d/racesess.json"'
+# Without initial_prompt it is an ordinary fresh session and still seeds hidden.
+fresh_home
+printf '{"session_id":"seedsess","cwd":"/tmp/proj","source":"startup"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "plain seed stays hidden"     'grep -q "\"started\":false" "$HOME/.agentbar/state.d/seedsess.json"'
+
 # 20. the OpenCode plugin is loadable and maps the bus to protocol states
 fresh_home
 check "opencode: plugin parses"     '"$NODE" --input-type=module --check < Scripts/hooks/opencode/agentbar.js'

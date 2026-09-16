@@ -27,19 +27,36 @@ Wired events: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`,
 the only one no other agent has: `update.js` reads its `recoverable` field so a
 retry the CLI intends to make does not end the turn early.
 
-## Not wired: remote approval
+## Not wired yet: remote approval
 
 `permissionRequest` can block and answer (`{"behavior":"allow"|"deny"}`), and
-Copilot's timeouts fail open since 1.0.67 — which is exactly the contract
-`permission.js` needs. But its *input* payload is undocumented: GitHub publishes
-the output contract and the matcher, not the field names. A blocking hook must
-never be wired on faith (the same call Qwen's PermissionRequest got), so Copilot
-is observe-only until someone logs a real payload.
+Copilot's timeouts fail open since 1.0.67 — exactly the contract `permission.js`
+needs. GitHub documents that output contract but not the *input* payload, so it
+was logged from a real 1.0.85 session instead:
 
-Two things to check when that happens: Copilot documents no `prompt_id` (the
-hook's own pid is the existing fallback) and no equivalent of Claude's
-`permission_suggestions`, so "Always allow" would have no rule to pin and must
-degrade to a one-shot allow.
+```jsonc
+{
+  "hookName": "permissionRequest",
+  "sessionId": "3df34f6a-…",          // camelCase here, unlike every other event
+  "timestamp": 1789563619837,          // ms, not the ISO string the others carry
+  "cwd": "/private/tmp/…",
+  "toolName": "bash",                  // the RAW id — not remapped to "Bash"
+  "toolInput": { "command": "echo hello-agentbar" },
+  "permissionSuggestions": []
+}
+```
+
+Two things that were expected to be missing turn out not to be. There **is** a
+`permissionSuggestions` field, so "Always allow" has something to pin rather than
+degrading to a one-shot allow. And the id to key an answer on is `sessionId`;
+there is still no `prompt_id`, so the hook's own pid stays the separator, exactly
+as `permission.js` already does it.
+
+Two traps for whoever wires it. This event alone speaks camelCase and raw tool
+ids, so a handler that assumes the `snake_case` dialect of the other events will
+read `undefined` throughout. And prefer `permissionRequest` over `preToolUse` for
+blocking: `preToolUse` command hooks are fail-*closed* on a crash, so a single
+unhandled exception would silently deny a user's tool call.
 
 ## Versions and the VS Code overlap
 

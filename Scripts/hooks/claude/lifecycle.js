@@ -57,7 +57,7 @@ function run() {
   // An unwritable state.d must not throw the hook out with a stack trace: report it
   // once and carry on, so the SessionEnd cleanup below still runs.
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }
-  let id = "", cwd = "", source = "", model = "";
+  let id = "", cwd = "", source = "", model = "", opensWorking = false;
   try {
     const j = JSON.parse(input);
     id = j.session_id; cwd = j.cwd || "";
@@ -66,6 +66,15 @@ function run() {
     source = typeof j.source === "string" ? j.source : "";
     // Model is best-effort: taken when the payload carries one, omitted otherwise.
     model = typeof j.model === "string" ? j.model : (j.model && j.model.display_name) || "";
+    // A session that opens with a prompt already in flight is working the
+    // instant it exists, so seeding it as "not started yet" is wrong by
+    // definition. Copilot says so with initial_prompt (`copilot -p` and `-i`),
+    // and it matters more than it reads: Copilot fires SessionStart and
+    // UserPromptSubmit concurrently and SessionStart can land SECOND (measured
+    // ~100ms behind), so without this the seed drags a working row back to
+    // idle/started:false — and started:false hides it from every frontend, the
+    // moment the session began. Claude never sends the field.
+    opensWorking = typeof j.initial_prompt === "string" && j.initial_prompt.trim() !== "";
   } catch {}
   const statePath = path.join(stateDir, safeId(id) + ".json");
 
@@ -110,14 +119,16 @@ function run() {
     // A resume reopens a session that has history and a compact fires mid-turn:
     // both keep prev's visibility; compact alone also keeps state/label — the
     // session is still doing whatever it was doing.
-    const continues = source === "resume" || source === "compact";
+    const continues = source === "resume" || source === "compact" || opensWorking;
+    // Whatever the row already says beats a seed that arrived late.
+    const keepsWork = source === "compact" || opensWorking;
     try {
       const ts = Math.floor(Date.now() / 1000);
       writeAtomic(statePath, {
         ...prev,
         agent: AGENT,
-        state: source === "compact" ? (prev.state || "idle") : "idle",
-        label: source === "compact" ? (prev.label || "") : "",
+        state: keepsWork ? (prev.state || "idle") : "idle",
+        label: keepsWork ? (prev.label || "") : "",
         project: cwd ? path.basename(cwd) : (prev.project || ""),
         cwd: cwd || prev.cwd || "",
         sessionId: id || prev.sessionId || "",
