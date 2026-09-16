@@ -125,13 +125,49 @@ enum HookInstaller {
         try data.write(to: url, options: .atomic)
     }
 
+    /// Paths that keep naming *a* node across upgrades.
+    ///
+    /// Order matters here in a way it does not in the Linux CLI. There this list only
+    /// maps an already-known-good interpreter onto an equivalent alias, so any match
+    /// is the same binary and the order is arbitrary. Here it also decides which node
+    /// gets used at all — so Homebrew's prefix stays ahead of `/usr/local`, where an
+    /// old nodejs.org pkg tends to linger.
+    static var stableNodePaths: [String] {
+        ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node",
+         home.appendingPathComponent(".local/bin/node").path]
+    }
+
+    /// Swap a version-pinned path for a stable alias that resolves to the same binary.
+    ///
+    /// Whatever this returns is written into config files that outlive the next node
+    /// upgrade, so a pinned path is a silent time bomb: after `nvm install 22` or a
+    /// Homebrew Cellar bump the interpreter named in every config is simply gone, and
+    /// every hook stops firing with no error anywhere — indistinguishable from "the
+    /// agent isn't reporting". The Linux CLI has done this since 5d5316c; this side
+    /// never got it.
+    ///
+    /// The input comes back unchanged when no alias resolves to the same binary: an
+    /// nvm-only machine genuinely has none, and `agentbar doctor` says so rather than
+    /// this guessing at a path that does not exist.
+    static func stableNodeAlias(for path: String) -> String {
+        guard let target = realPath(path) else { return path }
+        let fm = FileManager.default
+        let alias = stableNodePaths.first {
+            $0 != path && fm.isExecutableFile(atPath: $0) && realPath($0) == target
+        }
+        return alias ?? path
+    }
+
+    /// `realpath(3)` — symlinks resolved, exactly what the CLI's `fs.realpathSync` does.
+    static func realPath(_ path: String) -> String? {
+        guard let c = realpath(path, nil) else { return nil }
+        defer { free(c) }
+        return String(cString: c)
+    }
+
     /// Find a node binary the hooks can rely on (login-shell PATHs vary wildly).
     private static func findNode() -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node",
-            home.appendingPathComponent(".local/bin/node").path,
-        ]
-        if let hit = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+        if let hit = stableNodePaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return hit
         }
         // Version-manager setups (nvm/fnm) and Cellar paths: ask the user's shell once.
@@ -149,7 +185,10 @@ enum HookInstaller {
         p.waitUntilExit()
         let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return out.isEmpty ? nil : out
+        // This is where the pinned paths come from: under nvm/fnm `command -v node`
+        // answers with the version's own bin dir. Map it back onto a stable alias
+        // when one names the same binary.
+        return out.isEmpty ? nil : stableNodeAlias(for: out)
     }
 
     // MARK: - Claude Code (<configDir>/settings.json)
@@ -212,17 +251,69 @@ enum HookInstaller {
         let codexDir = home.appendingPathComponent(".codex")
         guard FileManager.default.fileExists(atPath: codexDir.path) else { return } // not a Codex user
         let configURL = codexDir.appendingPathComponent("config.toml")
-        var config = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
-        if config.contains("/.agentbar/hooks/codex/") { note("codex"); return } // already ours
-        if config.range(of: #"^\s*notify\s*="#, options: .regularExpression) != nil {
-            NSLog("AgentBar: ~/.codex/config.toml already has a notify hook, not touching it")
-            return
-        }
+        let config = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
         let script = hooksDir.appendingPathComponent("codex/notify.js").path
-        if !config.isEmpty && !config.hasSuffix("\n") { config += "\n" }
-        config += "notify = [\"\(node)\", \"\(script)\"]\n"
-        try config.write(to: configURL, atomically: true, encoding: .utf8)
-        note("codex")
+
+        switch codexPlan(config: config, node: node, script: script) {
+        case .foreignNotify:
+            NSLog("AgentBar: ~/.codex/config.toml already has a notify hook, not touching it")
+        case .unchanged:
+            note("codex")
+        case .write(let next, let repaired):
+            try next.write(to: configURL, atomically: true, encoding: .utf8)
+            if repaired { NSLog("AgentBar: repaired a dead node path in ~/.codex/config.toml") }
+            note("codex")
+        }
+    }
+
+    /// What `installCodex` should do with the TOML it found.
+    enum CodexPlan: Equatable {
+        /// Wired and working, or wired in a shape we deliberately won't touch.
+        case unchanged
+        /// Someone else's `notify` key — Codex allows exactly one, so we stay out.
+        case foreignNotify
+        /// The full text to write; `repaired` distinguishes a fix from a first install.
+        case write(String, repaired: Bool)
+    }
+
+    /// Pure so the repair has a test that doesn't need a `~/.codex` on the machine.
+    ///
+    /// The interesting case is the second one. Every other agent's config is rewritten
+    /// whenever its content differs, so an interpreter that moved heals on the next
+    /// launch; Codex used to stop at the marker, which made it the one integration
+    /// where a stale node path was permanent — relaunching the app, reinstalling it,
+    /// nothing rewrote that line, and the rows just never appeared again.
+    static func codexPlan(
+        config: String, node: String, script: String,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> CodexPlan {
+        let ours = "notify = [\"\(node)\", \"\(script)\"]"
+        let ourLine = #"(?m)^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
+
+        if let line = config.range(of: ourLine, options: .regularExpression) {
+            guard let interpreter = firstQuoted(String(config[line])), !isExecutable(interpreter)
+            else { return .unchanged }
+            var next = config
+            next.replaceSubrange(line, with: ours)
+            return .write(next, repaired: true)
+        }
+        // Our marker somewhere the line pattern could not read (hand-edited formatting,
+        // a comment): leave it alone rather than appending a second notify key.
+        if config.contains("/.agentbar/hooks/codex/") { return .unchanged }
+        if config.range(of: #"^\s*notify\s*="#, options: .regularExpression) != nil {
+            return .foreignNotify
+        }
+        var next = config
+        if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
+        return .write(next + ours + "\n", repaired: false)
+    }
+
+    /// The first `"…"` in a TOML line — the interpreter in `notify = ["node", "script"]`.
+    static func firstQuoted(_ s: String) -> String? {
+        guard let open = s.firstIndex(of: "\""),
+              let close = s[s.index(after: open)...].firstIndex(of: "\"")
+        else { return nil }
+        return String(s[s.index(after: open)..<close])
     }
 
     // MARK: - Cursor CLI (~/.cursor/hooks.json)

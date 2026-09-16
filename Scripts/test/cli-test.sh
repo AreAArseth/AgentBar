@@ -167,8 +167,18 @@ check "stable node alias preferred"    '[ -z "$STABLE" ] || [ "$WROTE_NODE" = "$
 SNAP="$(cat "$HOME/.gemini/settings.json")"
 QWEN_SNAP="$(cat "$HOME/.qwen/settings.json")"
 COPILOT_SNAP="$(cat "$HOME/.copilot/hooks/agentbar.json")"
+CODEX_SNAP="$(cat "$HOME/.codex/config.toml")"
 "$CLI" install-hooks >/dev/null 2>&1
-check "install-hooks idempotent"       '[ "$SNAP" = "$(cat "$HOME/.gemini/settings.json")" ] && [ "$QWEN_SNAP" = "$(cat "$HOME/.qwen/settings.json")" ] && [ "$COPILOT_SNAP" = "$(cat "$HOME/.copilot/hooks/agentbar.json")" ]'
+check "install-hooks idempotent"       '[ "$SNAP" = "$(cat "$HOME/.gemini/settings.json")" ] && [ "$QWEN_SNAP" = "$(cat "$HOME/.qwen/settings.json")" ] && [ "$COPILOT_SNAP" = "$(cat "$HOME/.copilot/hooks/agentbar.json")" ] && [ "$CODEX_SNAP" = "$(cat "$HOME/.codex/config.toml")" ]'
+# A node that has moved (nvm upgrade, Cellar bump) must be repaired on the next run.
+# Codex is the one config that used to stop at the marker and never re-check, so a
+# stale interpreter there was permanent: every other agent healed on the next run
+# and Codex stayed broken until someone hand-edited the TOML.
+sed -i.bak "s|^notify = \[\"[^\"]*\"|notify = [\"$HOME/.nvm/versions/node/v0.0.0/bin/node\"|" "$HOME/.codex/config.toml"
+check "codex dead node path seeded"    'grep -q "v0.0.0" "$HOME/.codex/config.toml"'
+"$CLI" install-hooks >/dev/null 2>&1
+check "codex dead node path repaired"  '! grep -q "v0.0.0" "$HOME/.codex/config.toml" && grep -q "/.agentbar/hooks/codex/" "$HOME/.codex/config.toml"'
+check "codex repair keeps one notify"  '[ "$(grep -c "^notify = " "$HOME/.codex/config.toml")" = 1 ]'
 echo '{broken' > "$HOME/.gemini/settings.json"
 "$CLI" install-hooks >/dev/null 2>&1
 check "unparseable config untouched"   '[ "$(cat "$HOME/.gemini/settings.json")" = "{broken" ]'

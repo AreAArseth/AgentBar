@@ -3,6 +3,31 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.16.0 - 2026-09-16
+
+### Fixed
+- **A `node` that moves no longer silently kills every hook.** The path to the
+  interpreter is written into each agent's config, and that config outlives the
+  next `node` upgrade — so after `nvm install 22` or a Homebrew Cellar bump the
+  interpreter named in every config is simply gone. Nothing reports it: the
+  hooks never run, so they never fail, and the rows just stop appearing. The
+  Linux CLI has resolved a stable alias since 5d5316c; the macOS installer never
+  got the same treatment and fell back to asking the login shell, which under a
+  version manager answers with the version's own bin directory. It now maps that
+  answer onto a stable alias whenever one names the same binary, and leaves it
+  alone when none does — an nvm-only machine genuinely has no alias, and writing
+  a path that isn't there would be worse than reporting the situation.
+- **Codex's interpreter is re-checked instead of trusted forever.** Every other
+  agent's config is rewritten whenever its content differs, so a moved `node`
+  heals on the next launch. Codex was the exception: the installer stopped as
+  soon as it saw its own marker, which made a stale interpreter there
+  *permanent* — relaunching AgentBar, reinstalling it, re-running
+  `install-hooks`, none of it rewrote that line, and only hand-editing
+  `~/.codex/config.toml` brought Codex back. The marker is now read properly:
+  if the interpreter inside it no longer exists, the line is repaired in place.
+  A working one is still left untouched, so the install stays idempotent, and
+  a `notify` key that belongs to someone else is still never taken over.
+
 ## 1.15.1 - 2026-09-16
 
 ### Fixed

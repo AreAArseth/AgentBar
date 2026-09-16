@@ -441,16 +441,33 @@ function installHooks() {
   if (fs.existsSync(codexDir)) {
     const file = path.join(codexDir, "config.toml");
     let toml = ""; try { toml = fs.readFileSync(file, "utf8"); } catch {}
-    if (toml.includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
+    const ours = `notify = ["${node}", "${path.join(hooksDir, "codex", "notify.js")}"]`;
+    // tmp+rename like every other config write here — a crash mid-write must
+    // not truncate the user's Codex config.
+    const writeToml = (next) => {
+      const t = file + "." + process.pid + ".tmp";
+      fs.writeFileSync(t, next);
+      fs.renameSync(t, file);
+    };
+    const line = toml.match(/^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/m);
+    if (line) {
+      // Ours already — but "ours" is not "working". Every other config here is
+      // rewritten whenever its content differs, so a moved node heals on the next
+      // run. Codex used to stop at the marker, which made it the one integration
+      // where a stale interpreter was permanent. Re-verify the interpreter.
+      const interp = (line[0].match(/"([^"]*)"/) || [])[1];
+      let alive = false;
+      try { fs.accessSync(interp, fs.constants.X_OK); alive = true; } catch {}
+      if (alive) report("codex   " + file, false);
+      else { writeToml(toml.replace(line[0], ours)); report("codex   " + file, true); }
+    }
+    // Our marker somewhere the line regex could not read (hand-edited formatting,
+    // a comment): leave it alone rather than appending a second notify key.
+    else if (toml.includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
     else if (/^\s*notify\s*=/m.test(toml)) console.error(`skip: ${file} already has a notify hook — left untouched`);
     else {
       if (toml && !toml.endsWith("\n")) toml += "\n";
-      toml += `notify = ["${node}", "${path.join(hooksDir, "codex", "notify.js")}"]\n`;
-      // tmp+rename like every other config write here — a crash mid-write must
-      // not truncate the user's Codex config.
-      const t = file + "." + process.pid + ".tmp";
-      fs.writeFileSync(t, toml);
-      fs.renameSync(t, file);
+      writeToml(toml + ours + "\n");
       report("codex   " + file, true);
     }
   }
