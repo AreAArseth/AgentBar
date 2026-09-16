@@ -145,6 +145,25 @@ check "copilot wired with its identity" 'grep -q ErrorOccurred "$HOME/.copilot/h
 check "copilot runs node directly"     'grep -q "\"exec\"" "$HOME/.copilot/hooks/agentbar.json" && ! grep -q "\"bash\"" "$HOME/.copilot/hooks/agentbar.json"'
 check "copilot approval left unwired"  '! grep -qi "permissionRequest" "$HOME/.copilot/hooks/agentbar.json"'
 check "copilot leaves other hook files" 'grep -q "\"bash\":\"true\"" "$HOME/.copilot/hooks/mine.json"'
+# The node path written into every config must name the SAME interpreter this CLI
+# runs on, and must prefer a stable alias over the version-pinned path execPath
+# resolves to — a hook config outlives the next node upgrade, and a hook whose
+# interpreter has moved silently never fires.
+WROTE_NODE="$("$NODE" -e '
+const fs=require("fs"),os=require("os"),path=require("path");
+const cfg=JSON.parse(fs.readFileSync(path.join(os.homedir(),".copilot/hooks/agentbar.json"),"utf8"));
+process.stdout.write(cfg.hooks.SessionStart[0].exec);')"
+check "node path is executable"        '[ -x "$WROTE_NODE" ]'
+check "node path is the same binary"   '[ "$("$NODE" -e "console.log(require(\"fs\").realpathSync(process.argv[1]))" "$WROTE_NODE")" = "$("$NODE" -e "console.log(require(\"fs\").realpathSync(process.execPath))")" ]'
+# When a stable alias for this node exists, it must have been chosen over execPath.
+STABLE="$("$NODE" -e '
+const fs=require("fs"),os=require("os"),path=require("path");
+const real=(p)=>{try{return fs.realpathSync(p)}catch{return null}};
+const self=real(process.execPath);
+const c=["/usr/bin/node","/usr/local/bin/node","/opt/homebrew/bin/node",path.join(os.homedir(),".local/bin/node")]
+  .find((x)=>x!==process.execPath&&real(x)===self);
+process.stdout.write(c||"");')"
+check "stable node alias preferred"    '[ -z "$STABLE" ] || [ "$WROTE_NODE" = "$STABLE" ]'
 SNAP="$(cat "$HOME/.gemini/settings.json")"
 QWEN_SNAP="$(cat "$HOME/.qwen/settings.json")"
 COPILOT_SNAP="$(cat "$HOME/.copilot/hooks/agentbar.json")"

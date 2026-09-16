@@ -342,7 +342,26 @@ function installHooks() {
   fs.mkdirSync(base, { recursive: true });
   fs.rmSync(hooksDir, { recursive: true, force: true });
   fs.cpSync(srcHooks, hooksDir, { recursive: true });
-  const node = process.execPath; // absolute node running this CLI — always valid
+  // process.execPath is always valid TODAY, but it has symlinks resolved — on
+  // Homebrew, nvm and fnm that lands on a version-pinned path like
+  // /opt/homebrew/Cellar/node/25.2.1/bin/node. Written into a hook config, which
+  // outlives the next `node` upgrade, it silently stops every hook from firing:
+  // the interpreter it names simply isn't there any more, and a hook that never
+  // runs looks exactly like an agent that isn't reporting.
+  //
+  // So prefer a stable path that resolves to the SAME binary — the same
+  // interpreter, reached by a name that survives the upgrade. Same candidate list
+  // the macOS installer's findNode() uses, so both installers agree. When none of
+  // them is this node (a bare nvm/fnm setup with no stable alias), execPath stays:
+  // no worse than before, and still correct today.
+  const node = (() => {
+    const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+    const self = real(process.execPath);
+    if (!self) return process.execPath;
+    const stable = ["/usr/bin/node", "/usr/local/bin/node", "/opt/homebrew/bin/node",
+                    path.join(os.homedir(), ".local/bin/node")];
+    return stable.find((c) => c !== process.execPath && real(c) === self) || process.execPath;
+  })();
 
   // Cursor and Antigravity run their hook via its shebang, and a GUI-launched app's
   // PATH is unreliable — `#!/usr/bin/env node` would silently never fire. Pin node.

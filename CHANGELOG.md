@@ -3,6 +3,20 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+- **The Linux CLI no longer pins hooks to a node that will move.** `install-hooks`
+  wrote `process.execPath`, which has symlinks resolved — on Homebrew, nvm and fnm
+  that is a version-pinned path like `/opt/homebrew/Cellar/node/25.2.1/bin/node`.
+  A hook config outlives the next `node` upgrade, so the interpreter it named
+  simply stopped existing and every hook silently stopped firing, which looks
+  exactly like an agent that isn't reporting. It now prefers a stable path that
+  resolves to the *same* binary, using the same candidate list the macOS
+  installer does; where no stable alias exists it keeps `execPath`, as before.
+  On macOS the app repaired this on its next launch — on Linux the CLI *is*
+  AgentBar, so nothing repaired it.
+
 ## 1.14.0 - 2026-09-16
 
 ### Added
