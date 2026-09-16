@@ -22,12 +22,25 @@ fresh_home() {
 }
 
 # Bounded poll for the request file instead of a fixed sleep; sets $REQ.
+# Seconds the hook waits for an answer in tests that DO answer it. Generous on
+# purpose: what those tests assert is rule matching and answer handling, not the
+# timeout, and the hook exits the moment the answer lands — so a large value
+# costs nothing in the happy path. At 5s a loaded CI runner could spend longer
+# getting the answer written than the hook was willing to wait, and the test
+# failed as if the rule logic were wrong. The deliberate timeout test keeps its
+# own short value.
+ANSWER_TIMEOUT=30
+
 wait_req() {
-  for _ in $(seq 50); do
+  for _ in $(seq 100); do
     REQ="$(ls "$HOME/.agentbar/requests.d/" 2>/dev/null | head -1)"
     [ -n "$REQ" ] && return 0
     sleep 0.1
   done
+  # Say so rather than letting the caller write an answer to a path built from an
+  # empty REQ: that cascades into a confusing assertion failure three lines later.
+  echo "FAIL wait_req: no request file appeared within 10s" >&2
+  fail=$((fail + 1))
   return 1
 }
 
@@ -35,7 +48,7 @@ EVENT='{"session_id":"testsess","prompt_id":"p1","tool_name":"Bash","tool_input"
 
 # 1. allow round-trip
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "request file written"        '[ -n "$REQ" ]'
@@ -49,7 +62,7 @@ check "answer cleaned up"           '[ ! -e "$HOME/.agentbar/answers.d/$REQ" ]'
 
 # 2. deny round-trip
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -58,7 +71,7 @@ check "deny decision on stdout"     'grep -q "\"behavior\":\"deny\"" "$HOME/out.
 
 # 3. always -> allow + rule passthrough (rule matches the received suggestion verbatim)
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"always","rule":{"type":"rule","rule":"Bash(git push:*)"}}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -68,7 +81,7 @@ check "always carries the rule"     'grep -q "git push:" "$HOME/out.json"'
 
 # 4. defer -> silent exit (terminal prompt takes over)
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"defer"}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -110,7 +123,7 @@ check "SIGTERM cleans up request"   '[ ! -e "$HOME/.agentbar/requests.d/$REQ" ]'
 # 9. reordered-keys rule (same structure as the suggestion) -> still accepted; the app's
 # JSON round trip may reorder keys, so matching must be structural, not byte-wise
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"always","rule":{"rule":"Bash(git push:*)","type":"rule"}}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -119,7 +132,7 @@ check "reordered rule keys still accepted" 'grep -q "updatedPermissions" "$HOME/
 
 # 10. forged rule (doesn't match any received suggestion) -> plain allow, no updatedPermissions
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"always","rule":{"type":"rule","rule":"Bash(*)"}}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -130,7 +143,7 @@ check "forged rule downgrades to plain allow" \
 # 11. Edit display relativizes file_path against cwd (file name survives truncation)
 fresh_home
 EDIT_EVENT='{"session_id":"testsess","prompt_id":"p2","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj/Sources/App/File.swift"},"cwd":"/tmp/proj"}'
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EDIT_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EDIT_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "edit display is cwd-relative" 'grep -q "Edit: Sources/App/File.swift" "$HOME/.agentbar/requests.d/$REQ"'
@@ -152,7 +165,7 @@ check "question: state + label"      'grep -q "\"state\":\"question\"" "$HOME/.a
 # answer round-trips into a deny-with-message the model reads as the answer
 fresh_home
 QO_EVENT='{"session_id":"testsess","prompt_id":"p4","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which color do you prefer?","header":"Color","multiSelect":false,"options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"}]}]}}'
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "question: request written"    '[ -n "$REQ" ]'
@@ -169,7 +182,7 @@ check "question: request cleaned"    '[ ! -e "$HOME/.agentbar/requests.d/$REQ" ]
 
 # 12b. forged answer (label the request never offered) -> silent defer, no output
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"answer","answers":[["Green"]]}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -180,7 +193,7 @@ check "forged answer: state stays"   'grep -q "\"state\":\"question\"" "$HOME/.a
 # 12c. multiSelect + two questions -> enumerated message, one line per question
 fresh_home
 QM_EVENT='{"session_id":"testsess","prompt_id":"p5","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which layers?","header":"Layers","multiSelect":true,"options":[{"label":"API"},{"label":"UI"},{"label":"DB"}]},{"question":"Ship now?","header":"","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]}]}}'
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QM_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QM_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"answer","answers":[["API","DB"],["Yes"]]}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -191,7 +204,7 @@ check "multi: headerless falls back" 'grep -q "Ship now?: Yes" "$HOME/out.json"'
 
 # 12d. single-select answered with two labels -> off-shape, silent defer
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"answer","answers":[["Red","Blue"]]}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -200,7 +213,7 @@ check "overfull answer: silent"      '[ ! -s "$HOME/out.json" ]'
 
 # 12e. defer on a question -> silent exit (wizard already on screen)
 fresh_home
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 printf '{"behavior":"defer"}' > "$HOME/.agentbar/answers.d/$REQ"
@@ -225,7 +238,7 @@ check "legacy verb: real answer lands" 'grep -q "User answered \\\\\"Red\\\\\"" 
 # the user's decision on a fresh request
 fresh_home
 printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/testsess-p4.json"
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 sleep 1
@@ -382,7 +395,7 @@ check "clear: hidden until activity"  'grep -q "\"started\":false" "$LC_STATE"'
 fresh_home
 mkdir -p "$HOME/.agentbar/state.d"
 printf '{"agent":"claude","state":"tool","label":"x","prompt":"fix the auth bug","started_at":2222,"model":"claude-opus-5","started":true,"ts":1}' > "$HOME/.agentbar/state.d/testsess.json"
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "permission: task fields survive" \
@@ -395,7 +408,7 @@ wait "$hookpid"
 # dismisses it, a bare denial ends the turn — hence the explicit message.)
 fresh_home
 PLAN_EVENT='{"session_id":"testsess","prompt_id":"p9","tool_name":"ExitPlanMode","tool_input":{"plan":"## Plan\n1. Edit `auth.ts`\n2. Run tests"}}'
-AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$PLAN_EVENT" >"$HOME/out.json" &
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$PLAN_EVENT" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "plan: request written"       '[ -n "$REQ" ]'
@@ -569,7 +582,7 @@ check "sweep drops dead session"    '[ ! -e "$HOME/.agentbar/state.d/deadsess.js
 # payload is sized so the cut lands exactly on an emoji's high surrogate.
 fresh_home
 "$NODE" -e 'const e={session_id:"testsess",prompt_id:"p9",tool_name:"Bash",tool_input:{command:"a".repeat(3999)+"\u{1F41B}".repeat(100)}};process.stdout.write(JSON.stringify(e))' \
-  | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" >"$HOME/out.json" &
+  | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" >"$HOME/out.json" &
 hookpid=$!
 wait_req
 check "pretty cut: utf16-clean" \
