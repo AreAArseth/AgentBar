@@ -111,6 +111,20 @@ check "antigravity tool state"          'grep -q "\"state\":\"tool\"" "$HOME/.ag
 check "antigravity tool label"          'grep -q "\"label\":\"edit_file\"" "$HOME/.agentbar/state.d/anti1.json"'
 check "antigravity project from ws"     'grep -q "\"project\":\"proj\"" "$HOME/.agentbar/state.d/anti1.json"'
 
+# agy is fail-closed on PreToolUse: silence, junk, or a non-zero exit all read as
+# "deny". The bridge must answer allow and exit 0 — a status bridge is never the
+# reason a tool call was refused. Only PreToolUse: no other event takes a decision.
+DEC="$(printf '{"conversationId":"anti1","workspacePaths":["/tmp/proj"],"toolCall":{"name":"edit_file"}}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/antigravity/antigravity.js PreToolUse; echo "|$?")"
+check "antigravity PreToolUse allows"   '[ "$DEC" = "{\"decision\":\"allow\"}|0" ]'
+DEC="$(printf '{"conversationId":"anti1"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/antigravity/antigravity.js Stop; echo "|$?")"
+check "antigravity Stop stays silent"   '[ "$DEC" = "|0" ]'
+# Unparseable stdin is the crash path: the decision must still come out.
+DEC="$(printf 'not json at all' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/antigravity/antigravity.js PreToolUse; echo "|$?")"
+check "antigravity allows on junk input" '[ "$DEC" = "{\"decision\":\"allow\"}|0" ]'
+
 # Launch condition: only the FIRST write of a session may launch, and only when
 # nothing is running (the guard used to be inverted — it launched into a running
 # app and never launched a stopped one).

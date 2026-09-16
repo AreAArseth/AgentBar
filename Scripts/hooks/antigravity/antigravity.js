@@ -46,6 +46,10 @@ const isApp = () => {
   return _isApp;
 };
 
+// Same reason as the PreToolUse decision below: a status bridge must never be
+// why a tool call was refused, and agy reads a non-zero exit as a denial.
+process.on("uncaughtException", () => process.exit(0));
+
 let input = "", done = false;
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", run);
@@ -58,6 +62,13 @@ function run() {
   // The payload carries no event name (verified on 2.3.1) — the event is implied
   // by where the command is registered, so the installer appends it as argv[2].
   const event = process.argv[2] || j.hook_event_name || j.hookEventName || "";
+  // agy is fail-closed on PreToolUse: a non-zero exit, a crash, or stdout that
+  // isn't a valid decision all read as "deny". Silence — what this bridge used to
+  // emit — is one parser change away from refusing every tool call in the CLI.
+  // So the decision goes out first, synchronously (process.exit can truncate a
+  // buffered async write), before any of the work below can go wrong. The desktop
+  // app ignores stdout, so it costs that side nothing.
+  if (event === "PreToolUse") { try { fs.writeSync(1, '{"decision":"allow"}'); } catch {} }
   const state = STATE[event];
   if (!state) return process.exit(0);
 
