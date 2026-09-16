@@ -59,4 +59,14 @@ jobs:
         run: |
           test -x "build/AgentBar.app/Contents/MacOS/AgentBar"
           test -f "build/AgentBar.app/Contents/Resources/hooks/claude/permission.js"
+          test -f "build/AgentBar.app/Contents/Resources/hooks/claude/update.js"
           lipo -archs "build/AgentBar.app/Contents/MacOS/AgentBar" | grep -q "x86_64 arm64"
+
+  swift-tests:
+    name: Swift unit tests (macOS)
+    # swift-testing needs Swift 6; macos-15 ships it, macos-14 does not.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run Swift test suite
+        run: swift test

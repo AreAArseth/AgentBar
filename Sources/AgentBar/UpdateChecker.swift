@@ -174,14 +174,13 @@ final class UpdateChecker {
         NSLog("AgentBar update: installed \(currentVersion) → \(current.path), relaunching")
         // Past the swap the backup is dead weight, but it belongs to the process we are
         // about to kill: the relaunch script sweeps it — and the leftover staging dir —
-        // only after the new bundle has actually been opened.
+        // only after the new bundle has actually been opened, and puts the backup back
+        // if it has not.
         let staging = staged.deletingLastPathComponent()
         let relaunch = Process()
         relaunch.executableURL = URL(fileURLWithPath: "/bin/bash")
-        // Paths go in as arguments, never interpolated into the script: this line runs
-        // `rm -rf`, and a path is not something to hand to the shell's parser.
-        relaunch.arguments = ["-c", "sleep 0.6; /usr/bin/open -n \"$0\"; /bin/rm -rf \"$1\" \"$2\"",
-                              current.path, staging.path, backup.path]
+        relaunch.arguments = ["-c", UpdateInstallation.relaunchScript, "agentbar-relaunch",
+                              current.path, staging.path, backup.path, "/usr/bin/open"]
         try relaunch.run()
         NSApp.terminate(nil)
     }
