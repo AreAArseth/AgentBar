@@ -17,6 +17,23 @@ All notable changes to AgentBar are documented here. This project follows
   island to. The geometry is a pure function with tests behind it rather than
   arithmetic done on paper.
 
+### Internal
+- **The permission suite stops racing its own hook.** Sixteen tests answer the
+  hook and assert what it did with the answer, but gave it only 5s to wait — so
+  on a loaded CI runner it could stop waiting before the test managed to write
+  the answer, and the result read as if the rule matching were broken. Those
+  tests are not about the timeout and the hook exits the moment an answer lands,
+  so they now wait 30s; the one test that exercises the timeout deliberately
+  keeps its own short value. `wait_req` also failed silently into an empty
+  variable, turning "the request never appeared" into a confusing assertion
+  failure three lines later.
+
+### Documentation
+- The README shows the **Appearance** window — the display picker draws your desk
+  rather than listing it, which prose is the wrong medium for. Captured from the
+  running app, so the icon, the live mascot preview and the wired agent list are
+  the real thing.
+
 ## 1.15.0 - 2026-09-16
 
 ### Added
