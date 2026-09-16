@@ -180,10 +180,31 @@ enum AgentActions {
         switch behavior {
         case "allow":
             guard let keys = Agent.byID(session.agentID).approveKeys else { return }
-            if KeystrokeApprover.trusted {
-                KeystrokeApprover.approve(session: session, keys: keys)
-            } else {
+            guard KeystrokeApprover.trusted else {
                 KeystrokeApprover.requestAccess()
+                return
+            }
+            // Same discipline the plan approval follows: when the terminal can be
+            // aimed at a single tab, wait for the tty match before typing. Bringing
+            // the app forward takes ~50ms and the AppleScript round-trip hundreds,
+            // so keys posted straight away land in whichever tab was already open.
+            // A desktop Antigravity session has no tab to aim, and Warp/Ghostty/kitty
+            // expose none — those keep the app-level path, which is what the menu's
+            // "sends keystroke" has always promised.
+            guard session.entrypoint != "antigravity-app",
+                  TerminalFocus.canTargetTab(termProgram: session.termProgram) else {
+                KeystrokeApprover.approve(session: session, keys: keys)
+                return
+            }
+            TerminalFocus.focus(session: session) { targeted in
+                guard targeted else {
+                    // The tty matched no tab — the session moved or its tab is
+                    // gone. The terminal is already in front; let the user answer
+                    // the prompt rather than type into a stranger's tab.
+                    NSLog("AgentBar: session tab not found; approval keystroke not sent")
+                    return
+                }
+                KeystrokeApprover.approve(session: session, keys: keys, focusFirst: false)
             }
         case "grant":
             KeystrokeApprover.requestAccess()

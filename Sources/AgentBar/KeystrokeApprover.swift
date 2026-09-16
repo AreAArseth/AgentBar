@@ -24,23 +24,28 @@ enum KeystrokeApprover {
         _ = AXIsProcessTrustedWithOptions(opts)
     }
 
-    static func approve(session: Session, keys: [CGKeyCode]) {
+    /// `focusFirst: false` when the caller has already brought the session's exact
+    /// tab forward (`TerminalFocus.focus`) — activating the app again would be
+    /// redundant, and the frontmost wait below still guards the keys either way.
+    static func approve(session: Session, keys: [CGKeyCode], focusFirst: Bool = true) {
         let target: String
         if session.entrypoint == "antigravity-app" {
             // Desktop Antigravity sessions live in the app, not a terminal.
             target = "Antigravity"
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            p.arguments = ["-a", target]
-            do {
-                try p.run()
-            } catch {
-                NSLog("AgentBar: could not launch \(target) for approval: \(error.localizedDescription)")
-                return
+            if focusFirst {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                p.arguments = ["-a", target]
+                do {
+                    try p.run()
+                } catch {
+                    NSLog("AgentBar: could not launch \(target) for approval: \(error.localizedDescription)")
+                    return
+                }
             }
         } else {
             target = AgentActions.terminalAppName(for: session.termProgram)
-            AgentActions.focusTerminal(named: session.termProgram)
+            if focusFirst { AgentActions.focusTerminal(named: session.termProgram) }
         }
         waitForFront(target, deadline: Date().addingTimeInterval(activationDeadline)) {
             send(keys, to: target)
