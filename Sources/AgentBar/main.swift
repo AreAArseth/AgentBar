@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SessionStore()
     private let requestStore = RequestStore()
     private let mascot = MascotDriver()
+    private let history = HistoryStore()
 
     private lazy var controller = StatusItemController(store: store, requestStore: requestStore,
                                                        mascot: mascot)
@@ -28,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.sessions = sessions
             self.mascot.update(sessions: sessions, systemColor: IconColor.system)
             SoundCenter.shared.observe(sessions)
+            self.history.observe(sessions)
             self.controller.apply(sessions)
             if self.islandRunning {
                 self.island.apply(sessions: sessions, requests: self.requestStore.requests)
@@ -65,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         HookInstaller.onFinish = { WelcomeWindow.shared.refreshWired() }
         HookInstaller.installIfNeeded()
+        // Off the main queue: it reads and may rewrite a file that has had a month
+        // to grow, and nothing on screen is waiting for it.
+        DispatchQueue.global(qos: .utility).async { HistoryStore.prune() }
         antigravityWatcher.start()
         coworkWatcher.start()
 

@@ -15,6 +15,8 @@ locks. All timestamps (`ts`) are Unix seconds.
   requests.d/  one JSON per pending approval    (writer: permission hook)
   answers.d/   one JSON per user decision       (writer: frontends; reader: the hook)
   watcher.json frontend presence heartbeat      (writer: CLI watch/waybar)
+  history.jsonl  one line per ended session     (writer: frontends only)
+  history-seen.json  the CLI's previous tick, so one-shot commands can diff
   hooks/       installed copies of the hook scripts (refreshed by the installer)
   claude-config-dir  optional hint: custom CLAUDE_CONFIG_DIR path (one line)
 ```
@@ -188,6 +190,43 @@ Hooks only offer remote approval (and only block) when *somebody can answer*:
 `agentbar watch` refreshes it every render tick and removes it (own pid only) on
 exit; `agentbar waybar` refreshes it on every poll — keep the module interval
 ≤ 30 s. Env override for tests: `AGENTBAR_FORCE_APP=1|0`.
+
+## history.jsonl — what happened after state.d forgot
+
+`state.d` is a **live** set. A row is deleted when its process dies or its `ts`
+passes 24 h, so an agent that ran yesterday and exited cleanly leaves nothing
+behind at all. Two things need a past anyway: "when did this agent last report
+anything", which is how a broken integration is told apart from an idle one, and
+any account of a day's work. Hence one append-only JSON Lines file.
+
+```json
+{ "v": 1, "agent": "codex", "sessionId": "abc-123", "project": "AgentBar",
+  "cwd": "/Users/me/src/AgentBar", "label": "build", "prompt": "fix the linker",
+  "model": "gpt-5", "startedAt": 1784844000, "endedAt": 1784844796,
+  "state": "done", "decayed": false }
+```
+
+Rules:
+
+- **Frontends write this, hooks never do.** Hooks exit fast (rule 3), and the
+  end of a session is precisely the event several agents have no hook for.
+- A session is recorded when it reaches `done` or `error`, and again when its row
+  disappears. Deliberately **not** on `idle` — that is where a session waits
+  *between* turns, and counting it would write a record every time someone paused
+  to read the output.
+- Appends are `O_APPEND` and whole-line, so two frontends sharing a home cannot
+  truncate each other and a crash costs at most the last line. Readers MUST skip
+  a line that does not parse rather than giving up on the file.
+- A session therefore appears more than once. Readers MUST keep the **last** line
+  for a given `sessionId`; the newest wins and duplicates need no coordination.
+- `decayed: true` means a frontend watchdog synthesized the ending rather than the
+  agent reporting it. A reader that counts those as clean finishes is inventing
+  outcomes.
+- Writers prune to **30 days** and a hard cap of **5000 records**.
+
+`history-seen.json` is an implementation detail of the CLI, not part of the
+protocol: a snapshot of the previous tick so that one-shot commands (`status`,
+`waybar`) can diff. The macOS app keeps the same snapshot in memory.
 
 ## Adding a frontend or an agent
 

@@ -44,6 +44,35 @@ check "status lists live session"      'echo "$OUT" | grep -q "\"id\": \"live\""
 check "status hides unstarted"         '! echo "$OUT" | grep -q unstarted'
 check "status prunes dead pid"         '[ ! -f "$HOME/.agentbar/state.d/deadpid.json" ]'
 
+# --- history: state.d is a live set, so an ended session has to be recorded
+# somewhere or nothing can say when an agent last reported anything.
+fresh_home
+seed_session h1 tool $$
+"$CLI" status >/dev/null 2>&1
+check "history first run is a baseline" '[ ! -f "$HOME/.agentbar/history.jsonl" ]'
+rm -f "$HOME/.agentbar/state.d/h1.json"
+"$CLI" status >/dev/null 2>&1
+check "vanished session recorded"      'grep -q "\"sessionId\":\"h1\"" "$HOME/.agentbar/history.jsonl"'
+"$CLI" status >/dev/null 2>&1
+check "vanished session not repeated"  '[ "$(wc -l < "$HOME/.agentbar/history.jsonl" | tr -d " ")" = 1 ]'
+# A finished turn is recorded while the row is still readable; the row lingering
+# in `done` for hours must not append a line per tick.
+fresh_home
+seed_session h2 tool $$
+"$CLI" status >/dev/null 2>&1
+seed_session h2 done $$
+"$CLI" status >/dev/null 2>&1
+"$CLI" status >/dev/null 2>&1
+check "finished turn recorded once"    '[ "$(grep -c "\"sessionId\":\"h2\"" "$HOME/.agentbar/history.jsonl")" = 1 ]'
+check "finished turn keeps its state"  'grep -q "\"state\":\"done\"" "$HOME/.agentbar/history.jsonl"'
+# `idle` is where a session waits between turns — not an ending.
+fresh_home
+seed_session h3 tool $$
+"$CLI" status >/dev/null 2>&1
+seed_session h3 idle $$
+"$CLI" status >/dev/null 2>&1
+check "idle is not an ending"          '[ ! -f "$HOME/.agentbar/history.jsonl" ]'
+
 # --- requests + approve/deny
 fresh_home
 seed_request r1 $$

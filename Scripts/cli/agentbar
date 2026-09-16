@@ -25,7 +25,11 @@ const stateDir = path.join(base, "state.d");
 const reqDir = path.join(base, "requests.d");
 const ansDir = path.join(base, "answers.d");
 const watcherFile = path.join(base, "watcher.json");
+const historyFile = path.join(base, "history.jsonl");
+const seenFile = path.join(base, "history-seen.json");
 const PRESENCE_TTL = 60; // seconds a heartbeat stays valid (hooks use the same value)
+const HISTORY_MAX_AGE = 30 * 86400; // long enough for a sprint, short enough to stay a file
+const HISTORY_MAX = 5000;
 
 const now = () => Math.floor(Date.now() / 1000);
 const readJSON = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
@@ -63,6 +67,76 @@ function sessions() {
   }
   out.sort((a, b) => ((PRIORITY[b.state] || 0) - (PRIORITY[a.state] || 0)) || ((b.ts || 0) - (a.ts || 0)));
   return out;
+}
+
+// MARK: - History (mirrors Sources/AgentBar/HistoryStore.swift)
+
+// state.d is a *live* set: a row is deleted when its process dies or its ts passes
+// 24h, so an agent that ran yesterday and exited cleanly leaves nothing at all.
+// Without a record, nothing can answer "when did this agent last report anything",
+// which is how `doctor` tells a broken integration apart from an idle one.
+//
+// Append-only, one line per ended session; a session may be written twice (turn
+// end, then disappearance) and the reader keeps the last line for an id. The
+// sidecar holds the previous tick so one-shot commands can diff too.
+const FINISHED = { done: 1, error: 1 };   // deliberately not "idle" — see HistoryStore.swift
+
+function recordHistory(ss) {
+  try {
+    const live = {};
+    for (const s of ss) if (s.started !== false) live[s.id] = s;
+    const prev = readJSON(seenFile);
+    fs.mkdirSync(base, { recursive: true });
+    const t = seenFile + "." + process.pid + ".tmp";
+    fs.writeFileSync(t, JSON.stringify(live));
+    fs.renameSync(t, seenFile);
+    if (!prev) return; // first run is a baseline, not a hundred endings at once
+
+    const rec = (s, id) => ({
+      v: 1, agent: s.agent || "", sessionId: id, project: s.project || "",
+      cwd: s.cwd || "", label: s.label || "", prompt: s.prompt || "",
+      model: s.model || "", startedAt: Math.floor(s.started_at || 0),
+      endedAt: Math.floor(s.ts || now()), state: s.state || "", decayed: false,
+    });
+    const out = [];
+    for (const s of ss) {
+      if (!FINISHED[s.state]) continue;
+      if (prev[s.id] && FINISHED[prev[s.id].state]) continue; // edge only
+      out.push(rec(s, s.id));
+    }
+    for (const id of Object.keys(prev)) if (!live[id]) out.push(rec(prev[id], id));
+    if (!out.length) return;
+    out.sort((a, b) => a.endedAt - b.endedAt || (a.sessionId < b.sessionId ? -1 : 1));
+    fs.appendFileSync(historyFile, out.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    pruneHistory();
+  } catch {}
+}
+
+// Reads every line that still parses, last-line-per-id wins. A line torn by a
+// crash mid-append costs that line and nothing else.
+function readHistory() {
+  let text = ""; try { text = fs.readFileSync(historyFile, "utf8"); } catch { return []; }
+  const byID = new Map();
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (!r || !r.sessionId) continue;
+    byID.delete(r.sessionId);   // re-insert so the newest keeps its arrival order
+    byID.set(r.sessionId, r);
+  }
+  return [...byID.values()];
+}
+
+function pruneHistory() {
+  try {
+    const all = readHistory();
+    let kept = all.filter((r) => now() - (r.endedAt || 0) <= HISTORY_MAX_AGE);
+    if (kept.length > HISTORY_MAX) kept = kept.slice(-HISTORY_MAX);
+    if (kept.length === all.length) return;
+    const t = historyFile + "." + process.pid + ".tmp";
+    fs.writeFileSync(t, kept.length ? kept.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
+    fs.renameSync(t, historyFile);
+  } catch {}
 }
 
 function requests() {
@@ -151,6 +225,7 @@ function sessionLine(s) {
 
 function printStatus(json) {
   const ss = sessions();
+  recordHistory(ss);
   if (json) return console.log(JSON.stringify(ss, null, 2));
   if (!ss.length) return console.log(dim("No active sessions"));
   for (const s of ss) console.log(sessionLine(s));
@@ -265,6 +340,7 @@ function clearHeartbeat() {
 function waybar() {
   heartbeat(); // each poll refreshes presence; keep the module interval <= 30s
   const ss = sessions(), rs = requests();
+  recordHistory(ss);
   const pending = ss.filter((s) => s.state === "permission").length;
   // A session blocked on an AskUserQuestion is waiting on the human exactly like
   // a permission is — it must not hide inside "idle".
@@ -284,6 +360,7 @@ function watch(argv) {
     heartbeat();
     let out = "\x1b[2J\x1b[H" + bold("AgentBar") + dim(`  ·  a allow · A always · d deny · f defer · 1-9 answer · q quit\n\n`);
     const ss = sessions();
+    recordHistory(ss);
     out += ss.length ? ss.map(sessionLine).join("\n") + "\n" : dim("No active sessions\n");
     const rs = requests();
     if (rs.length) {
