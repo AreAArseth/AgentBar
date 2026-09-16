@@ -23,6 +23,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var volumeRow: NSStackView!
     private var hideIslandBox: NSButton!
     private var diagnostics: DiagnosticsView!
+    private var notifyApprovalsBox: NSButton!
+    private var notifyDoneBox: NSButton!
+    private var notifyCaption: NSTextField!
 
     func show() {
         if window == nil { build() }
@@ -116,17 +119,31 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let islandCaption = caption(
             "The pill slips away when nothing is running and returns with\nthe next session. Applies when the menu bar mark is shown too.")
 
+        // ---- Notifications ----
+        // Off by default, and the ask for permission happens on the tick, never at
+        // launch — see Notifier.start().
+        notifyApprovalsBox = NSButton(checkboxWithTitle: "When an agent needs approval",
+                                      target: self, action: #selector(toggleNotifications))
+        notifyDoneBox = NSButton(checkboxWithTitle: "When an agent finishes",
+                                 target: self, action: #selector(toggleNotifications))
+        notifyCaption = caption(
+            "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above.")
+
         // ---- Diagnostics ----
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
         let diagnosticsCaption = caption(
             "Why an agent isn't showing up: hooks wired, the node they point at\nstill there, folders writable, when each agent last reported.")
 
-        let sep1 = separator(), sep2 = separator(), sep3 = separator()
+        // A rule, not a per-section variable: each one is width-constrained
+        // individually, and naming them sep1…sepN meant remembering a constraint
+        // every time a section was added.
+        let seps = (0..<4).map { _ in separator() }
         let stack = NSStackView(views: [
-            sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, sep1,
-            sectionLabel("Shortcuts"), enableBox, enableCaption, grid, sep2,
-            sectionLabel("Island"), hideIslandBox, islandCaption, sep3,
+            sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
+            sectionLabel("Notifications"), notifyApprovalsBox, notifyDoneBox, notifyCaption, seps[1],
+            sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
+            sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
         stack.orientation = .vertical
@@ -134,12 +151,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.spacing = 10
         stack.setCustomSpacing(12, after: stack.arrangedSubviews[2]) // caption → volume row
         stack.setCustomSpacing(16, after: volumeRow)
-        stack.setCustomSpacing(16, after: sep1)
+        for sep in seps { stack.setCustomSpacing(16, after: sep) }
         stack.setCustomSpacing(14, after: enableCaption)
         stack.setCustomSpacing(16, after: grid)
-        stack.setCustomSpacing(16, after: sep2)
         stack.setCustomSpacing(16, after: islandCaption)
-        stack.setCustomSpacing(16, after: sep3)
+        stack.setCustomSpacing(14, after: notifyCaption)
+        stack.setCustomSpacing(2, after: notifyApprovalsBox)
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -154,16 +171,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: w.contentView!.bottomAnchor),
             grid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             volumeRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
-            sep1.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            sep2.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            sep3.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             diagnostics.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             // Before Diagnostics the width fell out of whichever caption was longest,
             // which left a diagnostic row wrapping its fix across four lines and the
             // window running off the bottom of the screen. A floor is cheaper than
             // hand-breaking every caption to the same length.
             stack.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minWidth),
-        ])
+        ] + seps.map { $0.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40) })
         self.stack = stack
         w.setContentSize(stack.fittingSize)
         window = w
@@ -192,6 +206,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         soundsBox.state = SoundCenter.enabled ? .on : .off
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
+        notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
+        notifyDoneBox.state = Notifier.Prefs.done ? .on : .off
+        syncNotificationCaption()
         // Re-run on every show: the answer changes with what the user did outside
         // this window — installed an agent, upgraded node, granted Accessibility.
         diagnostics.refresh()
@@ -203,6 +220,40 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         UserDefaults.standard.set(enableBox.state == .on, forKey: "globalApprovalShortcut")
         syncRecorderState()
         onChange?()
+    }
+
+    /// Turning either switch on asks macOS for permission the first time. A refusal
+    /// un-ticks the box rather than leaving a setting that quietly does nothing, and
+    /// the caption says where to change your mind.
+    @objc private func toggleNotifications(_ sender: NSButton) {
+        let turningOn = sender.state == .on
+        if sender === notifyApprovalsBox { Notifier.Prefs.approvals = turningOn }
+        else { Notifier.Prefs.done = turningOn }
+
+        if turningOn {
+            Notifier.shared.requestAuthorization { [weak self] granted in
+                guard let self, !granted else { self?.syncNotificationCaption(); return }
+                if sender === self.notifyApprovalsBox { Notifier.Prefs.approvals = false }
+                else { Notifier.Prefs.done = false }
+                sender.state = .off
+                self.syncNotificationCaption()
+            }
+        } else if sender === notifyApprovalsBox {
+            // A banner already on screen must not outlive the setting that allowed it.
+            Notifier.shared.withdrawAll()
+        }
+        onChange?()
+    }
+
+    private func syncNotificationCaption() {
+        let base = "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above."
+        guard Notifier.Prefs.anyEnabled else { notifyCaption.stringValue = base; return }
+        Notifier.shared.authorizationStatus { [weak self] status in
+            guard let self else { return }
+            self.notifyCaption.stringValue = status == .authorized || status == .provisional
+                ? base
+                : "macOS is not delivering AgentBar's notifications. Turn them back on in\nSystem Settings ▸ Notifications ▸ AgentBar."
+        }
     }
 
     @objc private func toggleSounds() {

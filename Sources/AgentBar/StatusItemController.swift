@@ -233,6 +233,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         SettingsWindow.shared.show()
     }
 
+    /// A finished session's project folder. The session itself is gone — there is no
+    /// tab to jump back to — so the useful thing left is where the work happened.
+    @objc func openPastProject(_ sender: NSMenuItem) {
+        guard let cwd = sender.representedObject as? String, !cwd.isEmpty,
+              FileManager.default.fileExists(atPath: cwd) else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: cwd))
+    }
+
     /// The menu's one-click sound toggle. A just-enabled cue set says hello, so
     /// the click is audibly confirmed; the Settings window (if open) follows.
     @objc func toggleSounds(_ sender: NSMenuItem) {

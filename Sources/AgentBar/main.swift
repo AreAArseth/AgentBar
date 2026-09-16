@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.mascot.update(sessions: sessions, systemColor: IconColor.system)
             SoundCenter.shared.observe(sessions)
             self.history.observe(sessions)
+            Notifier.shared.observe(sessions)
             self.controller.apply(sessions)
             if self.islandRunning {
                 self.island.apply(sessions: sessions, requests: self.requestStore.requests)
@@ -42,10 +43,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestStore.onChange = { [weak self] in
             guard let self else { return }
             self.controller.requestsChanged()
+            Notifier.shared.requestsChanged(self.requestStore.requests, sessions: self.sessions)
             if self.islandRunning {
                 self.island.apply(sessions: self.sessions, requests: self.requestStore.requests)
             }
         }
+
+        // Before anything can be posted: the delegate is what receives button taps,
+        // and it must be in place from launch even with notifications switched off —
+        // a banner can outlive the setting that created it. Asks for nothing.
+        Notifier.shared.requests = { [weak self] in self?.requestStore.requests ?? [] }
+        Notifier.shared.sessions = { [weak self] in self?.sessions ?? [] }
+        Notifier.shared.start()
 
         controller.start()
         store.start()

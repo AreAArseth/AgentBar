@@ -73,6 +73,29 @@ seed_session h3 idle $$
 "$CLI" status >/dev/null 2>&1
 check "idle is not an ending"          '[ ! -f "$HOME/.agentbar/history.jsonl" ]'
 
+# --- history: the day's account, read back out of history.jsonl
+fresh_home
+NOW="$(date +%s)"
+{
+  printf '{"agent":"claude","sessionId":"h1","project":"Alpha","state":"done","startedAt":%s,"endedAt":%s}\n' "$((NOW-3600))" "$((NOW-1800))"
+  printf '{"agent":"codex","sessionId":"h2","project":"Beta","state":"error","startedAt":%s,"endedAt":%s}\n' "$((NOW-900))" "$((NOW-300))"
+  # Yesterday: a digest called Today that counts backwards 24h from whenever you
+  # look at it is not a day.
+  printf '{"agent":"claude","sessionId":"h3","project":"Old","state":"done","startedAt":%s,"endedAt":%s}\n' "$((NOW-200000))" "$((NOW-190000))"
+} > "$HOME/.agentbar/history.jsonl"
+OUT="$("$CLI" history)"
+check "history lists today"            'echo "$OUT" | grep -q Alpha && echo "$OUT" | grep -q Beta'
+check "history excludes yesterday"     '! echo "$OUT" | grep -q Old'
+check "history counts failures"        'echo "$OUT" | grep -q "1 failed"'
+check "history totals the durations"   'echo "$OUT" | grep -q "40m"'
+check "history --days reaches back"    '"$CLI" history --days 5 | grep -q Old'
+check "history --json is machine-readable" '"$CLI" history --json | grep -q "\"sessionId\": \"h2\""'
+# A duration is a LENGTH, not an age: passing one to the live-row helper renders
+# decades, because that one subtracts its argument from now.
+check "history duration is not an age" '! echo "$OUT" | grep -qE "[0-9]{4,}h"'
+fresh_home
+check "history with no record says so" '"$CLI" history | grep -qi "nothing"'
+
 # --- requests + approve/deny
 fresh_home
 seed_request r1 $$

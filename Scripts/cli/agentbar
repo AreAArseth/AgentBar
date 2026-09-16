@@ -13,6 +13,8 @@
 //                                   so hooks offer remote approval while it runs.
 //   agentbar waybar                 one-line JSON for waybar/polybar custom modules
 //                                   (each call refreshes the heartbeat; poll <= 30s)
+//   agentbar history [--days N]     what finished today — state.d forgets, this
+//                                   doesn't
 //   agentbar doctor [--json]        diagnose a silent integration: hooks wired?
 //                                   node path still there? dirs writable? when did
 //                                   each agent last report?
@@ -128,6 +130,58 @@ function readHistory() {
     byID.set(r.sessionId, r);
   }
   return [...byID.values()];
+}
+
+// A LENGTH of time, not an age — `elapsed()` above takes a timestamp and subtracts
+// it from now, which is a different thing and silently renders 56 years when handed
+// a duration. Same vocabulary as HistoryDigest.duration on the app side, so the two
+// frontends do not describe time two different ways.
+function durationText(seconds) {
+  const d = Math.max(0, Math.floor(seconds));
+  if (d < 60) return "<1m";
+  if (d < 3600) return `${Math.floor(d / 60)}m`;
+  const h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60);
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// What finished, read back out of history.jsonl. `status` answers "what is
+// happening"; this is the only thing that answers "what happened", because state.d
+// deletes a session the moment its process dies.
+function printHistory(argv, json) {
+  const d = argv.indexOf("--days");
+  const days = Math.max(1, parseInt(d >= 0 ? argv[d + 1] : "1", 10) || 1);
+  // Local midnight, not "the last N*24 hours": a day that starts whenever you
+  // happen to look at it is not a day.
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const since = Math.floor(midnight.getTime() / 1000) - (days - 1) * 86400;
+
+  const rows = readHistory()
+    .filter((r) => (r.endedAt || 0) >= since)
+    .sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+  if (json) return console.log(JSON.stringify(rows, null, 2));
+  if (!rows.length) return console.log(dim(days === 1 ? "Nothing finished yet today" : `Nothing in the last ${days} days`));
+
+  let measured = 0, seconds = 0;
+  for (const r of rows) {
+    if (r.startedAt > 0 && r.endedAt >= r.startedAt) { seconds += r.endedAt - r.startedAt; measured++; }
+  }
+  const failed = rows.filter((r) => r.state === "error").length;
+  for (const r of rows) {
+    const when = new Date((r.endedAt || 0) * 1000)
+      .toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const dur = r.startedAt > 0 && r.endedAt >= r.startedAt ? durationText(r.endedAt - r.startedAt) : "";
+    const name = r.project || r.agent || "session";
+    const mark = r.state === "error" ? red("✗") : green("✓");
+    console.log(`${mark} ${dim(when)}  ${bold(name.padEnd(22))} ${dim((dur || "").padStart(6))}  ${dim(r.agent)}`);
+  }
+  // A partial total presented as the day's work is a number someone would quote.
+  const total = measured === rows.length
+    ? durationText(seconds)
+    : measured ? `${durationText(seconds)} across ${measured}` : "";
+  const parts = [`${rows.length} session${rows.length === 1 ? "" : "s"}`];
+  if (total) parts.push(total);
+  if (failed) parts.push(`${failed} failed`);
+  console.log("\n" + parts.join(" · "));
 }
 
 function pruneHistory() {
@@ -906,6 +960,7 @@ switch (cmd) {
   case "answer": answerCmd(argv.filter((a) => a !== "--json")); break;
   case "watch": watch(argv); break;
   case "waybar": waybar(); break;
+  case "history": printHistory(argv, json); break;
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
   case "--help": case "help": default:
@@ -919,6 +974,7 @@ switch (cmd) {
   agentbar watch [-i SEC]         live view + keys (a allow/A always/d deny/f defer/1-9 answer/q quit);
                                   enables remote approval
   agentbar waybar                 JSON for waybar/polybar (poll <= 30s)
+  agentbar history [--days N]     what finished today (or over N days) [--json]
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
     break;

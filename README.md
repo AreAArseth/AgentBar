@@ -80,6 +80,13 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   Clawd the crab (Claude), the knot + a braille dot-matrix that literally spells
   *codex* (Codex), the pixel mascot head + dots spelling *copilot* (Copilot), and the
   animated pixel rainbow arch (Antigravity).
+- **Notifications with Allow and Deny on them** — off by default; turn them on in
+  Settings and macOS shows a banner the moment an agent needs you, answerable
+  without switching apps. Useful precisely when the island is pinned to a display
+  you aren't looking at.
+- **What happened today** — the menu's **Today** row sums up the sessions that
+  finished, how long they took, and what failed; `agentbar history` says the same
+  in a terminal. Live status forgets a session the moment it ends; this doesn't.
 - **Pick the island's display** — on a multi-monitor desk the island can be pinned
   to one screen instead of following the pointer around. The welcome window draws
   your displays the way System Settings does; unplug the pinned one and it falls
@@ -202,10 +209,18 @@ agentbar watch           # live view; a = allow, d = deny, 1-9 = answer a questi
 agentbar requests        # pending approvals & questions with the mini-diff / options
 agentbar approve --always
 agentbar answer Blue     # answer a pending question by option label (or number)
+agentbar history         # what finished today (--days N, --json)
+agentbar doctor          # why an agent isn't showing up; --json for a bug report
 ```
 
+`agentbar doctor` is the thing to run when an agent simply never appears. It
+re-derives the whole installation from disk — is `node` where the configs say it
+is, are the hooks wired, is `~/.agentbar` writable, when did each agent last
+report — and answers in the words of the fix. Every check id is listed in
+[`docs/diagnostics.md`](docs/diagnostics.md).
+
 Remote Allow/Deny works exactly like on macOS: while `agentbar watch` (or a
-`waybar` poll) is running, a Claude Code permission prompt appears in the CLI and
+`waybar` poll) is running, a Claude Code or Copilot CLI permission prompt appears in the CLI and
 your `a`/`d` answers it — and when Claude asks a multiple-choice question, its
 options render right in the list and a digit key (or `agentbar answer`) picks one.
 With no watcher running, hooks stay silent and the normal terminal prompt appears. Waybar module:

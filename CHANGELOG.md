@@ -3,6 +3,42 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.17.0 - 2026-09-16
+
+### Added
+- **Notifications, with Allow and Deny on the banner itself.** Off by default and
+  they stay off until you switch them on — a status app must not start
+  interrupting people after an update — and the surface belongs to macOS, which
+  applies your own Focus rules to it. AgentBar draws nothing of its own.
+
+  This is a deliberate exception to the project's own second rule ("nothing that
+  unfolds over the screen on its own"), and what earned it was the display picker
+  shipped in 1.15.0: pin the island to one screen, work on another, and there is
+  no longer anywhere a pending approval can appear. The hole is new, and a banner
+  is what fills it.
+
+  The buttons land in exactly the seam the menu, the island and the global
+  shortcut already use, and the request is looked up again when the button is
+  pressed rather than trusted from the banner — request file names repeat across
+  the tools of one turn, so by then the name may belong to a *successor* asking
+  for something else. A banner is taken back down the moment its request is
+  answered elsewhere or times out: two live buttons that do nothing are worse than
+  no banner at all. Questions get a banner without buttons, because their answer
+  is a list or free text, and tapping one jumps to the session. macOS is asked for
+  permission when you tick the box, never at launch.
+- **A Today row in the menu, and `agentbar history`.** What finished, how long it
+  took, and what failed — the question you have at the end of a day, which nothing
+  in AgentBar could answer before, because live status deletes a session the
+  moment its process dies. The writer has been running quietly since 1.16.0, so
+  there is already something to look at.
+
+  It stays a menu row rather than becoming a window: the project allows two
+  surfaces and a dashboard is not one of them. Numbers are reported only as far as
+  they are true — `started_at` is optional in the protocol, so a day where only
+  some sessions could be timed says "30m across 1" rather than presenting a
+  partial sum as the day's work, and a session a watchdog *guessed* was over is
+  not counted as a clean finish.
+
 ## 1.16.0 - 2026-09-16
 
 ### Added

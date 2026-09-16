@@ -28,7 +28,10 @@ open "build/AgentBar.app"
    over the screen on its own. Two surfaces only — the menu bar item
    (`StatusItemController`) and the island (`IslandController`) — both fed from the
    same stores through `MascotDriver` / `AgentActions`; never render one from the
-   other's code. Windows are the exception, not the pattern: only `WelcomeWindow`
+   other's code. Native notifications are the one thing that may appear over the
+   screen, and only because the user switched them on (off by default, like sounds)
+   and because the banner is the system's surface, not one AgentBar draws — see
+   `Notifier`. Windows are the exception, not the pattern: only `WelcomeWindow`
    and `SettingsWindow`, both small, both opened by the user.
 3. Hooks must never block the host agent: async, atomic writes, exit fast.
    Sole exception: `permission.js` blocks while the session is already waiting on

@@ -70,6 +70,7 @@ enum MenuBuilder {
             ])
             menu.addItem(item)
         }
+        menu.addItem(todayRow(controller))
         menu.addItem(.separator())
 
         // Open
@@ -165,6 +166,60 @@ enum MenuBuilder {
         menu.addItem(.separator())
         menu.addItem(updateRow(controller))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    /// What finished today, as one line with the sessions behind it.
+    ///
+    /// The menu answers "what is happening"; this is the only place AgentBar answers
+    /// "what happened", and it stays a menu row rather than becoming a window —
+    /// rule 2 allows exactly two surfaces, and a dashboard is not one of them.
+    ///
+    /// Read fresh on every open. A digest recomputed when someone asks for it is
+    /// cheap; a digest kept in sync all day is a store nobody needed.
+    private static func todayRow(_ controller: StatusItemController) -> NSMenuItem {
+        let (summary, entries) = HistoryDigest.today(HistoryStore.read())
+        let item = NSMenuItem(title: "Today", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        let title = NSMutableAttributedString(string: "Today  ")
+        title.append(dim(HistoryDigest.headline(summary)))
+        item.attributedTitle = title
+        guard !entries.isEmpty else {
+            item.isEnabled = false
+            item.toolTip = "Sessions are recorded as they end; this fills up as the day goes on."
+            return item
+        }
+        let sub = NSMenu()
+        sub.delegate = controller
+        // Enough to read at a glance, not a log. The rest is in `agentbar history`.
+        for e in entries.prefix(12) {
+            let row = NSMenuItem(title: "", action: #selector(StatusItemController.openPastProject(_:)),
+                                 keyEquivalent: "")
+            row.target = controller
+            row.representedObject = e.cwd
+            row.isEnabled = !e.cwd.isEmpty
+            row.image = menuMark(for: Agent.byID(e.agent))
+            row.attributedTitle = e.failed
+                ? NSAttributedString(string: HistoryDigest.line(e),
+                                     attributes: [.foregroundColor: NSColor.systemRed])
+                : NSAttributedString(string: HistoryDigest.line(e))
+            row.toolTip = e.cwd.isEmpty ? nil : "Open \(e.cwd)"
+            sub.addItem(row)
+        }
+        if entries.count > 12 {
+            let more = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            more.isEnabled = false
+            more.attributedTitle = dim("…and \(entries.count - 12) more — `agentbar history`")
+            sub.addItem(more)
+        }
+        item.submenu = sub
+        return item
+    }
+
+    private static func dim(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.menuFont(ofSize: 11),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ])
     }
 
     /// Resets every field it sets — `updateInPlace` reuses the item, so a value left
