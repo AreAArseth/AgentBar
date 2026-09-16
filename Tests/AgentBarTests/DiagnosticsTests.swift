@@ -1,0 +1,217 @@
+import Foundation
+import Testing
+@testable import AgentBar
+
+/// Everything `doctor` reports, driven from a fabricated home so the assertions
+/// are about the diagnosis and not about whichever agents this machine happens to
+/// have. Checks are asserted by **id**, never by wording — the text is for humans
+/// and will change; the ids are the contract `docs/diagnostics.md` and the Linux
+/// CLI both hold to.
+@Suite struct DiagnosticsTests {
+    private let home: URL
+
+    init() throws {
+        home = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agentbar-doctor-\(UUID().uuidString)")
+        for d in ["state.d", "requests.d", "answers.d", "hooks"] {
+            try FileManager.default.createDirectory(
+                at: home.appendingPathComponent(".agentbar/\(d)"), withIntermediateDirectories: true)
+        }
+        for d in Diagnostics.hookDirs {
+            try FileManager.default.createDirectory(
+                at: home.appendingPathComponent(".agentbar/hooks/\(d)"), withIntermediateDirectories: true)
+        }
+    }
+
+    private func write(_ rel: String, _ text: String) throws {
+        let url = home.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func check(_ id: String) -> Diagnostics.Check? {
+        Diagnostics.run(home: home, now: 1_000_000).first { $0.id == id }
+    }
+
+    // MARK: - The catalogue holds together
+
+    /// Drift between this table and the agents AgentBar actually supports is the
+    /// way a diagnostic goes quietly wrong: it would report a clean bill of health
+    /// for an integration it never looked at.
+    @Test func everyIntegrationIsARealAgent() {
+        let known = Set(Agent.all.map(\.id))
+        for i in Diagnostics.integrations {
+            #expect(known.contains(i.id), "\(i.id) is not in Agent.all")
+        }
+    }
+
+    /// Ids must be unique, or the view renders two rows that look like one bug.
+    @Test func checkIdsAreUnique() {
+        let ids = Diagnostics.run(home: home).map(\.id)
+        #expect(ids.count == Set(ids).count)
+    }
+
+    // MARK: - Directories
+
+    @Test func aWritableStateDirectoryPasses() throws {
+        #expect(check("dirs.state.d")?.status == .ok)
+    }
+
+    @Test func aMissingDirectoryIsAFailureWithSomethingToDo() throws {
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".agentbar/requests.d"))
+        let c = check("dirs.requests.d")
+        #expect(c?.status == .fail)
+        #expect(c?.fix != nil)
+    }
+
+    // MARK: - Hook scripts
+
+    @Test func missingHookScriptsAreAFailure() throws {
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".agentbar/hooks/codex"))
+        #expect(check("hooks.copied")?.status == .fail)
+    }
+
+    /// A GUI-launched Cursor inherits the launchd PATH, which usually has no node
+    /// on it — so an unpinned shebang is a hook that never fires.
+    @Test func anUnpinnedShebangIsAWarning() throws {
+        try write(".cursor/hooks.json", "{}")   // the installer only pins what it wires
+        try write(".agentbar/hooks/cursor/cursor.js", "#!/usr/bin/env node\n")
+        #expect(check("hooks.shebang")?.status == .warn)
+        try write(".agentbar/hooks/cursor/cursor.js", "#!/opt/homebrew/bin/node\n")
+        #expect(check("hooks.shebang")?.status == .ok)
+    }
+
+    /// Without Cursor or Antigravity the bundled `env node` shebang is never pinned,
+    /// and a healthy machine must not be told it has a problem.
+    @Test func theShebangCheckIsSkippedForAgentsYouDoNotHave() throws {
+        try write(".agentbar/hooks/cursor/cursor.js", "#!/usr/bin/env node\n")
+        #expect(check("hooks.shebang")?.status == .skipped)
+    }
+
+    // MARK: - Agents
+
+    @Test func anAgentYouDoNotHaveIsSkippedRatherThanFailed() {
+        #expect(check("agent.codex")?.status == .skipped)
+        #expect(check("agent.codex.wired") == nil)
+    }
+
+    @Test func anInstalledButUnwiredAgentIsAFailure() throws {
+        try write(".codex/config.toml", "model = \"o3\"\n")
+        #expect(check("agent.codex.wired")?.status == .fail)
+    }
+
+    @Test func aWiredAgentPasses() throws {
+        try write(".codex/config.toml",
+                  "notify = [\"/bin/sh\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
+        #expect(check("agent.codex.wired")?.status == .ok)
+    }
+
+    /// The shape AgentBar's own installer writes: `JSONSerialization` escapes forward
+    /// slashes, so every macOS-written config says `\/.agentbar\/hooks\/...` on disk.
+    /// Searching the raw text for the plain marker reports a perfectly wired machine
+    /// as entirely unwired — which is exactly what the first live run did.
+    @Test func aMarkerWithEscapedSlashesStillCounts() throws {
+        let escaped = #"{"hooks":{"stop":[{"command":"\/Users\/x\/.agentbar\/hooks\/cursor\/cursor.js"}]}}"#
+        #expect(escaped.contains("/.agentbar/hooks/cursor/") == false, "the raw text really does hide the marker")
+        try write(".cursor/hooks.json", escaped)
+        #expect(check("agent.cursor.wired")?.status == .ok)
+    }
+
+    /// Same escaping, same blindness — a dead interpreter must be found through it.
+    @Test func aDeadInterpreterIsFoundThroughEscapedSlashes() throws {
+        try write(".copilot/hooks/agentbar.json",
+                  #"{"hooks":{"SessionStart":[{"exec":"\/nope\/bin\/node","args":["\/Users\/x\/.agentbar\/hooks\/claude\/lifecycle.js"]}]}}"#)
+        #expect(check("agent.copilot.wired")?.status == .ok)
+        #expect(check("agent.copilot.interpreter")?.status == .fail)
+    }
+
+    /// The exact shape the installer refuses to touch — and says so only in
+    /// Console.app, which is how "Gemini just stopped appearing" happens.
+    @Test func aConfigThatDoesNotParseIsNamed() throws {
+        try write(".gemini/settings.json", "{\"theme\": \"dark\" // mine\n}")
+        let c = check("agent.gemini.parseable")
+        #expect(c?.status == .fail)
+        #expect(c?.fix != nil)
+    }
+
+    /// Foundation accepts a trailing comma and Node's `JSON.parse` does not, so the
+    /// same file is wired on macOS and skipped on Linux. Whatever we think of that,
+    /// this side must agree with the installer standing next to it rather than call
+    /// a config broken that AgentBar just wired successfully.
+    @Test func aTrailingCommaMatchesWhateverTheInstallerDoes() throws {
+        try write(".gemini/settings.json", "{\"theme\":\"dark\",}")
+        #expect(check("agent.gemini.parseable") == nil)
+    }
+
+    /// The whole reason `doctor` exists: an interpreter that moved.
+    @Test func anInterpreterThatIsGoneIsTheHeadline() throws {
+        try write(".codex/config.toml",
+                  "notify = [\"/Users/x/.nvm/versions/node/v20.11.0/bin/node\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
+        let c = check("agent.codex.interpreter")
+        #expect(c?.status == .fail)
+        #expect(c?.detail?.contains("v20.11.0") == true)
+    }
+
+    @Test func aLivingInterpreterRaisesNothing() throws {
+        try write(".codex/config.toml",
+                  "notify = [\"/bin/sh\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
+        #expect(check("agent.codex.interpreter") == nil)
+    }
+
+    /// A shell wrapper makes the hook's parent a shell that exits at once, and that
+    /// pid is what prunes dead rows — every Copilot row would vanish on refresh.
+    @Test func aShellWrappedCopilotHookIsAFailure() throws {
+        try write(".copilot/hooks/agentbar.json",
+                  #"{"version":1,"hooks":{"SessionStart":[{"type":"command","bash":"node /Users/x/.agentbar/hooks/claude/lifecycle.js"}]}}"#)
+        #expect(check("copilot.exec")?.status == .fail)
+    }
+
+    // MARK: - Last seen
+
+    /// The line that tells a broken integration apart from an idle one.
+    @Test func lastSeenComesFromTheHistoryFile() throws {
+        try write(".codex/config.toml",
+                  "notify = [\"/bin/sh\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
+        #expect(check("agent.codex.lastSeen")?.status == .warn, "no record yet is worth saying")
+
+        try write(".agentbar/history.jsonl",
+                  #"{"agent":"codex","sessionId":"a","state":"done","endedAt":740000}"# + "\n")
+        let c = check("agent.codex.lastSeen")
+        #expect(c?.status == .ok)
+        #expect(c?.detail?.contains("3 days ago") == true)
+    }
+
+    // MARK: - Leftovers
+
+    @Test func aRequestPastItsPruningWindowIsAWarningNotAnAlarm() throws {
+        let url = home.appendingPathComponent(".agentbar/requests.d/old.json")
+        try "{}".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)],
+                                              ofItemAtPath: url.path)
+        #expect(check("orphans")?.status == .warn)
+    }
+
+    // MARK: - The report
+
+    @Test func theReportNamesEveryCheckAndItsFix() throws {
+        try write(".codex/config.toml", "model = \"o3\"\n")
+        let checks = Diagnostics.run(home: home, now: 1_000_000)
+        let text = Diagnostics.report(checks)
+        #expect(text.contains("agent.codex.wired"))
+        #expect(text.contains("fix:"))
+        for c in checks { #expect(text.contains(c.id)) }
+    }
+
+    // MARK: - nodePaths
+
+    @Test func nodePathsFindsInterpretersInAnyConfigShape() {
+        let toml = "notify = [\"/opt/homebrew/bin/node\", \"/x/notify.js\"]"
+        #expect(Diagnostics.nodePaths(in: toml) == ["/opt/homebrew/bin/node"])
+        let json = #"{"exec":"/usr/local/bin/node","args":["/x/y.js"]}"#
+        #expect(Diagnostics.nodePaths(in: json) == ["/usr/local/bin/node"])
+        // A script path that merely lives under a directory called node must not be
+        // mistaken for the interpreter.
+        #expect(Diagnostics.nodePaths(in: #"{"a":"/x/node/y.js"}"#).isEmpty)
+    }
+}

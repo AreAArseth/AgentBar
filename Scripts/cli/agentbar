@@ -13,6 +13,9 @@
 //                                   so hooks offer remote approval while it runs.
 //   agentbar waybar                 one-line JSON for waybar/polybar custom modules
 //                                   (each call refreshes the heartbeat; poll <= 30s)
+//   agentbar doctor [--json]        diagnose a silent integration: hooks wired?
+//                                   node path still there? dirs writable? when did
+//                                   each agent last report?
 //   agentbar install-hooks          wire agent hooks (Claude/Codex/Cursor/Antigravity/
 //                                   Gemini/Qwen/Copilot/OpenCode) —
 //                                   the Linux equivalent of the macOS app's installer
@@ -412,6 +415,177 @@ function watch(argv) {
 // MARK: - install-hooks (Linux counterpart of the macOS app's HookInstaller;
 // same safety rules: never touch an unparseable config, write only on change)
 
+// MARK: - doctor (check ids mirror Sources/AgentBar/Diagnostics.swift; docs/diagnostics.md)
+
+// Every integration here fails the same way: silently. A hook that is not wired is
+// an absence, not an error; a hook wired to an interpreter that has moved never
+// runs, so it never complains. This re-derives the installation from disk and says
+// what is wrong in the words of the fix. Reads only, apart from one write probe.
+const INTEGRATIONS = [
+  { id: "claude", name: "Claude Code", presence: [".claude"],
+    configs: [".claude/settings.json"], marker: "/.agentbar/hooks/claude/" },
+  { id: "codex", name: "Codex CLI", presence: [".codex"],
+    configs: [".codex/config.toml"], marker: "/.agentbar/hooks/codex/" },
+  { id: "copilot", name: "Copilot CLI", presence: [".copilot"],
+    configs: [".copilot/hooks/agentbar.json"], marker: "/.agentbar/hooks/claude/" },
+  { id: "cursor", name: "Cursor CLI", presence: [".cursor"],
+    configs: [".cursor/hooks.json"], marker: "/.agentbar/hooks/cursor/" },
+  { id: "gemini", name: "Gemini CLI", presence: [".gemini"],
+    configs: [".gemini/settings.json"], marker: "/.agentbar/hooks/gemini/" },
+  { id: "qwen", name: "Qwen Code", presence: [".qwen"],
+    configs: [".qwen/settings.json"], marker: "/.agentbar/hooks/claude/" },
+  { id: "antigravity", name: "Antigravity", presence: [".gemini/antigravity", ".gemini/antigravity-cli"],
+    configs: [".gemini/antigravity/hooks.json", ".gemini/antigravity-cli/hooks.json"], marker: "agentbar" },
+  { id: "opencode", name: "OpenCode", presence: [".config/opencode"],
+    configs: [".config/opencode/plugins/agentbar.js"], marker: "agentbar" },
+];
+const HOOK_DIRS = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode"];
+// Keyed by the agent that runs them: install-hooks only pins a script when it
+// wires that agent, so checking the others would flag a healthy machine.
+const SHEBANG_SCRIPTS = { cursor: "cursor/cursor.js", antigravity: "antigravity/antigravity.js" };
+
+function doctor(json) {
+  const H = os.homedir(), out = [];
+  const add = (id, title, status, detail, fix) => out.push({ id, title, status, detail, fix });
+  const there = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
+  const runnable = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } };
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+  const read = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } };
+
+  const self = real(process.execPath);
+  const alias = ["/usr/bin/node", "/usr/local/bin/node", "/opt/homebrew/bin/node",
+                 path.join(H, ".local/bin/node")].find((c) => real(c) === self);
+  add("node.found", "A node interpreter", "ok", alias || process.execPath);
+  add("node.stable", "...at a path that survives an upgrade", alias ? "ok" : "warn",
+      alias ? null : `${process.execPath} looks version-pinned, and it is what gets written into every hook config.`,
+      alias ? null : "Link a stable alias into /usr/local/bin, then re-run `agentbar install-hooks` — otherwise re-run it after every major node change.");
+
+  for (const [name, dir] of [["state.d", stateDir], ["requests.d", reqDir], ["answers.d", ansDir]]) {
+    if (!there(dir)) {
+      add(`dirs.${name}`, `~/.agentbar/${name}`, "fail", "Missing.",
+          "Run `agentbar install-hooks`, or start any agent session — the hooks create these.");
+      continue;
+    }
+    // Actually write: a directory can exist and still be unusable, and this is the
+    // failure hooks hit most often — they have nowhere to report it to.
+    const probe = path.join(dir, ".doctor." + process.pid);
+    let wrote = false;
+    try { fs.writeFileSync(probe, ""); fs.rmSync(probe, { force: true }); wrote = true; } catch {}
+    add(`dirs.${name}`, `~/.agentbar/${name}`, wrote ? "ok" : "fail",
+        wrote ? null : "Exists but is not writable — hooks cannot report anything.",
+        wrote ? null : `chmod u+w ${dir}`);
+  }
+
+  const hooks = path.join(base, "hooks");
+  const missing = HOOK_DIRS.filter((d) => !there(path.join(hooks, d)));
+  add("hooks.copied", "Hook scripts installed", missing.length ? "fail" : "ok",
+      missing.length ? `Missing: ${missing.join(", ")}.` : null,
+      missing.length ? "Run `agentbar install-hooks` from a repo checkout." : null);
+  const relevant = Object.entries(SHEBANG_SCRIPTS).filter(([agent]) =>
+    (INTEGRATIONS.find((i) => i.id === agent) || { presence: [] }).presence
+      .some((d) => there(path.join(H, d)))).map(([, rel]) => rel);
+  if (!relevant.length) {
+    add("hooks.shebang", "Scripts that run themselves name a real node", "skipped",
+        "Neither Cursor nor Antigravity is installed here.");
+  } else {
+    const unpinned = relevant.filter((rel) => (read(path.join(hooks, rel)) || "").startsWith("#!/usr/bin/env")).sort();
+    add("hooks.shebang", "Scripts that run themselves name a real node", unpinned.length ? "warn" : "ok",
+        unpinned.length ? `Still on \`#!/usr/bin/env node\`: ${unpinned.join(", ")}.` : null,
+        unpinned.length ? "Run `agentbar install-hooks`. A GUI-launched host inherits a PATH that usually has no node on it, so `env node` silently never fires." : null);
+  }
+
+  const hist = readHistory();
+  for (const i of INTEGRATIONS) {
+    if (!i.presence.some((d) => there(path.join(H, d)))) {
+      add(`agent.${i.id}`, i.name, "skipped", "Not installed here.");
+      continue;
+    }
+    let wired = false, absent = null;
+    for (const rel of i.configs) {
+      const text = read(path.join(H, rel));
+      if (text === null) { if (i.configs.length === 1) absent = rel; continue; }
+      if (rel.endsWith(".json")) {
+        try { JSON.parse(text); } catch {
+          add(`agent.${i.id}.parseable`, `${i.name} config parses`, "fail",
+              `~/${rel} is not valid JSON, so install-hooks refuses to touch it — deliberately, it is your file.`,
+              "Fix the JSON (a `//` comment or a trailing comma is the usual cause), then re-run `agentbar install-hooks`.");
+          continue;
+        }
+      }
+      // JSONSerialization escapes forward slashes, so a config the macOS app wrote
+      // says "\\/.agentbar\\/hooks\\/claude\\/" on disk. The installers never notice —
+      // they match against the parsed value — but raw-text search does, and would
+      // report every macOS-written config as unwired.
+      const flat = text.replace(/\\\//g, "/");
+      if (flat.includes(i.marker)) wired = true;
+      const dead = (flat.match(/"(\/[^"]*\/node)"/g) || [])
+        .map((m) => m.slice(1, -1)).filter((n) => !runnable(n));
+      if (dead.length) {
+        add(`agent.${i.id}.interpreter`, `${i.name}'s node still exists`, "fail",
+            `~/${rel} points at ${dead[0]}, which is gone. The hooks never run, so they never complain.`,
+            "Re-run `agentbar install-hooks` — it repairs the path now.");
+      }
+    }
+    add(`agent.${i.id}.wired`, `${i.name} hooks`, wired ? "ok" : "fail",
+        wired ? null : (absent ? `~/${absent} does not exist.` : "Installed, but AgentBar is not wired into it."),
+        wired ? null : "Run `agentbar install-hooks`.");
+    if (!wired) continue;
+
+    const last = hist.filter((r) => r.agent === i.id).map((r) => r.endedAt || 0).sort((a, b) => b - a)[0];
+    if (!last) {
+      add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "warn", "No session on record yet.",
+          `Start a NEW ${i.name} session — hook config is read when a session starts, so one already running will not report.`);
+    } else {
+      const days = Math.floor((now() - last) / 86400);
+      add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "ok",
+          days < 1 ? "Last session today." : `Last session ${days} day${days === 1 ? "" : "s"} ago.`);
+    }
+    if (i.id === "copilot") {
+      const shelled = (read(path.join(H, ".copilot/hooks/agentbar.json")) || "").includes('"bash":');
+      add("copilot.exec", "Copilot runs node directly", shelled ? "fail" : "ok",
+          shelled ? "The hook is wrapped in a shell, so the hook's parent is a shell that exits at once — and that pid is what prunes dead rows. Every Copilot row would disappear on the next refresh." : null,
+          shelled ? "Delete ~/.copilot/hooks/agentbar.json and re-run `agentbar install-hooks`." : null);
+    }
+  }
+
+  const stale = [];
+  for (const [name, dir, maxAge] of [["state.d", stateDir, 86400], ["requests.d", reqDir, 660], ["answers.d", ansDir, 60]]) {
+    let files = []; try { files = fs.readdirSync(dir); } catch {}
+    const old = files.filter((f) => {
+      try { return now() - Math.floor(fs.statSync(path.join(dir, f)).mtimeMs / 1000) > maxAge; } catch { return false; }
+    });
+    if (old.length) stale.push(`${old.length} in ${name}`);
+  }
+  add("orphans", "No leftovers in ~/.agentbar", stale.length ? "warn" : "ok",
+      stale.length ? `Past their pruning window: ${stale.join(", ")}.` : null,
+      stale.length ? "Harmless — frontends skip them. They clear on the next pass." : null);
+
+  // Same precedence the hooks themselves use (see permission.js): on macOS the app
+  // is the frontend and pgrep is the answer; everywhere else it is the heartbeat.
+  let appHere = false;
+  if (process.platform === "darwin") {
+    try { require("child_process").execSync("pgrep -x AgentBar", { stdio: "ignore" }); appHere = true; } catch {}
+  }
+  const w = readJSON(watcherFile);
+  const fresh = appHere || !!(w && w.ts && now() - w.ts < PRESENCE_TTL && (!w.pid || alive(w.pid)));
+  add("frontend.present", "A frontend that hooks can block for", fresh ? "ok" : "warn",
+      fresh ? (appHere ? "The AgentBar app is running." : "watcher.json heartbeat is fresh.") : "Nothing is listening, so hooks fall straight through to the terminal prompt — remote Allow/Deny is off.",
+      fresh ? null : (process.platform === "darwin"
+        ? "Launch AgentBar, or keep `agentbar watch` running."
+        : "Keep `agentbar watch` running (or poll `agentbar waybar` at <= 30s) to answer approvals from here."));
+
+  if (json) return console.log(JSON.stringify(out, null, 2));
+  const paint = { ok: green, warn: yellow, fail: red, skipped: dim };
+  for (const c of out) {
+    console.log(`${paint[c.status](c.status.padEnd(7))} ${bold(c.id.padEnd(28))} ${c.title}`);
+    if (c.detail) console.log(`        ${dim(c.detail)}`);
+    if (c.fix) console.log(`        ${yellow("fix:")} ${c.fix}`);
+  }
+  const bad = out.filter((c) => c.status === "fail").length;
+  const warn = out.filter((c) => c.status === "warn").length;
+  console.log(`\n${out.length} checks - ${bad} failed - ${warn} worth a look`);
+}
+
 function installHooks() {
   const srcHooks = path.join(__dirname, "..", "hooks");
   if (!fs.existsSync(srcHooks)) { console.error("hooks/ not found next to this CLI — run from a repo checkout"); process.exit(1); }
@@ -715,6 +889,7 @@ switch (cmd) {
   case "answer": answerCmd(argv.filter((a) => a !== "--json")); break;
   case "watch": watch(argv); break;
   case "waybar": waybar(); break;
+  case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
   case "--help": case "help": default:
     console.log(`agentbar — AI coding agents' status & remote approval (file protocol: ~/.agentbar)
@@ -727,6 +902,7 @@ switch (cmd) {
   agentbar watch [-i SEC]         live view + keys (a allow/A always/d deny/f defer/1-9 answer/q quit);
                                   enables remote approval
   agentbar waybar                 JSON for waybar/polybar (poll <= 30s)
+  agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
     break;
 }
