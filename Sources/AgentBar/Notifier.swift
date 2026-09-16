@@ -223,6 +223,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         for e in post { self.post(e); deliveredRequests.insert(e.id) }
     }
 
+    /// Posts one harmless notification so "are these reaching me?" has an answer
+    /// that is not "wait for an agent to need something".
+    ///
+    /// Worth its button because a delivered notification and a *visible* one are
+    /// different things: a Focus suppresses the banner and files it in Notification
+    /// Center instead, and from the outside that is indistinguishable from broken.
+    func preview() {
+        let content = UNMutableNotificationContent()
+        content.title = "AgentBar"
+        content.body = "This is what an agent notification looks like. Real ones carry Allow and Deny."
+        content.categoryIdentifier = Self.plainCategory
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "preview:\(UUID().uuidString)",
+                                  content: content, trigger: nil))
+    }
+
     /// Everything on screen goes away — used when the user turns approvals off, so a
     /// banner posted a moment ago cannot outlive the setting that allowed it.
     func withdrawAll() {

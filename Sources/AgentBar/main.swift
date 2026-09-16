@@ -150,7 +150,12 @@ if let bundleID = Bundle.main.bundleIdentifier {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory) // menu bar only: no dock icon
+// Menu bar only: no dock icon. This is also the ONLY place that may say so —
+// `LSUIElement` in Info.plist does the same job, but macOS then refuses
+// notification authorization to the bundle outright: no prompt, and no entry in
+// System Settings ▸ Notifications to turn on. Setting the policy here, before
+// `run()`, keeps the icon away without making the app ineligible.
+app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

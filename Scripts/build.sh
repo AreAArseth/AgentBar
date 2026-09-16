@@ -58,7 +58,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
-  <key>LSUIElement</key><true/>
+  <!-- Deliberately NO LSUIElement. main.swift sets .accessory before the app runs,
+       which keeps the dock icon away just as well — and macOS refuses notification
+       authorization outright to a bundle that declares LSUIElement, with no prompt
+       and no entry in System Settings to turn on. Declaring it here bought nothing
+       and cost the whole Notifications feature. -->
   <key>NSAppleEventsUsageDescription</key><string>AgentBar selects the exact terminal tab a session runs in when you jump to it.</string>
   <key>NSHumanReadableCopyright</key><string>© 2026 Michal Strnadel. MIT licensed.</string>
 </dict>

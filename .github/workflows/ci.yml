@@ -65,6 +65,13 @@ jobs:
           test -f "build/AgentBar.app/Contents/Resources/hooks/claude/permission.js"
           test -f "build/AgentBar.app/Contents/Resources/hooks/claude/update.js"
           lipo -archs "build/AgentBar.app/Contents/MacOS/AgentBar" | grep -q "x86_64 arm64"
+          # LSUIElement must NOT come back. It hides the dock icon, which main.swift
+          # already does with setActivationPolicy(.accessory) — but macOS refuses
+          # notification authorization outright to a bundle that declares it: no
+          # prompt, and no entry in System Settings to switch on. It looks like the
+          # obvious thing to add to a menu bar app, so this is a guard, not a style rule.
+          ! /usr/libexec/PlistBuddy -c "Print :LSUIElement" \
+              "build/AgentBar.app/Contents/Info.plist" 2>/dev/null
       # The release asset is cut from this bundle. A release has to be signed with
       # the "AgentBar Local Signing" identity — it lives in one keychain, and a
       # signature change makes macOS re-ask every user for folder access — but the

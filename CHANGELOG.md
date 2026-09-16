@@ -29,7 +29,27 @@ All notable changes to AgentBar are documented here. This project follows
   setting says so and says where to change it. Once macOS has an app down as
   denied it never prompts again, so a checkbox that quietly sprang back would be
   indistinguishable from a dead control; that was the first version of it, and it
-  was reported within a minute of being looked at.
+  was reported within a minute of being looked at. When macOS does refuse, the
+  setting says so **and opens System Settings for you** — telling someone where a
+  switch lives is not the same as taking them there. **Send a test** posts a
+  harmless one, because a delivered notification and a *visible* one are different
+  things: a Focus suppresses the banner and files it in Notification Center
+  instead, which from the outside is indistinguishable from broken.
+
+### Fixed
+- **`LSUIElement` is gone from the bundle, and that is what made notifications
+  possible at all.** It is the obvious thing for a menu bar app to declare, and it
+  was silently costing the entire feature: macOS refuses notification
+  authorization outright to a bundle that carries it — no prompt, no error worth
+  reading (`UNErrorDomain Code=1`), and no entry in System Settings ▸
+  Notifications to switch on. The app was invisible to the notification system and
+  nothing said so.
+
+  It bought nothing either way. `main.swift` has always called
+  `setActivationPolicy(.accessory)` before the app runs, which keeps the dock icon
+  away by itself — verified: the app still reports `accessory`, no icon, no menu
+  bar of its own. CI now fails the build if `LSUIElement` comes back, because it
+  is exactly the line someone adds in good faith.
 - **A Today row in the menu, and `agentbar history`.** What finished, how long it
   took, and what failed — the question you have at the end of a day, which nothing
   in AgentBar could answer before, because live status deletes a session the

@@ -1,8 +1,9 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: one small window, four quiet sections — Sounds, the
-/// global Allow/Deny shortcut, the island, and Diagnostics. Every control writes
+/// AgentBar's Settings: one small window, five quiet sections — Sounds,
+/// Notifications, the global Allow/Deny shortcut, the island, and Diagnostics.
+/// Every control writes
 /// UserDefaults directly and fires `onChange`, so changes apply live; the app
 /// delegate owns the fan-out to whichever surfaces care. Diagnostics is the odd
 /// one out: it sets nothing, it reports — see `DiagnosticsView`.
@@ -26,6 +27,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var notifyApprovalsBox: NSButton!
     private var notifyDoneBox: NSButton!
     private var notifyCaption: NSTextField!
+    private var notifySettingsButton: NSButton!
+    private var notifyTestButton: NSButton!
 
     func show() {
         if window == nil { build() }
@@ -128,6 +131,30 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                                  target: self, action: #selector(toggleNotifications))
         notifyCaption = caption(
             "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above.")
+        // Telling someone where a switch lives is not the same as taking them there.
+        // Shown only when macOS has actually refused, so it is never a button that
+        // opens a pane with nothing to do in it.
+        notifySettingsButton = NSButton(title: "Open System Settings", target: self,
+                                        action: #selector(openNotificationSettings))
+        notifySettingsButton.bezelStyle = .rounded
+        notifySettingsButton.controlSize = .small
+        notifySettingsButton.font = .systemFont(ofSize: 11)
+        notifySettingsButton.isHidden = true
+
+        // Same affordance the Sounds section has, for the same reason: "is this
+        // reaching me?" deserves an answer that isn't "wait for an agent to need
+        // something". It also separates suppressed-by-Focus from broken, which from
+        // the outside look identical.
+        notifyTestButton = NSButton(title: "Send a test", target: self,
+                                    action: #selector(sendTestNotification))
+        notifyTestButton.bezelStyle = .rounded
+        notifyTestButton.controlSize = .small
+        notifyTestButton.font = .systemFont(ofSize: 11)
+        notifyTestButton.toolTip = "Nothing appears? A Focus is probably on — macOS files banners in Notification Center instead of showing them."
+
+        let notifyButtons = NSStackView(views: [notifyTestButton, notifySettingsButton])
+        notifyButtons.orientation = .horizontal
+        notifyButtons.spacing = 8
 
         // ---- Diagnostics ----
         diagnostics = DiagnosticsView()
@@ -141,7 +168,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let seps = (0..<4).map { _ in separator() }
         let stack = NSStackView(views: [
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
-            sectionLabel("Notifications"), notifyApprovalsBox, notifyDoneBox, notifyCaption, seps[1],
+            sectionLabel("Notifications"), notifyApprovalsBox, notifyDoneBox, notifyCaption,
+            notifyButtons, seps[1],
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
@@ -155,7 +183,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: enableCaption)
         stack.setCustomSpacing(16, after: grid)
         stack.setCustomSpacing(16, after: islandCaption)
-        stack.setCustomSpacing(14, after: notifyCaption)
+        stack.setCustomSpacing(8, after: notifyCaption)
+        stack.setCustomSpacing(14, after: notifyButtons)
         stack.setCustomSpacing(2, after: notifyApprovalsBox)
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -208,6 +237,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
         notifyDoneBox.state = Notifier.Prefs.done ? .on : .off
+        notifyTestButton.isEnabled = Notifier.Prefs.anyEnabled
         syncNotificationCaption()
         // Re-run on every show: the answer changes with what the user did outside
         // this window — installed an agent, upgraded node, granted Accessibility.
@@ -252,6 +282,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             // A banner already on screen must not outlive the setting that allowed it.
             Notifier.shared.withdrawAll()
         }
+        notifyTestButton.isEnabled = Notifier.Prefs.anyEnabled
         onChange?()
     }
 
@@ -260,15 +291,31 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// that keyed off "is anything enabled" would erase its own explanation.
     private var notificationProblem: String?
 
+    /// Straight to the pane, not to a search box. The URL is the Notifications
+    /// settings extension; if a future macOS renames it, the caption still says
+    /// where to go by hand, so the worst case is a button that does nothing rather
+    /// than instructions that are wrong.
+    @objc private func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func sendTestNotification() {
+        Notifier.shared.preview()
+    }
+
     private func syncNotificationCaption() {
         let base = "A banner from macOS, with Allow and Deny on it. Useful when the island\nlives on a display you aren't looking at. Sounds are separate, above."
         if let notificationProblem {
             notifyCaption.stringValue = notificationProblem
             notifyCaption.textColor = .systemOrange
+            notifySettingsButton.isHidden = false
             refit()
             return
         }
         notifyCaption.textColor = .secondaryLabelColor
+        notifySettingsButton.isHidden = true
         // Nothing switched on, nothing refused: there is no authorization state worth
         // reporting yet, and asking for it would be a round trip for no reason.
         guard Notifier.Prefs.anyEnabled else { notifyCaption.stringValue = base; refit(); return }
@@ -277,6 +324,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             let problem = Notifier.problem(granted: false, error: nil, status: status)
             self.notifyCaption.stringValue = problem ?? base
             self.notifyCaption.textColor = problem == nil ? .secondaryLabelColor : .systemOrange
+            self.notifySettingsButton.isHidden = problem == nil
             self.refit()
         }
     }

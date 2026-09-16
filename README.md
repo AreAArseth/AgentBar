@@ -83,7 +83,9 @@ don't use. Hooks are snapshotted per session — start a new agent session after
 - **Notifications with Allow and Deny on them** — off by default; turn them on in
   Settings and macOS shows a banner the moment an agent needs you, answerable
   without switching apps. Useful precisely when the island is pinned to a display
-  you aren't looking at.
+  you aren't looking at. **Send a test** checks they reach you; if nothing appears
+  but it shows up in Notification Center, a Focus is on — macOS files banners
+  rather than showing them, which is working as designed.
 - **What happened today** — the menu's **Today** row sums up the sessions that
   finished, how long they took, and what failed; `agentbar history` says the same
   in a terminal. Live status forgets a session the moment it ends; this doesn't.
