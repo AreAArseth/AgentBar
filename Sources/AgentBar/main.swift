@@ -65,7 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.islandRunning { self.island.settingsChanged() }
         }
 
-        HookInstaller.onFinish = { WelcomeWindow.shared.refreshWired() }
+        HookInstaller.onFinish = {
+            WelcomeWindow.shared.refreshWired()
+            // Only now: running the checks before the installer has finished would
+            // report a machine as unwired while the install that wires it is still
+            // in flight.
+            Diagnostics.runInBackground()
+        }
+        Diagnostics.onVerdict = { [weak self] in self?.controller.apply(self?.sessions ?? []) }
         HookInstaller.installIfNeeded()
         // Off the main queue: it reads and may rewrite a file that has had a month
         // to grow, and nothing on screen is waiting for it.
@@ -79,6 +86,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyPresentation()
 
         if WelcomeWindow.showOnLaunch { WelcomeWindow.shared.show() }
+        // Layout work on Settings otherwise means clicking through the menu bar on
+        // every rebuild, which is how a window ships unlooked-at. CONTRIBUTING lists
+        // it next to islandExpandDebug.
+        if UserDefaults.standard.bool(forKey: "settingsOnLaunchDebug") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { SettingsWindow.shared.show() }
+        }
     }
 
     private func applyPresentation() {

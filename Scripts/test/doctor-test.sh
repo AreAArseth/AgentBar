@@ -102,11 +102,18 @@ check "missing dir is a failure"        '[ "$(status_of dirs.answers.d)" = fail 
 fresh_home
 mkdir -p "$HOME/.codex"
 "$CLI" install-hooks >/dev/null 2>&1
-check "no record yet is worth saying"   '[ "$(status_of agent.codex.lastSeen)" = warn ]'
+# History only starts when a frontend starts keeping it, so a freshly updated
+# machine is blank everywhere — and nothing is wrong.
+check "no record yet is not a problem"  '[ "$(status_of agent.codex.lastSeen)" = ok ]'
 printf '{"agent":"codex","sessionId":"a","state":"done","endedAt":%s}\n' \
   "$(( $(date +%s) - 259200 ))" > "$HOME/.agentbar/history.jsonl"
 check "last seen reads the history"     '[ "$(status_of agent.codex.lastSeen)" = ok ]'
 check "last seen counts the days"       '"$CLI" doctor | grep -q "3 days ago"'
+# Wired and silent for a fortnight is the shape of a broken integration that passes
+# every other check: the hooks are in place and simply never fire.
+printf '{"agent":"codex","sessionId":"a","state":"done","endedAt":%s}\n' "$(( $(date +%s) - 1500000 ))" \
+  > "$HOME/.agentbar/history.jsonl"
+check "long silence is a warning"       '[ "$(status_of agent.codex.lastSeen)" = warn ]'
 
 # --- --json is what goes into a bug report
 check "json carries id and status"      '"$CLI" doctor --json | grep -q "\"id\": \"hooks.copied\"" && "$CLI" doctor --json | grep -q "\"status\""'

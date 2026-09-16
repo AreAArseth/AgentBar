@@ -1,12 +1,16 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: one small window, three quiet sections — Sounds, the
-/// global Allow/Deny shortcut, and the island. Every control writes UserDefaults
-/// directly and fires `onChange`, so changes apply live; the app delegate owns
-/// the fan-out to whichever surfaces care.
+/// AgentBar's Settings: one small window, four quiet sections — Sounds, the
+/// global Allow/Deny shortcut, the island, and Diagnostics. Every control writes
+/// UserDefaults directly and fires `onChange`, so changes apply live; the app
+/// delegate owns the fan-out to whichever surfaces care. Diagnostics is the odd
+/// one out: it sets nothing, it reports — see `DiagnosticsView`.
 final class SettingsWindow: NSObject, NSWindowDelegate {
     static let shared = SettingsWindow()
+    /// Wide enough that a diagnostic's detail and its fix each sit on one or two
+    /// lines rather than a paragraph.
+    static let minWidth: CGFloat = 470
     var onChange: (() -> Void)?
 
     private var window: NSWindow?
@@ -18,6 +22,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var testButton: NSButton!
     private var volumeRow: NSStackView!
     private var hideIslandBox: NSButton!
+    private var diagnostics: DiagnosticsView!
 
     func show() {
         if window == nil { build() }
@@ -111,11 +116,18 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let islandCaption = caption(
             "The pill slips away when nothing is running and returns with\nthe next session. Applies when the menu bar mark is shown too.")
 
-        let sep1 = separator(), sep2 = separator()
+        // ---- Diagnostics ----
+        diagnostics = DiagnosticsView()
+        diagnostics.onResize = { [weak self] in self?.refit() }
+        let diagnosticsCaption = caption(
+            "Why an agent isn't showing up: hooks wired, the node they point at\nstill there, folders writable, when each agent last reported.")
+
+        let sep1 = separator(), sep2 = separator(), sep3 = separator()
         let stack = NSStackView(views: [
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, sep1,
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid, sep2,
-            sectionLabel("Island"), hideIslandBox, islandCaption,
+            sectionLabel("Island"), hideIslandBox, islandCaption, sep3,
+            sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -126,6 +138,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: enableCaption)
         stack.setCustomSpacing(16, after: grid)
         stack.setCustomSpacing(16, after: sep2)
+        stack.setCustomSpacing(16, after: islandCaption)
+        stack.setCustomSpacing(16, after: sep3)
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -142,9 +156,33 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             volumeRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             sep1.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             sep2.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            sep3.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            diagnostics.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            // Before Diagnostics the width fell out of whichever caption was longest,
+            // which left a diagnostic row wrapping its fix across four lines and the
+            // window running off the bottom of the screen. A floor is cheaper than
+            // hand-breaking every caption to the same length.
+            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minWidth),
         ])
+        self.stack = stack
         w.setContentSize(stack.fittingSize)
         window = w
+    }
+
+    /// Diagnostics changes height as checks come and go, so the window has to be
+    /// re-fitted *both* ways — one that only grows leaves a hole under the last row.
+    private var stack: NSStackView?
+    private func refit() {
+        guard let window, let stack else { return }
+        window.setContentSize(stack.fittingSize)
+        // The window was centred at its old height and grows downward from its title
+        // bar, so a few diagnostic rows push its bottom under the Dock. Nudge it back
+        // into view rather than re-centring, which would yank it while it is read.
+        guard let visible = window.screen?.visibleFrame else { return }
+        var frame = window.frame
+        if frame.minY < visible.minY { frame.origin.y = visible.minY }
+        if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.height }
+        if frame.origin != window.frame.origin { window.setFrameOrigin(frame.origin) }
     }
 
     private func reload() {
@@ -154,6 +192,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         soundsBox.state = SoundCenter.enabled ? .on : .off
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
+        // Re-run on every show: the answer changes with what the user did outside
+        // this window — installed an agent, upgraded node, granted Accessibility.
+        diagnostics.refresh()
         syncRecorderState()
         syncSoundControls()
     }

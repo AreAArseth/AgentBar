@@ -70,6 +70,11 @@ enum Diagnostics {
               configs: [".config/opencode/plugins/agentbar.js"], marker: "agentbar"),
     ]
 
+    /// Wired and silent for this long is worth saying out loud. Two weeks rather than
+    /// a few days: people go on holiday, and an agent you simply did not use must not
+    /// be reported as broken.
+    static let quietDays = 14
+
     /// Hook script directories that must have survived the copy into `~/.agentbar/hooks/`.
     static let hookDirs = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode"]
     /// Scripts run through their own shebang rather than an explicit interpreter —
@@ -78,6 +83,30 @@ enum Diagnostics {
     /// agent is installed, so checking the others would flag a healthy machine.
     static let shebangScripts = ["cursor": "cursor/cursor.js",
                                  "antigravity": "antigravity/antigravity.js"]
+
+    /// The last background pass, so the menu can carry the verdict without doing
+    /// file I/O every time it opens. Main queue only.
+    ///
+    /// This is the point of the whole feature: a silent failure that waits to be
+    /// looked for is still silent. The row says "2 problems" and the user finds out
+    /// without having gone looking.
+    private(set) static var failures = 0
+    /// Fired after a background pass changes the count, so the menu can redraw.
+    static var onVerdict: (() -> Void)?
+
+    /// Runs off the main queue and publishes the failure count. Call after the hook
+    /// installer has finished — running it before would report a machine as unwired
+    /// while the install that wires it is still in flight.
+    static func runInBackground() {
+        DispatchQueue.global(qos: .utility).async {
+            let found = run().filter { $0.status == .fail }.count
+            DispatchQueue.main.async {
+                guard found != failures else { return }
+                failures = found
+                onVerdict?()
+            }
+        }
+    }
 
     // MARK: - Entry point
 
@@ -299,12 +328,22 @@ enum Diagnostics {
     private static func lastSeenCheck(_ i: Integration, base: URL, now: TimeInterval) -> Check {
         let history = base.appendingPathComponent("history.jsonl")
         let last = HistoryStore.read(url: history).filter { $0.agent == i.id }.map(\.endedAt).max()
+        // No record is not a problem. History only starts when AgentBar starts keeping
+        // it, so on a freshly updated Mac every agent is blank — reporting that as
+        // something to look at would bury the one row that matters under eight that
+        // don't, on a machine where nothing is wrong.
         guard let last, last > 0 else {
-            return Check(id: "agent.\(i.id).lastSeen", title: "\(i.name) has reported", status: .warn,
-                         detail: "No session on record yet.",
-                         fix: "Start a new \(i.name) session — hooks are read when a session starts, so one that was already running will not report.")
+            return Check(id: "agent.\(i.id).lastSeen", title: "\(i.name) has reported", status: .ok,
+                         detail: "No session on record yet.")
         }
         let days = Int((now - last) / 86_400)
+        // Wired and silent for a fortnight is the shape of a broken integration that
+        // every other check passes — the hooks are in place and simply never fire.
+        guard days < Self.quietDays else {
+            return Check(id: "agent.\(i.id).lastSeen", title: "\(i.name) has reported", status: .warn,
+                         detail: "Wired, but nothing for \(days) days.",
+                         fix: "If you have used \(i.name) since then, its hooks are not firing — start a NEW session (hook config is read at session start) and check back.")
+        }
         return Check(id: "agent.\(i.id).lastSeen", title: "\(i.name) has reported", status: .ok,
                      detail: days < 1 ? "Last session today." : "Last session \(days) day\(days == 1 ? "" : "s") ago.")
     }

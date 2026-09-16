@@ -142,6 +142,16 @@ enum MenuBuilder {
                                    accessibilityDescription: nil)
         menu.addItem(appearance)
 
+        // Carries the verdict of the last background pass rather than only opening
+        // Settings: a silent failure that waits to be looked for is still silent.
+        let doctor = NSMenuItem(title: "",
+                                action: #selector(StatusItemController.openDiagnostics(_:)),
+                                keyEquivalent: "")
+        doctor.identifier = NSUserInterfaceItemIdentifier("diagnosticsRow")
+        doctor.target = controller
+        configureDiagnosticsRow(doctor)
+        menu.addItem(doctor)
+
         // Opt-in global Allow/Deny shortcut; the row opens Settings (enable + rebind).
         let shortcut = NSMenuItem(title: "Global Allow / Deny shortcut…",
                                   action: #selector(StatusItemController.openShortcutSettings(_:)),
@@ -155,6 +165,22 @@ enum MenuBuilder {
         menu.addItem(.separator())
         menu.addItem(updateRow(controller))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    /// Resets every field it sets — `updateInPlace` reuses the item, so a value left
+    /// over from the healthy state would stick around after a failure appears.
+    static func configureDiagnosticsRow(_ item: NSMenuItem) {
+        let broken = Diagnostics.failures
+        item.attributedTitle = nil
+        item.title = broken == 0
+            ? "Diagnostics…"
+            : "Diagnostics — \(broken) problem\(broken == 1 ? "" : "s")…"
+        item.image = NSImage(
+            systemSymbolName: broken == 0 ? "stethoscope" : "exclamationmark.triangle",
+            accessibilityDescription: nil)
+        item.toolTip = broken == 0
+            ? "Check that every agent's hooks are wired and working."
+            : "Something is stopping an agent from reporting. Open for the details and the fix."
     }
 
     /// One row that is the whole update UI: check → checking → result / install.
@@ -540,6 +566,8 @@ enum MenuBuilder {
                 configureShortcutRow(item, controller: controller)
             } else if item.identifier?.rawValue == "soundsRow" {
                 configureSoundsRow(item)
+            } else if item.identifier?.rawValue == "diagnosticsRow" {
+                configureDiagnosticsRow(item)
             }
         }
         return true

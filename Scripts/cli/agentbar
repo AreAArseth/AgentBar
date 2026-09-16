@@ -440,6 +440,9 @@ const INTEGRATIONS = [
     configs: [".config/opencode/plugins/agentbar.js"], marker: "agentbar" },
 ];
 const HOOK_DIRS = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode"];
+// Two weeks, not a few days: people go on holiday, and an agent you simply did not
+// use must not be reported as broken.
+const QUIET_DAYS = 14;
 // Keyed by the agent that runs them: install-hooks only pins a script when it
 // wires that agent, so checking the others would flag a healthy machine.
 const SHEBANG_SCRIPTS = { cursor: "cursor/cursor.js", antigravity: "antigravity/antigravity.js" };
@@ -532,13 +535,19 @@ function doctor(json) {
     if (!wired) continue;
 
     const last = hist.filter((r) => r.agent === i.id).map((r) => r.endedAt || 0).sort((a, b) => b - a)[0];
+    // No record is not a problem: history only starts when a frontend starts keeping
+    // it, so every agent is blank on a freshly updated machine.
     if (!last) {
-      add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "warn", "No session on record yet.",
-          `Start a NEW ${i.name} session — hook config is read when a session starts, so one already running will not report.`);
+      add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "ok", "No session on record yet.");
     } else {
       const days = Math.floor((now() - last) / 86400);
-      add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "ok",
-          days < 1 ? "Last session today." : `Last session ${days} day${days === 1 ? "" : "s"} ago.`);
+      if (days >= QUIET_DAYS) {
+        add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "warn", `Wired, but nothing for ${days} days.`,
+            `If you have used ${i.name} since then, its hooks are not firing — start a NEW session (hook config is read at session start) and check back.`);
+      } else {
+        add(`agent.${i.id}.lastSeen`, `${i.name} has reported`, "ok",
+            days < 1 ? "Last session today." : `Last session ${days} day${days === 1 ? "" : "s"} ago.`);
+      }
     }
     if (i.id === "copilot") {
       const shelled = (read(path.join(H, ".copilot/hooks/agentbar.json")) || "").includes('"bash":');

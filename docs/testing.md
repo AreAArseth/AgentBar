@@ -15,8 +15,9 @@ how to add to it.
 | `Scripts/test/permission-hook-test.sh` | The Claude hooks: `permission.js` (allow/always/deny/defer round-trips, rule forgery, questions, plans, timeouts, signals, successor/`hookPid` guards, surrogate-safe cuts), `update.js` (state mapping incl. Copilot's `recoverable` error, `started_at`, prompt/model/recap/activity rules, stalled stdin), `lifecycle.js` (seed, merge on resume/compact/clear, the mid-prompt open, dead-only sweep, launch guard, end) | 125 | node, python3 |
 | `Scripts/test/bridge-hooks-test.sh` | The Cursor, Gemini, Antigravity and Codex bridges: dead-only stale sweep, app-launch guard (fake `open` in `PATH`), event → state mapping, project/prompt merge across events, the 64-char id cap, surrogate-safe cuts, and Antigravity's fail-open `PreToolUse` decision | 49 | node, python3 |
 | `Scripts/test/opencode-plugin-test.sh` | The OpenCode plugin, loaded as ESM and driven through its event bus: created/prompt/tool/permission/idle/error/title/child/deleted — including "the idle that trails an error stays an error" | 23 | node |
-| `Scripts/test/cli-test.sh` | `Scripts/cli/agentbar`: status/requests rendering, pruning rules, approve/deny/answer (incl. plan and multi-question refusals, `hookPid` stamping), waybar classes and heartbeat, the hook blocking on the CLI's presence, `install-hooks` for every agent (idempotent, unparseable config untouched, `CLAUDE_CONFIG_DIR`, Copilot's own hooks file left alone, the written node path stable and the same interpreter) | 48 | node, python3 |
-| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script — new bundle opens, new bundle refuses and the backup is restored and launched, both refuse and the old bundle stays with the staging dir kept for inspection, and a hostile bundle path stays out of the shell's parser; and the island's display choice — defaults, round-trip, a pinned display that is unplugged falling back to the pointer without losing the pin; and the display row wrapping so no line overflows the window, at one display through eight | 13 | Swift 6 toolchain |
+| `Scripts/test/cli-test.sh` | `Scripts/cli/agentbar`: status/requests rendering, pruning rules, approve/deny/answer (incl. plan and multi-question refusals, `hookPid` stamping), waybar classes and heartbeat, the hook blocking on the CLI's presence, the history record an ended session leaves behind (baseline, once per ending, `idle` is not an ending), `install-hooks` for every agent (idempotent, unparseable config untouched, `CLAUDE_CONFIG_DIR`, Copilot's own hooks file left alone, the written node path stable and the same interpreter, a dead Codex interpreter repaired) | 57 | node, python3 |
+| `Scripts/test/doctor-test.sh` | `agentbar doctor`: a clean install reporting clean, an interpreter that moved, an agent installed but unwired, the escaped-slash marker trap, a config the installer refuses to touch, directories missing or unwritable, last-seen read from `history.jsonl` (blank is fine, a fortnight of silence is not), `--json`, and that a diagnostic changes nothing it diagnoses. Assertions are by check id, never wording — see `docs/diagnostics.md` | 23 | node |
+| `Tests/AgentBarTests/` (`swift test`) | The Swift app where it can be reached without a running app: the updater's relaunch script (new bundle opens; it refuses and the backup is restored and launched; both refuse and the old bundle stays with the staging dir kept; a hostile bundle path stays out of the shell's parser); the island's display choice (defaults, round-trip, a pinned display unplugged falling back to the pointer without losing the pin); the display row wrapping at one display through eight; the installer's node-path stabilisation and Codex repair; the history edge detector (a lingering `done` row written once, `idle` not an ending, a torn line costing one line, prune leaving an unchanged file alone); and every diagnostic check, by id | 56 | Swift 6 toolchain |
 | `Scripts/test/antigravity-watcher-test.sh` | `AntigravityWatcher` against a staged `brain/` transcript: thinking → permission → done | — | macOS, app running |
 | `Scripts/test/cowork-watcher-test.sh` | `CoworkWatcher` against a staged audit log | — | macOS, app + Claude.app running |
 
@@ -32,6 +33,7 @@ swift test                                # Swift unit tests (needs Swift 6)
 ./Scripts/test/bridge-hooks-test.sh
 ./Scripts/test/opencode-plugin-test.sh
 ./Scripts/test/cli-test.sh
+./Scripts/test/doctor-test.sh
 ```
 
 Each suite creates its own temp `HOME` per scenario (`fresh_home`) and removes
@@ -69,9 +71,12 @@ deliberate: XCTest only resolves under a full Xcode install, while swift-testing
 ships with the toolchain — so `swift test` works on a machine that has nothing but
 the Command Line Tools. It needs Swift 6, which is why that job runs on `macos-15`.
 
-Two local caveats worth knowing. A failed build can leave a stale module cache
-that reports `plugin for module 'TestingMacros' not found`. `swift package clean` is
-sometimes not enough — `swift package reset` is what clears it. And `./Scripts/build.sh` builds universal, so it needs an x86_64 Swift
+Two local caveats worth knowing. A stale module cache reports `plugin for module
+'TestingMacros' not found`. **Alternating `swift build` and `swift test` is what
+causes it most often** — building the product target evicts the macro plugin, and
+the next `swift test` fails before rebuilding it. Simply running `swift test` again
+is usually the whole fix; `swift package reset` clears it when it is not
+(`swift package clean` is sometimes not enough). And `./Scripts/build.sh` builds universal, so it needs an x86_64 Swift
 runtime — Command Line Tools alone ships `libswiftCompatibility56.a` for arm64
 only, and the link fails there with `Undefined symbols for architecture x86_64`.
 Use `./Scripts/build.sh --native` for a runnable dev bundle (this Mac's
@@ -111,10 +116,14 @@ mislead the next reader.
 
 ## What is not covered here, and why
 
-- **Swift unit tests.** There is no XCTest target; the app is a thin AppKit
-  layer over the file protocol, and the logic worth testing (state mapping,
-  pruning, identity of requests) lives in the hooks and is tested there. CI
-  compiles the Swift on macOS, which catches everything a type checker can.
+- **Most of the Swift.** The app is a thin AppKit layer over the file protocol,
+  and the logic worth testing (state mapping, pruning, identity of requests)
+  lives in the hooks and is tested there. What the swift-testing target does
+  cover is the app-side logic with no hook equivalent: the relaunch script,
+  island display resolution, display-picker geometry, the history edge
+  detector, the installer's node-path and Codex repair, and every diagnostic
+  check. CI also compiles the Swift on macOS, which catches everything a type
+  checker can.
 - **Visual behaviour** (island layout, menu rendering, sprite animation). Run
   the app; `Scripts/dev/render-preview.swift` screenshots the real island views
   for eyeballing.

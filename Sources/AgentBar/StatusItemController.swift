@@ -198,7 +198,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 + ["upd:\(UpdateChecker.shared.status)",
                    "hk:\(approvalShortcutEnabled):\(KeyCombo.allow.display)\(KeyCombo.deny.display)",
                    "mode:\(systemColor)",
-                   "snd:\(SoundCenter.enabled)"]).joined(separator: "\n")
+                   "snd:\(SoundCenter.enabled)",
+                   "diag:\(Diagnostics.failures)"]).joined(separator: "\n")
     }
 
     // MARK: - Actions (targets for MenuBuilder items)
@@ -224,6 +225,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc func openShortcutSettings(_ sender: NSMenuItem) {
+        SettingsWindow.shared.show()
+    }
+
+    /// Same window; Settings re-runs the checks every time it is shown.
+    @objc func openDiagnostics(_ sender: NSMenuItem) {
         SettingsWindow.shared.show()
     }
 

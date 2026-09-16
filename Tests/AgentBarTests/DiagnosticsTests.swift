@@ -30,8 +30,13 @@ import Testing
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    /// A fixed "now" well clear of the epoch: the quiet-agent check subtracts a
+    /// fortnight from it, and a smaller value would go negative and read as "no
+    /// history at all" instead of "silent for a long time".
+    private static let now: TimeInterval = 1_800_000_000
+
     private func check(_ id: String) -> Diagnostics.Check? {
-        Diagnostics.run(home: home, now: 1_000_000).first { $0.id == id }
+        Diagnostics.run(home: home, now: Self.now).first { $0.id == id }
     }
 
     // MARK: - The catalogue holds together
@@ -173,13 +178,29 @@ import Testing
     @Test func lastSeenComesFromTheHistoryFile() throws {
         try write(".codex/config.toml",
                   "notify = [\"/bin/sh\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
-        #expect(check("agent.codex.lastSeen")?.status == .warn, "no record yet is worth saying")
+        // No record is not a problem: history only starts when AgentBar starts keeping
+        // it, so a freshly updated Mac is blank everywhere and nothing is wrong.
+        #expect(check("agent.codex.lastSeen")?.status == .ok)
 
+        let threeDaysAgo = Int(Self.now - 3 * 86_400)
         try write(".agentbar/history.jsonl",
-                  #"{"agent":"codex","sessionId":"a","state":"done","endedAt":740000}"# + "\n")
+                  #"{"agent":"codex","sessionId":"a","state":"done","endedAt":"# + "\(threeDaysAgo)}\n")
         let c = check("agent.codex.lastSeen")
         #expect(c?.status == .ok)
         #expect(c?.detail?.contains("3 days ago") == true)
+    }
+
+    /// Wired and silent for a fortnight is the shape of a broken integration that
+    /// passes every other check: the hooks are in place and simply never fire.
+    @Test func anAgentWiredButLongSilentIsWorthSaying() throws {
+        try write(".codex/config.toml",
+                  "notify = [\"/bin/sh\", \"/Users/x/.agentbar/hooks/codex/notify.js\"]\n")
+        let longAgo = Self.now - Double(Diagnostics.quietDays + 3) * 86_400
+        try write(".agentbar/history.jsonl",
+                  #"{"agent":"codex","sessionId":"a","state":"done","endedAt":"# + "\(Int(longAgo))}\n")
+        let c = check("agent.codex.lastSeen")
+        #expect(c?.status == .warn)
+        #expect(c?.fix != nil)
     }
 
     // MARK: - Leftovers
@@ -196,7 +217,7 @@ import Testing
 
     @Test func theReportNamesEveryCheckAndItsFix() throws {
         try write(".codex/config.toml", "model = \"o3\"\n")
-        let checks = Diagnostics.run(home: home, now: 1_000_000)
+        let checks = Diagnostics.run(home: home, now: Self.now)
         let text = Diagnostics.report(checks)
         #expect(text.contains("agent.codex.wired"))
         #expect(text.contains("fix:"))
