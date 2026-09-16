@@ -61,6 +61,21 @@ jobs:
           test -f "build/AgentBar.app/Contents/Resources/hooks/claude/permission.js"
           test -f "build/AgentBar.app/Contents/Resources/hooks/claude/update.js"
           lipo -archs "build/AgentBar.app/Contents/MacOS/AgentBar" | grep -q "x86_64 arm64"
+      # The release asset is cut from this bundle. A release has to be signed with
+      # the "AgentBar Local Signing" identity — it lives in one keychain, and a
+      # signature change makes macOS re-ask every user for folder access — but the
+      # machine holding it may not be able to link x86_64 at all (recent Command
+      # Line Tools ship libswiftCompatibility*.a for arm64 only). So the universal
+      # build happens here and is signed there. `ditto` keeps the bundle's symlinks
+      # and resource forks; a plain zip of a .app does not.
+      - name: Package the bundle for release
+        run: ditto -c -k --sequesterRsrc --keepParent build/AgentBar.app AgentBar.app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentBar-app-universal
+          path: AgentBar.app.zip
+          retention-days: 14
+          if-no-files-found: error
 
   swift-tests:
     name: Swift unit tests (macOS)
