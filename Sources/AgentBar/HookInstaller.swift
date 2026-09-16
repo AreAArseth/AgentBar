@@ -467,10 +467,11 @@ enum HookInstaller {
     /// `pid: process.ppid` is the liveness handle the app prunes sessions by — every
     /// row would vanish on the next refresh.
     ///
-    /// Observational events only. `permissionRequest` can block and decide, but its
-    /// input payload is not documented, and a blocking hook must never be wired on
-    /// faith (same call as Qwen's). Remote approval for Copilot waits on a payload
-    /// someone has actually seen.
+    /// `permissionRequest` blocks and decides, which is what remote Allow/Deny needs.
+    /// It was left unwired until its input payload had been logged off a real
+    /// session rather than taken on faith — see `Scripts/hooks/copilot/README.md`.
+    /// Not `preToolUse`: those are fail-*closed* on a crash, so one unhandled
+    /// exception in a status bridge would silently deny a user's tool call.
     ///
     /// AgentBar owns the whole file: Copilot loads every `*.json` in the hooks dir,
     /// so our entries live in ours and the user's live in theirs.
@@ -505,6 +506,16 @@ enum HookInstaller {
             hooks[e.event] = [["type": "command", "exec": node, "args": args,
                                "timeoutSec": 5, "env": ["AGENTBAR_AGENT": "copilot"]]]
         }
+        // The blocking one. Its timeout must sit ABOVE the hook's own wait (600s,
+        // `AGENTBAR_APPROVAL_TIMEOUT` in permission.js) so the hook is the thing that
+        // gives up first and exits silently into the terminal prompt — the other way
+        // round, Copilot would kill it mid-wait. Claude's entry uses 630 for exactly
+        // the same reason. Copilot's own timeouts fail open (1.0.67+), so even that
+        // lands on the terminal prompt rather than a denial.
+        hooks["permissionRequest"] = [["type": "command", "exec": node,
+                                       "args": ["\(dir)/permission.js"],
+                                       "timeoutSec": 630,
+                                       "env": ["AGENTBAR_AGENT": "copilot"]]]
         let root: [String: Any] = ["version": 1, "hooks": hooks]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try writeIfChanged(data, to: hooksFileDir.appendingPathComponent("agentbar.json"))

@@ -5,6 +5,53 @@ All notable changes to AgentBar are documented here. This project follows
 
 ## 1.16.0 - 2026-09-16
 
+### Added
+- **Copilot CLI answers approvals from the bar, like Claude does.** AgentBar's
+  flagship trick — decide from the menu or the island and the terminal prompt
+  never appears — worked for exactly one agent out of ten. Copilot's
+  `permissionRequest` hook can block and decide, and was left unwired only
+  because GitHub documents the output contract but not the input payload, and a
+  blocking hook should not be wired on faith. The payload was logged off a live
+  1.0.85 session, and it holds two traps: that event alone speaks camelCase while
+  every other Copilot event arrives in the snake_case Claude dialect, and its
+  `toolName` is the raw id (`bash`) rather than the remapped one. So
+  `permission.js` serves both — the same file, the same wait, the same guards,
+  with a decoder on the way in and a differently spelled decision on the way out.
+  Every one of the 125 existing checks still passes unchanged, which is the point:
+  the shared path did not move.
+
+  There is no **Always** for Copilot, and `permissionSuggestions` is not the
+  reason. GitHub's documented output is `{behavior, message, interrupt}` — no
+  channel for a standing rule at all — so a rule has nowhere to go whatever that
+  field contains. It degrades to a one-shot allow, and both surfaces already hide
+  the button for a request that carries no rule, so nothing had to change to make
+  that honest. Keystroke approval stays as the fallback for sessions started
+  before the hook existed, and for ones running inside VS Code: Copilot reads hook
+  config only at startup, so remote approval begins with the next session.
+
+  Closes [#16](https://github.com/michalstrnadel/AgentBar/issues/16).
+- **`agentbar doctor`, and a Diagnostics section in Settings.** Every integration
+  AgentBar has fails the same way: silently. A hook that is not wired is an
+  absence, not an error. A hook pointing at an interpreter that has moved never
+  runs, so it never complains. A config the installer refuses to touch — it is
+  your file — is skipped with one line in Console.app. Hook config is read once at
+  session start, so a fix never reaches a session already running. In every case
+  the symptom is "this agent doesn't appear" and there was nowhere to look.
+
+  Both surfaces re-derive the installation from disk and answer in the words of
+  the fix: node found and at a path that survives an upgrade, the protocol folders
+  present *and actually writable*, hook scripts copied and their shebangs pinned,
+  and per agent whether it is installed, wired, parseable, pointing at a node that
+  still exists, and when it last reported. The menu row carries the verdict —
+  "Diagnostics — 2 problems" — because a silent failure that waits to be looked
+  for is still silent. **Copy report** puts every check on the clipboard for an
+  issue. The catalogue of check ids is `docs/diagnostics.md`.
+- **Sessions leave a record behind them.** `~/.agentbar/history.jsonl` keeps one
+  line per ended session, because `state.d` cannot answer "when did this agent
+  last report anything" — it is a live set, and a row is deleted when its process
+  dies. Nothing is drawn from it yet; `doctor` reads it, and the daily digest
+  will.
+
 ### Fixed
 - **A `node` that moves no longer silently kills every hook.** The path to the
   interpreter is written into each agent's config, and that config outlives the

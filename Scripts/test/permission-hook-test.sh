@@ -621,6 +621,86 @@ wait "$hookpid"
 check "junk answer: silent defer"        '[ ! -s "$HOME/out.json" ]'
 check "junk answer: request cleaned"     '[ ! -e "$HOME/.agentbar/requests.d/$REQ" ]'
 
+# 28. GitHub Copilot CLI's permissionRequest — the same hook, the other dialect.
+# This event alone speaks camelCase and carries RAW tool ids, so a handler that
+# assumes the snake_case shape every other Copilot event uses reads undefined
+# throughout; and Copilot reads the decision bare rather than wrapped in
+# hookSpecificOutput.
+COPILOT_EVENT='{"hookName":"permissionRequest","sessionId":"copsess","timestamp":1789563619837,"cwd":"/tmp/x","toolName":"bash","toolInput":{"command":"echo hello-agentbar"},"permissionSuggestions":[]}'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+  "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "copilot: camelCase payload decoded" 'grep -q "Bash: echo hello-agentbar" "$HOME/.agentbar/requests.d/$REQ"'
+# The row must be filed under Copilot, or an approval shows up on a Claude session.
+check "copilot: request names the agent"   'grep -q "\"agent\":\"copilot\"" "$HOME/.agentbar/requests.d/$REQ"'
+check "copilot: session id from sessionId" '[ -f "$HOME/.agentbar/state.d/copsess.json" ]'
+check "copilot: state row is copilot"      'grep -q "\"agent\":\"copilot\"" "$HOME/.agentbar/state.d/copsess.json"'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+# Bare {behavior}, NOT Claude's hookSpecificOutput wrapper.
+check "copilot: bare allow on stdout"      '[ "$(cat "$HOME/out.json")" = "{\"behavior\":\"allow\"}" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+  "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "copilot: bare deny on stdout"       '[ "$(cat "$HOME/out.json")" = "{\"behavior\":\"deny\"}" ]'
+
+# "Always" has nowhere to go: GitHub documents the output contract as
+# {behavior, message, interrupt} — no channel for a standing rule at all — so it
+# must degrade to a one-shot allow rather than inventing an updatedPermissions
+# field Copilot would ignore, or worse, misread.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+  "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"always","rule":{"type":"rule","rule":"Bash(echo:*)"}}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "copilot: always is a one-shot allow" '[ "$(cat "$HOME/out.json")" = "{\"behavior\":\"allow\"}" ]'
+
+# Rule 3: the blocking hook must ALWAYS time out silently to the terminal prompt.
+# Copilot's own hook timeouts fail open since 1.0.67, so even that path is safe —
+# but the hook has to give up first, which is why its timeoutSec is set above this.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=2 \
+  "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json"
+check "copilot: timeout says nothing"      '[ ! -s "$HOME/out.json" ]'
+
+# Nobody able to answer -> straight through, no blocking, no row.
+fresh_home
+AGENTBAR_FORCE_APP=0 AGENTBAR_AGENT=copilot "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json"
+check "copilot: no frontend, no block"     '[ ! -s "$HOME/out.json" ] && [ ! -d "$HOME/.agentbar/requests.d" ]'
+
+# A tool id with no mapping keeps Copilot's own name rather than being renamed into
+# a Claude tool whose input shape it may not share — and still says something useful.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" \
+  <<<'{"hookName":"permissionRequest","sessionId":"copsess","cwd":"/tmp/x","toolName":"view","toolInput":{"path":"/tmp/x/README.md"}}' \
+  >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "copilot: unmapped tool keeps its id" 'grep -q "\"toolName\":\"view\"" "$HOME/.agentbar/requests.d/$REQ"'
+check "copilot: unmapped tool still reads"  'grep -q "view: /tmp/x/README.md" "$HOME/.agentbar/requests.d/$REQ"'
+printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
+# And the Claude dialect must be untouched by all of the above: still wrapped.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "claude: still wrapped in hookSpecificOutput" 'grep -q "hookSpecificOutput" "$HOME/out.json"'
+check "claude: still files under claude"   'grep -q "\"agent\":\"claude\"" "$HOME/.agentbar/state.d/testsess.json"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -172,7 +172,17 @@ check "copilot wired with its identity" 'grep -q ErrorOccurred "$HOME/.copilot/h
 # exec+args, never a shell line: a bash wrapper would make the hook'"'"'s parent a
 # shell that exits at once, and ppid is what prunes dead rows.
 check "copilot runs node directly"     'grep -q "\"exec\"" "$HOME/.copilot/hooks/agentbar.json" && ! grep -q "\"bash\"" "$HOME/.copilot/hooks/agentbar.json"'
-check "copilot approval left unwired"  '! grep -qi "permissionRequest" "$HOME/.copilot/hooks/agentbar.json"'
+# Copilot's permissionRequest blocks and decides — that is remote Allow/Deny. Its
+# timeout must sit ABOVE the hook's own 600s wait, or Copilot kills the hook
+# mid-wait instead of letting it fall through to the terminal prompt.
+check "copilot approval wired"        'grep -q "permissionRequest" "$HOME/.copilot/hooks/agentbar.json"'
+APPROVAL_HOOK="$("$NODE" -e '
+const fs=require("fs"),os=require("os"),path=require("path");
+const h=JSON.parse(fs.readFileSync(path.join(os.homedir(),".copilot/hooks/agentbar.json"),"utf8"))
+  .hooks.permissionRequest[0];
+process.stdout.write([h.timeoutSec, h.exec ? "exec" : "shell", path.basename(h.args[0])].join(" "));')"
+check "copilot approval outlasts hook" '[ "$(echo "$APPROVAL_HOOK" | cut -d" " -f1)" -gt 600 ]'
+check "copilot approval runs node directly" '[ "$APPROVAL_HOOK" = "630 exec permission.js" ]'
 check "copilot leaves other hook files" 'grep -q "\"bash\":\"true\"" "$HOME/.copilot/hooks/mine.json"'
 # The node path written into every config must name the SAME interpreter this CLI
 # runs on, and must prefer a stable alias over the version-pinned path execPath

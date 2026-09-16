@@ -9,6 +9,11 @@
 // a human, and every failure path (no app, app quits, timeout, junk input, signal,
 // filesystem error) exits silently so the ordinary terminal prompt appears instead.
 // Usage: node permission.js   (PermissionRequest hook JSON on stdin)
+//
+// Serves GitHub Copilot CLI too, the same way lifecycle.js and update.js already
+// do — but its `permissionRequest` is the one event in either dialect that speaks
+// camelCase and carries RAW tool ids, so it is normalised on the way in and its
+// decision is spelled differently on the way out. Everything between is shared.
 
 const fs = require("fs");
 const os = require("os");
@@ -24,6 +29,14 @@ const timeoutSecRaw = Number(process.env.AGENTBAR_APPROVAL_TIMEOUT);
 const timeoutSec = Number.isFinite(timeoutSecRaw) && timeoutSecRaw > 0 ? timeoutSecRaw : 600;
 const TIMEOUT_MS = 1000 * timeoutSec;
 const POLL_MS = 100;
+
+// Set by the hook config, the same reuse Qwen and Copilot already get on the other
+// scripts. It names the session rows, so getting it wrong would file a Copilot
+// permission under Claude.
+const agent = process.env.AGENTBAR_AGENT || "claude";
+// Which host is asking, decided from the payload itself in run(). Module-level
+// because respond() needs it and runs long after.
+let dialect = "claude";
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
 const writeAtomic = (file, obj) => {
@@ -143,6 +156,36 @@ function answerMessage(questions, answers) {
     "\nProceed with these answers; do not ask again.";
 }
 
+// Copilot CLI's permissionRequest, rewritten into the shape the rest of this file
+// reads. Two traps, both from a payload logged off a live 1.0.85 session:
+//
+//   - it is the ONLY Copilot event that speaks camelCase; every other one arrives
+//     in the snake_case Claude dialect, so a handler that assumes one shape reads
+//     undefined throughout;
+//   - `toolName` is the raw id (`bash`), not remapped to Claude's (`Bash`) the way
+//     the PascalCase events are.
+//
+// Only `bash` is remapped here, because it is the only tool whose *input* shape is
+// verified. Renaming `view` to `Read` would make displaySummary look for a
+// `file_path` that may not exist and render "Read: " with nothing after it — worse
+// than showing the id Copilot actually used. Add the others as they are observed.
+const COPILOT_TOOLS = { bash: "Bash" };
+
+function normaliseCopilot(p) {
+  return {
+    session_id: p.sessionId,
+    tool_name: COPILOT_TOOLS[p.toolName] || p.toolName,
+    tool_input: p.toolInput,
+    cwd: p.cwd,
+    // Deliberately dropped. GitHub documents the output contract as
+    // {behavior, message, interrupt} — there is no channel for a standing rule at
+    // all, so "Always allow" has nowhere to go no matter what permissionSuggestions
+    // turns out to contain. Empty here makes every "always" degrade to a one-shot
+    // allow, which is the honest behaviour.
+    permission_suggestions: [],
+  };
+}
+
 function displaySummary(tool, input, cwd) {
   const t = String(tool || "unknown");
   const i = input || {};
@@ -158,7 +201,11 @@ function displaySummary(tool, input, cwd) {
   if (t === "ExitPlanMode") return "Plan ready for review";
   const m = t.match(/^mcp__(.+?)__(.+)$/);
   if (m) return m[1] + ": " + m[2];
-  return t;
+  // A tool this file has no mapping for — every Copilot id but `bash`, and any
+  // future Claude tool. The bare name says almost nothing, so borrow the first
+  // string the input carries; it is nearly always the interesting part.
+  const first = Object.values(i).find((v) => typeof v === "string" && v.trim());
+  return first ? t + ": " + oneLine(first) : t;
 }
 
 let raw = "", started = false;
@@ -178,6 +225,10 @@ function run() {
   let p;
   try { p = JSON.parse(raw); } catch { process.exit(0); }
   if (!p || typeof p !== "object" || Array.isArray(p)) process.exit(0);
+
+  // `hookName` is the only field that tells the two dialects apart — Claude's
+  // payload has no such key, and Copilot's is this event's own name.
+  if (p.hookName === "permissionRequest") { dialect = "copilot"; p = normaliseCopilot(p); }
 
   try {
 
@@ -208,7 +259,7 @@ function run() {
         fs.mkdirSync(stateDir, { recursive: true });
         let prev = {};
         try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
-        writeAtomic(statePath, { ...prev, agent: "claude", state: "question",
+        writeAtomic(statePath, { ...prev, agent, state: "question",
           label: "❓ " + oneLine(q.question || "Waiting for your answer"),
           sessionId: p.session_id || "", pid: process.ppid, started: true,
           ts: Math.floor(Date.now() / 1000) });
@@ -240,7 +291,7 @@ function run() {
       fs.mkdirSync(stateDir, { recursive: true });
       let prev = {};
       try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
-      writeAtomic(statePath, { ...prev, agent: "claude",
+      writeAtomic(statePath, { ...prev, agent,
         state: isQuestion ? "question" : "permission",
         label: isQuestion ? "❓ " + oneLine(questions[0].question) : display,
         sessionId: p.session_id || "", pid: process.ppid, started: true,
@@ -249,7 +300,7 @@ function run() {
 
     writeAtomic(reqPath, {
       // safeId to match Session.id, which the app derives from the state file name.
-      sessionId: safeId(p.session_id), agent: "claude",
+      sessionId: safeId(p.session_id), agent,
       toolName: p.tool_name || "", display, toolInputPretty: pretty,
       context: buildContext(p.tool_name, p.tool_input),
       ruleSuggestion: suggestion, pid: process.ppid, hookPid: process.pid,
@@ -352,7 +403,7 @@ function run() {
                 let prev = {};
                 try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
                 if (prev.state === "question") {
-                  writeAtomic(statePath, { ...prev, agent: "claude", state: "thinking",
+                  writeAtomic(statePath, { ...prev, agent, state: "thinking",
                     label: "Thinking…", ts: Math.floor(Date.now() / 1000) });
                 }
               } catch {}
@@ -404,8 +455,12 @@ function run() {
 }
 
 function respond(decision) {
-  const json = JSON.stringify({
-    hookSpecificOutput: { hookEventName: "PermissionRequest", decision },
-  });
+  // Copilot CLI reads the decision bare; Claude wraps the same {behavior, message}
+  // in hookSpecificOutput. Writing *nothing* means "no decision" in both, which is
+  // what every failure path in this file relies on to fall through to the terminal
+  // prompt — so only these two shapes are ever emitted.
+  const json = JSON.stringify(dialect === "copilot"
+    ? decision
+    : { hookSpecificOutput: { hookEventName: "PermissionRequest", decision } });
   fs.writeSync(1, json);
 }

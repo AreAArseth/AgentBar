@@ -837,8 +837,10 @@ function installHooks() {
   // claude/ scripts serve Copilot unchanged, same reuse as Qwen above.
   // `exec` + `args` runs node directly: a bash wrapper would make the hook's parent
   // a shell that exits at once, and ppid is the liveness handle rows are pruned by.
-  // Observational events only — permissionRequest can block, but its input payload
-  // is undocumented, and a blocking hook must never be wired on faith.
+  // permissionRequest blocks and decides, which is what remote Allow/Deny needs; it
+  // stayed unwired until its payload had been logged off a real session rather than
+  // taken on faith (Scripts/hooks/copilot/README.md). Not preToolUse: those are
+  // fail-CLOSED on a crash, so one unhandled exception would silently deny a tool call.
   // AgentBar owns this whole file; Copilot loads every *.json in the dir, so the
   // user's own hooks live in theirs and are never touched.
   const copilotDir = process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
@@ -862,6 +864,12 @@ function installHooks() {
       hooks[ev] = [{ type: "command", exec: node, args: [`${dir}/${script}`, arg],
                      timeoutSec: 5, env: { AGENTBAR_AGENT: "copilot" } }];
     }
+    // The blocking one. Its timeout sits ABOVE the hook's own wait (600s) so the
+    // hook gives up first and exits silently into the terminal prompt — the other
+    // way round, Copilot would kill it mid-wait. Claude's entry uses 630 likewise.
+    hooks.permissionRequest = [{ type: "command", exec: node,
+                                 args: [`${dir}/permission.js`],
+                                 timeoutSec: 630, env: { AGENTBAR_AGENT: "copilot" } }];
     fs.mkdirSync(path.dirname(file), { recursive: true });
     report(`copilot ${file}`, writeIfChanged(file, { version: 1, hooks }));
   }

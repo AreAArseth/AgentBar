@@ -12,7 +12,7 @@ locks. All timestamps (`ts`) are Unix seconds.
 ```
 ~/.agentbar/
   state.d/     one JSON per live session        (writer: hooks, or a frontend watcher; reader: frontends)
-  requests.d/  one JSON per pending approval    (writer: permission hook)
+  requests.d/  one JSON per pending approval    (writer: permission hook — Claude Code, Copilot CLI)
   answers.d/   one JSON per user decision       (writer: frontends; reader: the hook)
   watcher.json frontend presence heartbeat      (writer: CLI watch/waybar)
   history.jsonl  one line per ended session     (writer: frontends only)
@@ -94,9 +94,21 @@ Frontend pruning (each refresh):
 
 ## requests.d / answers.d — remote approval
 
-Written by the blocking Claude `PermissionRequest` hook. File name:
+Written by the blocking permission hook. File name:
 `<sessionId>-<promptId>.json` (both sanitized). **The answer file MUST use exactly
 the same file name** — that is how the hook finds its own answer.
+
+Two hosts speak this today and one script serves both. Claude Code sends
+`PermissionRequest` and reads the decision back wrapped in `hookSpecificOutput`;
+Copilot CLI sends `permissionRequest` — camelCase, raw tool ids, no `prompt_id`
+(the hook's own pid separates two requests in one turn) — and reads the decision
+bare as `{"behavior": …}`. What lands in `requests.d` is identical apart from
+`agent`, so frontends need to know nothing about either dialect.
+
+`ruleSuggestion` is null for Copilot and always will be: its output contract has no
+channel for a standing rule, so "always" degrades to a one-shot allow, and a
+frontend MUST NOT offer an *Always* affordance for a request that carries no
+`ruleSuggestion`.
 
 Request:
 ```json

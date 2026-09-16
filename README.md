@@ -269,7 +269,7 @@ launchd agent has to be booted out separately, which is what the last line does.
 | Codex CLI | turn-complete | yes | knot + braille dot-matrix | via Codex `notify` (auto-installed); no per-tool granularity upstream |
 | Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed) |
 | Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed) |
-| GitHub Copilot CLI | working / done / failed | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session — it reads hook config only at startup). Remote approval is possible and tracked in [#16](https://github.com/michalstrnadel/AgentBar/issues/16) |
+| GitHub Copilot CLI | working / done / failed / **approval** | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session — it reads hook config only at startup). **Remote Allow/Deny** via its `permissionRequest` hook; no "Always", which its output contract has no room for |
 | Qwen Code | working / done / failed | yes | Q ring | Claude-style hooks in `~/.qwen/settings.json` (auto-wired if Qwen is installed); remote approval waits until its decision contract is verified |
 | OpenCode | working / approval / done / failed | yes | prompt chevron | plugin in `~/.config/opencode/plugins/` (auto-installed if OpenCode is installed); observe-only |
 | Google Antigravity | working / done | yes | pixel rainbow arch + dot-matrix | hooks in `~/.gemini/antigravity{,-cli}/hooks.json` (auto-wired); desktop 2.3.x only honors per-workspace `.agents/hooks.json`, and only `PostToolUse` fires — quiet sessions decay to done |
@@ -369,7 +369,7 @@ as the same one.
   <img src="docs/assets/approval-menu.png" width="480" alt="AgentBar menu with a pending Claude Code permission request: yellow needs-approval row, the requested command, and an inline Allow / Deny / Terminal button strip">
 </p>
 
-When a Claude Code session asks for permission, the request appears right under the
+When a Claude Code or Copilot CLI session asks for permission, the request appears right under the
 yellow "needs approval" row: what's requested (e.g. `Bash: git push origin main`; full
 input in the tooltip) plus an inline button strip — **✓ Allow**, **✓ Always** (only
 when Claude Code suggests a rule; the rule is in the tooltip), **✕ Deny**, and
@@ -388,11 +388,13 @@ terminals with no tab targeting (Warp, Ghostty, kitty) it falls back to the app.
 Best-effort by design, and it needs the Accessibility permission (the menu item
 offers to open System Settings until it's granted).
 
-Copilot CLI takes the same path today, but it *does* have a decision hook —
-`permissionRequest`, which can answer allow/deny and falls through to the terminal
-prompt on timeout. Wiring it is tracked in
-[#16](https://github.com/michalstrnadel/AgentBar/issues/16); once it lands,
-Copilot answers like Claude does and needs no keystroke at all.
+**Copilot CLI answers natively too**, through its `permissionRequest` hook — no
+keystroke and no Accessibility permission. Two differences from Claude. There is no
+**✓ Always**: GitHub's output contract is `{behavior, message, interrupt}`, with no
+channel for a standing rule, so an "always" would quietly be a one-shot allow and
+the button is simply not offered. And a session that was *already running* when
+AgentBar installed the hook still falls back to keystrokes — Copilot reads hook
+config only at startup, so remote approval begins with the next `copilot` session.
 
 **Approving a plan** works the same way, for a different reason: Claude Code
 ignores a hook's *allow* at the plan dialog, because approving a plan also
