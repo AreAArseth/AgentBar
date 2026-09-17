@@ -229,6 +229,42 @@ import Testing
         #expect(rows[0].trailing == "2.4 AIU today")
     }
 
+    /// The island's line has room for one window per provider, and it takes the one
+    /// about to run out — the same choice the sentence makes.
+    @Test func theIslandLineTakesTheWindowWithNews() throws {
+        let reading = UsageCenter.Reading(
+            provider: "Codex", text: "x",
+            windows: [UsageWindow(name: "5h", usedPercent: 97,
+                                  resetsAt: Date(timeIntervalSince1970: 1)),
+                      UsageWindow(name: "weekly", usedPercent: 26,
+                                  resetsAt: Date(timeIntervalSinceNow: 86_400))])
+        let rows = UsageMeterView.compactRows(for: [reading])
+        #expect(rows.count == 1)
+        #expect(rows[0].used == 26)          // the 5h one rolled over
+        #expect(rows[0].trailing == "74% left")
+    }
+
+    /// A bar that is nearly full beside a bare "3%" reads as a contradiction: the
+    /// bar says what is gone and the number says what is left. The word settles it.
+    @Test func theIslandNumberSaysWhichHalfItIs() throws {
+        let reading = UsageCenter.Reading(
+            provider: "Codex", text: "x",
+            windows: [UsageWindow(name: "5h", usedPercent: 97,
+                                  resetsAt: Date(timeIntervalSinceNow: 600))])
+        #expect(UsageMeterView.compactRows(for: [reading]).first?.trailing == "3% left")
+    }
+
+    /// A provider with no ceiling keeps its sentence and gets no bar, on the island
+    /// exactly as in the menu.
+    @Test func theIslandLineKeepsAProviderWithoutACeiling() {
+        let rows = UsageMeterView.compactRows(for: [
+            UsageCenter.Reading(provider: "Copilot", text: "2.4 AIU today"),
+        ])
+        #expect(rows.count == 1)
+        #expect(rows[0].used == nil)
+        #expect(rows[0].trailing == "2.4 AIU today")
+    }
+
     @Test func aiuKeepsTheDecimalsThatMatter() {
         #expect(UsageCenter.aiu(33_104_000) == "0.03")   // a morning of small edits
         #expect(UsageCenter.aiu(2_373_072_000) == "2.4")

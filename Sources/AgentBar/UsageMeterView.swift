@@ -17,6 +17,15 @@ import Cocoa
 /// progress views rebuilt whenever a menu opens costs more than the whole rest of
 /// the menu, and buys nothing a `draw(_:)` can't do.
 final class UsageMeterView: NSView {
+    /// Where the block is being drawn.
+    ///
+    /// **menu** is the stacked form: one row per window, names in a column, room
+    /// for a reset time. **islandFooter** is the same information folded onto the
+    /// single line the island already spends on usage — the meter instead of the
+    /// sentence, at the same height, because the island's height is the thing that
+    /// got pushed back on the last time something new wanted to live down there.
+    enum Style { case menu, islandFooter }
+
     /// One line of the block. A window row carries a meter; a plain row is a
     /// provider that publishes no ceiling and gets a number instead — which is
     /// the honest shape, not a lesser one.
@@ -42,6 +51,7 @@ final class UsageMeterView: NSView {
 
     private let rows: [Row]
     private let providerColumn: CGFloat
+    private let style: Style
     /// A column exists when some row uses it, and then it is held open for every
     /// row — so each sentence begins in the same place and a missing meter reads
     /// as missing rather than as a shorter line. A block with no meters at all
@@ -75,10 +85,31 @@ final class UsageMeterView: NSView {
         return out
     }
 
-    init?(readings: [UsageCenter.Reading]) {
-        let rows = Self.rows(for: readings)
+    /// The island's line has room for one window per provider, and it is the one
+    /// about to run out — the same choice the sentence made. Everything else stays
+    /// in the ⋯ menu, which is where detail belongs.
+    static func compactRows(for readings: [UsageCenter.Reading]) -> [Row] {
+        readings.compactMap { r in
+            guard let w = r.windows.first(where: { !$0.expired() }) ?? r.windows.first else {
+                return r.text.isEmpty ? nil : Row(provider: r.provider, window: "",
+                                                  used: nil, trailing: r.text)
+            }
+            guard !w.expired() else {
+                return Row(provider: r.provider, window: "", used: nil, trailing: "window reset")
+            }
+            // "3%" beside a bar that is almost entirely full reads as a
+            // contradiction at a glance — the bar says what is gone, the number
+            // says what is left. One word settles it.
+            return Row(provider: r.provider, window: "", used: w.usedPercent,
+                       trailing: "\(Int(w.remainingPercent.rounded()))% left")
+        }
+    }
+
+    init?(readings: [UsageCenter.Reading], style: Style = .menu) {
+        let rows = style == .menu ? Self.rows(for: readings) : Self.compactRows(for: readings)
         guard !rows.isEmpty else { return nil }
         self.rows = rows
+        self.style = style
         // The label column is as wide as the widest name and no wider — a fixed
         // one would leave a gap on a machine running only Codex.
         self.providerColumn = rows.map {
@@ -87,12 +118,19 @@ final class UsageMeterView: NSView {
         }.max().map { $0 + 10 } ?? 0
         self.windowColumn = rows.contains { !$0.window.isEmpty } ? Self.windowWidth : 0
         self.meterColumn = rows.contains { $0.used != nil } ? Self.meterWidth + 10 : 0
-        super.init(frame: NSRect(x: 0, y: 0, width: 320,
-                                 height: CGFloat(rows.count) * Self.rowHeight + Self.vPad * 2))
+        let height = style == .menu
+            ? CGFloat(rows.count) * Self.rowHeight + Self.vPad * 2
+            : Self.rowHeight
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: height))
         autoresizingMask = [.width]
-        toolTip = readings.compactMap { r in
-            r.detail.map { "\(r.provider)\n\($0)" }
-        }.joined(separator: "\n\n")
+        // On the island the whole line is one tooltip: the full sentence for every
+        // provider, including the window the line had no room for.
+        toolTip = style == .menu
+            ? readings.compactMap { r in r.detail.map { "\(r.provider)\n\($0)" } }
+                .joined(separator: "\n\n")
+            : readings.map { r in
+                ([r.provider + " " + r.text] + (r.detail.map { [$0] } ?? [])).joined(separator: "\n")
+            }.joined(separator: "\n")
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -105,12 +143,52 @@ final class UsageMeterView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        guard style == .menu else { return drawCompact() }
         var y = Self.vPad
         for row in rows {
             draw(row, atTop: y)
             y += Self.rowHeight
         }
     }
+
+    // MARK: - The island's single line
+
+    private static let compactMeter: CGFloat = 34
+    private static let compactGap: CGFloat = 14
+
+    /// `Codex ▔▔▔▔ 74%   Claude ▔▔ 43%` — one line, the height the sentence it
+    /// replaces already had. White rather than label colours: this one is drawn on
+    /// the island's black card, where `labelColor` is whatever the menu bar's
+    /// appearance says and not what is under it.
+    private func drawCompact() {
+        var x: CGFloat = 0
+        let baseline: CGFloat = 2
+        for row in rows {
+            guard x < bounds.width - 40 else { break }   // truncate rather than overflow
+            let name = row.provider as NSString
+            name.draw(at: NSPoint(x: x, y: baseline), withAttributes: [
+                .font: Self.compactLabel,
+                .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+            ])
+            x += name.size(withAttributes: [.font: Self.compactLabel]).width + 6
+
+            if let used = row.used {
+                let meter = NSRect(x: x, y: (bounds.height - Self.meterHeight) / 2,
+                                   width: Self.compactMeter, height: Self.meterHeight)
+                drawMeter(in: meter, used: used, onDark: true)
+                x += Self.compactMeter + 6
+            }
+            let trailing = row.trailing as NSString
+            trailing.draw(at: NSPoint(x: x, y: baseline), withAttributes: [
+                .font: Self.compactDigits,
+                .foregroundColor: NSColor.white.withAlphaComponent(0.55),
+            ])
+            x += trailing.size(withAttributes: [.font: Self.compactDigits]).width + Self.compactGap
+        }
+    }
+
+    private static let compactLabel = NSFont.systemFont(ofSize: 10, weight: .medium)
+    private static let compactDigits = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
 
     private func draw(_ row: Row, atTop y: CGFloat) {
         // Text sits on the row's baseline; the meter centres on the same line, so
@@ -135,7 +213,7 @@ final class UsageMeterView: NSView {
         if let used = row.used {
             drawMeter(in: NSRect(x: x, y: y + (Self.rowHeight - Self.meterHeight) / 2,
                                  width: Self.meterWidth, height: Self.meterHeight),
-                      used: used)
+                      used: used, onDark: false)
         }
         x += meterColumn
 
@@ -153,9 +231,10 @@ final class UsageMeterView: NSView {
     /// value has told you nothing; one that turns amber at four fifths and red at
     /// nineteen twentieths is saying the only thing a colour can usefully say
     /// here.
-    private func drawMeter(in rect: NSRect, used: Double) {
+    private func drawMeter(in rect: NSRect, used: Double, onDark: Bool) {
+        let ink = onDark ? NSColor.white : NSColor.labelColor
         let radius = rect.height / 2
-        NSColor.labelColor.withAlphaComponent(0.12).setFill()
+        ink.withAlphaComponent(onDark ? 0.16 : 0.12).setFill()
         NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
 
         let fraction = min(max(used, 0), 100) / 100
@@ -167,7 +246,7 @@ final class UsageMeterView: NSView {
         switch used {
         case 95...:  fill = NSColor.systemRed
         case 80...:  fill = NSColor.systemOrange
-        default:     fill = NSColor.labelColor.withAlphaComponent(0.55)
+        default:     fill = ink.withAlphaComponent(onDark ? 0.5 : 0.55)
         }
         fill.setFill()
         NSBezierPath(roundedRect: NSRect(x: rect.minX, y: rect.minY,
@@ -213,11 +292,40 @@ extension UsageMeterView {
                                       resetsAt: now.addingTimeInterval(-60))]),
             UsageCenter.Reading(provider: "Copilot", text: "2.4 AIU today"),
         ]
-        guard let view = UsageMeterView(readings: readings) else { return false }
-        view.frame = NSRect(x: 0, y: 0, width: 340, height: view.frame.height)
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        guard let menu = UsageMeterView(readings: readings),
+              let island = UsageMeterView(readings: readings, style: .islandFooter)
+        else { return false }
+        menu.frame = NSRect(x: 0, y: 0, width: 340, height: menu.frame.height)
+        island.frame = NSRect(x: 0, y: 0, width: 400, height: island.frame.height)
+
+        // Both styles in one image, the island's line on its own black card the way
+        // it is actually seen — a light-on-light screenshot of a dark surface has
+        // told nobody anything.
+        let gap: CGFloat = 12
+        let size = NSSize(width: 400, height: menu.frame.height + island.frame.height + gap * 2)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor.black.setFill()
+        NSRect(x: 0, y: 0, width: size.width, height: island.frame.height + gap).fill()
+        // Each view is cached with the background it is actually seen on:
+        // `cacheDisplay` on a view with no window fills opaque white, which drew
+        // the island's white-on-black line as white on white and looked, from the
+        // outside, exactly like text that was never drawn at all.
+        for (view, origin, back) in [(menu, NSPoint(x: 0, y: island.frame.height + gap * 2),
+                                      NSColor.white),
+                                     (island, NSPoint(x: 10, y: gap / 2), NSColor.black)] {
+            view.wantsLayer = true
+            view.layer?.backgroundColor = back.cgColor
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            rep.draw(in: NSRect(origin: origin, size: view.frame.size))
+        }
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return false }
         return (try? data.write(to: url)) != nil
     }
 }

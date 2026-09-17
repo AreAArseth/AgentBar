@@ -558,19 +558,17 @@ final class IslandController: NSObject {
         dots.toolTip = "AgentBar"
 
         var views: [NSView] = []
-        let usage = UsageCenter.shared.readings
-        if !usage.isEmpty {
-            let text = usage.map { "\($0.provider) \($0.text)" }.joined(separator: "   ")
-            let l = NSTextField(labelWithString: text)
-            l.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-            l.textColor = NSColor.white.withAlphaComponent(0.38)
-            l.lineBreakMode = .byTruncatingTail
-            // The quota line truncates; it must never squeeze the ⋯ button out.
-            l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            l.toolTip = usage.compactMap { r in
-                r.detail.map { "\(r.provider): \($0)" }
-            }.joined(separator: "\n")
-            views.append(l)
+        // The same line the footer always spent on quota, drawn instead of
+        // written: a meter reads at a glance and a sentence does not, and at this
+        // size they cost the same height. The full numbers stay one tooltip and
+        // one ⋯ away.
+        if let meters = UsageMeterView(readings: UsageCenter.shared.readings,
+                                       style: .islandFooter) {
+            meters.translatesAutoresizingMaskIntoConstraints = false
+            meters.heightAnchor.constraint(equalToConstant: meters.frame.height).isActive = true
+            // It must never squeeze the ⋯ button out; it truncates instead.
+            meters.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            views.append(meters)
         }
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)

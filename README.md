@@ -149,8 +149,10 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   island as formatted Markdown (scrollable when long). **Keep planning** sends
   Claude back to refine it without touching the terminal; **Approve plan** jumps
   to the session's exact tab and answers the plan dialog for you.
-- **What's left, at a glance** — one small meter per provider in the menu, answering
-  one question: how much is spent and how much is left. **Codex** reports the exact
+- **What's left, at a glance** — one small meter per provider, answering one
+  question: how much is spent and how much is left. On the **island** it is the
+  footer line, drawn rather than written, at the height that line always had; in
+  the **menu** it is the fuller block, with both windows and their reset times. **Codex** reports the exact
   percentage of its 5-hour and weekly windows with real reset times, plus a credit
   balance when the account has one. **Copilot** carries its own priced ledger, so its
   line is what it actually charged today in its own AIU — and it gets *no* bar, because

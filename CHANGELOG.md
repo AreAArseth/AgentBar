@@ -3,6 +3,21 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.23.0 - 2026-09-17
+
+### Changed
+
+- **The island shows the meters, not a sentence about them.** 1.19.0 put the usage
+  block in the menu, which on an island-only setup is behind the ⋯ and therefore
+  nowhere anyone would find it. The island's footer already spent one line on
+  quota; that line is now drawn instead of written — a small bar per provider and
+  what is left of it, at exactly the height the sentence had. The reset times and
+  the second window stay one tooltip and one ⋯ away.
+
+  The number says **"3% left"** rather than "3%": a bar that is nearly full beside
+  a bare number reads as a contradiction, because the bar says what is gone and the
+  number says what is left.
+
 ## 1.22.0 - 2026-09-17
 
 ### Added
