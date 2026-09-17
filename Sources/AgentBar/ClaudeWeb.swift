@@ -57,17 +57,38 @@ enum ClaudeWeb {
         }
     }
 
-    /// Empties AgentBar's own cookie store of everything claude.ai put there.
-    /// The one place a sign-in can be undone, and it undoes all of it.
+    /// Empties AgentBar's own store of everything claude.ai put there. The one
+    /// place a sign-in can be undone, and it undoes all of it.
+    ///
+    /// Everything, not just the cookie: signing out to sign back in **as
+    /// somebody else** is the reason people press this, and a site that still
+    /// has its local storage can put you straight back into the account you were
+    /// trying to leave. So the site's whole record goes — cookies, local
+    /// storage, databases, caches — and then the cookie jar is swept again by
+    /// hand, because a record list can be stale.
     static func signOut(_ done: @escaping () -> Void) {
+        // First, so that a failure halfway through leaves the app claiming
+        // nothing rather than claiming a session it no longer has.
+        connected = false
+        let data = WKWebsiteDataStore.default()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        data.fetchDataRecords(ofTypes: types) { records in
+            let mine = records.filter {
+                $0.displayName == host || $0.displayName.hasSuffix("." + host)
+            }
+            data.removeData(ofTypes: types, for: mine) { sweepCookies(done) }
+        }
+    }
+
+    private static func sweepCookies(_ done: @escaping () -> Void) {
         store.getAllCookies { cookies in
             let mine = cookies.filter { $0.domain.hasSuffix(host) }
-            guard !mine.isEmpty else { connected = false; done(); return }
+            guard !mine.isEmpty else { done(); return }
             var left = mine.count
             for cookie in mine {
                 store.delete(cookie) {
                     left -= 1
-                    if left == 0 { connected = false; done() }
+                    if left == 0 { done() }
                 }
             }
         }

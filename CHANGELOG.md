@@ -16,6 +16,10 @@ All notable changes to AgentBar are documented here. This project follows
   but a rule now.
 - The window's height allowed 48 points for what sits above and below a page and
   needed 76, so the tallest page could get a scroller for no visible reason.
+- **Sign out now empties the whole site record**, not just the session cookie.
+  People press that button to sign back in as somebody else, and a site that
+  still holds its local storage can put you straight back into the account you
+  were trying to leave.
 
 ## 1.27.0 - 2026-09-17
 
