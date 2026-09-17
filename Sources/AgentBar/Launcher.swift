@@ -51,8 +51,13 @@ enum Launcher {
     /// and `opencode` document a prompt flag for their *non-interactive* modes,
     /// which is a different thing entirely, and guessing would start a session that
     /// exits immediately with the work undone.
-    static func argv(for task: Task) -> [String]? {
-        guard let cli = task.agent.cli, let tool = resolve(cli) else { return nil }
+    ///
+    /// `using` is how the tool is found, injectable so the shape of the command can
+    /// be tested on a machine that has none of these agents installed — which is
+    /// every CI runner, and was how this first went red.
+    static func argv(for task: Task,
+                     using find: (String) -> String? = { resolve($0) }) -> [String]? {
+        guard let cli = task.agent.cli, let tool = find(cli) else { return nil }
         let prompt = task.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard task.agent.takesPrompt, !prompt.isEmpty else { return [tool] }
         return [tool, prompt]
@@ -60,8 +65,9 @@ enum Launcher {
 
     /// One line a shell will run: into the directory, then the agent. Used where a
     /// terminal takes a command string rather than an argument vector.
-    static func shellCommand(for task: Task) -> String? {
-        guard let argv = argv(for: task) else { return nil }
+    static func shellCommand(for task: Task,
+                             using find: (String) -> String? = { resolve($0) }) -> String? {
+        guard let argv = argv(for: task, using: find) else { return nil }
         return "cd " + quote(task.cwd) + " && " + argv.map(quote).joined(separator: " ")
     }
 

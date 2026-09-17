@@ -6,6 +6,9 @@ import Testing
 /// person typed meets a shell, so most of this is about that meeting.
 @Suite struct LauncherTests {
     private func agent(_ id: String) -> Agent { Agent.byID(id) }
+    /// A stand-in for "the tool is installed". None of these agents exist on a CI
+    /// runner, and the shape of the command is worth testing anyway.
+    private let anywhere: (String) -> String? = { "/opt/agents/" + $0 }
 
     // MARK: - Quoting
 
@@ -39,7 +42,7 @@ import Testing
 
     @Test func theCommandStartsByEnteringTheDirectory() throws {
         let task = Launcher.Task(agent: agent("claude"), cwd: "/tmp", prompt: "hi")
-        let line = try #require(Launcher.shellCommand(for: task))
+        let line = try #require(Launcher.shellCommand(for: task, using: anywhere))
         #expect(line.hasPrefix("cd '/tmp' && "))
     }
 
@@ -47,7 +50,7 @@ import Testing
         let task = Launcher.Task(agent: agent("claude"),
                                  cwd: "/Users/me/Documents/Macbook M3/Warp/AgentBar",
                                  prompt: "hi")
-        let line = try #require(Launcher.shellCommand(for: task))
+        let line = try #require(Launcher.shellCommand(for: task, using: anywhere))
         #expect(line.hasPrefix("cd '/Users/me/Documents/Macbook M3/Warp/AgentBar' &&"))
     }
 
@@ -79,9 +82,12 @@ import Testing
     /// the prompt left for the person to type where the agent can hear it.
     @Test func anAgentWithoutAPromptArgumentStillOpens() throws {
         let task = Launcher.Task(agent: agent("copilot"), cwd: "/tmp", prompt: "do the thing")
-        guard let argv = Launcher.argv(for: task) else { return }  // not installed here
-        #expect(argv.count == 1)
-        #expect(!argv.joined().contains("do the thing"))
+        let argv = try #require(Launcher.argv(for: task, using: anywhere))
+        #expect(argv == ["/opt/agents/copilot"])
+
+        let claude = Launcher.Task(agent: agent("claude"), cwd: "/tmp", prompt: "do the thing")
+        #expect(Launcher.argv(for: claude, using: anywhere)
+                == ["/opt/agents/claude", "do the thing"])
     }
 
     // MARK: - Recent projects
