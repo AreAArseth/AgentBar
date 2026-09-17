@@ -18,6 +18,15 @@ All notable changes to AgentBar are documented here. This project follows
   to reach for, and the refresh stopped before it got that far. Every WebKit
   touch now goes through one hop to the main thread — immediate when it is
   already there, because the sign-in window acts on what it gets back.
+- **The quota line stopped appearing on the island at all, on and off.** It sits
+  in a row beside the ⋯ button, where nothing stretches it — and it never stated
+  a width of its own, so the layout was ambiguous and the solver was free to
+  resolve it either way. When it resolved against the line, the line was given
+  zero width and drew nothing. It came back on the next rebuild, which is what
+  made it look random; what actually changed was the number of providers on the
+  line. It now states exactly the width it draws, measured the same way, and a
+  line too narrow for even its first reading draws that one clipped rather than
+  drawing nothing.
 
 ## 1.27.1 - 2026-09-17
 

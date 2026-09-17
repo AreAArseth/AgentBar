@@ -147,8 +147,15 @@ final class UsageMeterView: NSView {
         let height = style == .menu
             ? CGFloat(rows.count) * Self.rowHeight + Self.vPad * 2
             : Self.rowHeight
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: height))
-        autoresizingMask = [.width]
+        // The menu's block is stretched to the menu's width by its autoresizing
+        // mask. The island's line is not stretched by anything — it sits in a
+        // stack beside the ⋯ button — so it has to state its own width or the
+        // solver is free to pick one, and one of the widths it is free to pick
+        // is zero. See `intrinsicContentSize`.
+        super.init(frame: NSRect(x: 0, y: 0,
+                                 width: style == .menu ? 320 : Self.compactWidth(of: rows),
+                                 height: height))
+        if style == .menu { autoresizingMask = [.width] }
         // On the island the whole line is one tooltip: the full sentence for every
         // provider, including the window the line had no room for.
         toolTip = style == .menu
@@ -159,6 +166,36 @@ final class UsageMeterView: NSView {
             }.joined(separator: "\n")
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// What the island's line actually needs.
+    ///
+    /// Without this the view had no intrinsic width at all: `NSView` answers
+    /// `noIntrinsicMetric`, the footer stack put it next to a spacer with the
+    /// same hugging priority, and the solver was free to resolve that ambiguity
+    /// either way. When it resolved against the line, the line was given zero
+    /// width and drew nothing — the quota simply vanished from the island, and
+    /// came back on the next rebuild, which is what made it look intermittent.
+    override var intrinsicContentSize: NSSize {
+        style == .menu
+            ? NSSize(width: NSView.noIntrinsicMetric, height: frame.height)
+            : NSSize(width: Self.compactWidth(of: rows), height: Self.rowHeight)
+    }
+
+    /// Measured exactly the way `drawCompact` draws, because a width that
+    /// disagrees with the drawing is a clipped line or a gap, and both read as a
+    /// bug. Pure, over the rows alone, so it can be checked without a view.
+    static func compactWidth(of rows: [Row]) -> CGFloat {
+        var x: CGFloat = 0
+        for row in rows {
+            x += (row.provider as NSString)
+                .size(withAttributes: [.font: compactLabel]).width + 6
+            if row.used != nil { x += compactMeter + 6 }
+            x += (row.trailing as NSString)
+                .size(withAttributes: [.font: compactDigits]).width + compactGap
+        }
+        // The gap goes *between* readings; the last one does not need one after it.
+        return max(0, x - compactGap)
+    }
 
     /// Rows are laid out top-down, in the order they are read. Without this they
     /// come out bottom-up: the first provider at the foot of the block, its
@@ -190,7 +227,10 @@ final class UsageMeterView: NSView {
         var x: CGFloat = 0
         let baseline: CGFloat = 2
         for row in rows {
-            guard x < bounds.width - 40 else { break }   // truncate rather than overflow
+            // Truncate rather than overflow — but never draw nothing. A line
+            // squeezed narrower than its first reading used to come out empty,
+            // which looks like a broken app rather than a narrow one.
+            guard x == 0 || x < bounds.width - 40 else { break }
             let name = row.provider as NSString
             name.draw(at: NSPoint(x: x, y: baseline), withAttributes: [
                 .font: Self.compactLabel,

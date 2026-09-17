@@ -571,6 +571,11 @@ final class IslandController: NSObject {
                                        tooltipReadings: all) {
             meters.translatesAutoresizingMaskIntoConstraints = false
             meters.heightAnchor.constraint(equalToConstant: meters.frame.height).isActive = true
+            // Exactly its own width, and the spacer takes the rest. Both used to
+            // hug at the same priority, which left the solver free to decide
+            // between them — and when it decided against the line, the line got
+            // no width and the quota vanished off the island.
+            meters.setContentHuggingPriority(.defaultHigh, for: .horizontal)
             // It must never squeeze the ⋯ button out; it truncates instead.
             meters.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             views.append(meters)

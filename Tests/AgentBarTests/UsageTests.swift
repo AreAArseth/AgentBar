@@ -600,6 +600,31 @@ import Testing
         #expect(mine.token == "pasted-by-hand")
     }
 
+    /// The island's quota line sits in a stack next to the ⋯ button, so nothing
+    /// stretches it and nothing else states its width. Without a width of its
+    /// own the solver was free to give it zero — and did, sometimes, which is
+    /// how the quota disappeared off the island and came back on the next
+    /// rebuild. Measured over the rows alone, so this needs no view.
+    @Test func theIslandLineStatesItsOwnWidth() {
+        typealias Row = UsageMeterView.Row
+        let one = [Row(provider: "Claude", window: "", used: 16, trailing: "84% left")]
+        let two = one + [Row(provider: "Codex", window: "", used: 97, trailing: "3% left")]
+
+        let single = UsageMeterView.compactWidth(of: one)
+        #expect(single > 60)
+        // Two readings need room for two; this is the case that was being
+        // squeezed to nothing when Codex crossed the line and joined Claude.
+        #expect(UsageMeterView.compactWidth(of: two) > single)
+
+        // A reading with no meter is narrower than the same one with a bar, and
+        // still wider than nothing.
+        let sentence = [Row(provider: "Claude", window: "", used: nil,
+                            trailing: "~654k tok this 5h block")]
+        let bare = UsageMeterView.compactWidth(of: sentence)
+        #expect(bare > 0)
+        #expect(UsageMeterView.compactWidth(of: []) == 0)
+    }
+
     // MARK: - The signed-in web session
 
     /// WebKit initialises itself the first time anything touches it, and traps
