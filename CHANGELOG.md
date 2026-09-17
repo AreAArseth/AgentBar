@@ -7,14 +7,15 @@ All notable changes to AgentBar are documented here. This project follows
 
 ### Fixed
 
-- **The page's name is over the page.** AppKit centres a window's title across
+- **The floating page title is gone.** AppKit centres a window's title across
   the whole window, and a third of the Settings window is sidebar — so "Usage"
-  and "Approvals" sat a third of the way into the content, lined up with nothing,
-  the one thing on the page placed by accident. The title is now drawn over the
-  content column, level with the traffic lights, in the system's own title-bar
-  face, and it dims with the window the way a real one does.
+  and "Approvals" sat a third of the way into the content, lined up with nothing.
+  Rather than align it, it is removed: the sidebar's selected row names the page,
+  which is how System Settings has always done it, and the band at the top is
+  left clear for the traffic lights. Nothing in that window is placed by anything
+  but a rule now.
 - The window's height allowed 48 points for what sits above and below a page and
-  needed 68, so the tallest page could get a scroller for no visible reason.
+  needed 76, so the tallest page could get a scroller for no visible reason.
 
 ## 1.27.0 - 2026-09-17
 

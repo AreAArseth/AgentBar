@@ -89,7 +89,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var sidebarItems: [SidebarItem] = []
     private var pageViews: [Page: NSView] = [:]
     private var pageHost: NSView!
-    private var pageTitle: NSTextField!
     private(set) var page: Page = .general
 
     /// Lives in one place because the caption is rebuilt from scratch whenever macOS
@@ -167,8 +166,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         sidebar.addSubview(list)
 
         // ---- the page ----
-        pageTitle = SettingsChrome.title(page.title)
-        pageTitle.translatesAutoresizingMaskIntoConstraints = false
         pageHost = NSView()
         pageHost.translatesAutoresizingMaskIntoConstraints = false
 
@@ -188,7 +185,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // current when the window was built.
         let content = SettingsSurface(fill: { .textBackgroundColor })
         content.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(pageTitle)
         content.addSubview(scroll)
 
         let root = NSView(frame: NSRect(x: 0, y: 0,
@@ -215,19 +211,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             content.topAnchor.constraint(equalTo: root.topAnchor),
             content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
 
-            // Level with the traffic lights and centred on the page, not on the
-            // window: the sidebar is not part of what this names.
-            pageTitle.centerYAnchor.constraint(equalTo: content.topAnchor,
-                                               constant: SettingsChrome.titleBand / 2),
-            pageTitle.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            pageTitle.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor,
-                                               constant: SettingsChrome.Space.page),
-
-            // From the band, not from the title: a one-line label's own height is
-            // not what sets where a page begins.
+            // Nothing is drawn in the band above the page — the sidebar's
+            // selected row is what names it, the way System Settings does it.
+            // The band is kept because the traffic lights are in it.
             scroll.topAnchor.constraint(equalTo: content.topAnchor,
                                         constant: SettingsChrome.titleBand
-                                            + SettingsChrome.Space.gap),
+                                            + SettingsChrome.Space.page),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -465,7 +454,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     private func select(_ page: Page) {
         self.page = page
-        pageTitle.stringValue = page.title
         window?.title = page.title
         for item in sidebarItems { item.isSelected = item.page == page }
         for sub in pageHost.subviews { sub.removeFromSuperview() }
@@ -503,12 +491,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             view.layoutSubtreeIfNeeded()
             return view.fittingSize.height
         }.max() ?? 0
-        // What the page itself does not measure: the title band above it, the gap
+        // What the page itself does not measure: the band above it, the margin
         // under that, and its own bottom margin inside the scroller. Guessed at
-        // twice the page margin before, which was 20-odd points short — enough to
-        // put a scroller on the tallest page for no reason anybody could see.
-        let chrome = SettingsChrome.titleBand + SettingsChrome.Space.gap
-            + SettingsChrome.Space.page
+        // twice the page margin before, which was 28 points short — enough to put
+        // a scroller on the tallest page for no reason anybody could see.
+        let chrome = SettingsChrome.titleBand + SettingsChrome.Space.page * 2
         let height = min(max(tallest + chrome, SettingsChrome.minWindowHeight),
                          SettingsChrome.maxWindowHeight)
         window.setContentSize(NSSize(width: window.frame.width, height: height))
@@ -807,14 +794,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// still-armed recorder would leave the hotkeys suspended forever. End it now.
     func windowDidResignKey(_ notification: Notification) {
         cancelCaptures()
-        // AppKit dims a window's own title when the window is not key. This one
-        // is drawn by hand, so the dimming is too — without it, an inactive
-        // Settings window reads as the active one.
-        pageTitle?.textColor = .secondaryLabelColor
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        pageTitle?.textColor = .labelColor
     }
 
     private func speakerGlyph(_ symbol: String) -> NSImageView {
@@ -848,7 +827,12 @@ extension SettingsWindow {
         if window == nil { build() }
         reload()
         select(page)
-        guard let root = window?.contentView else { return false }
+        // The frame view, not the content view: the title bar is where the bug
+        // that needed looking at lived, and a render that crops it off cannot
+        // show whether anything is drawn there. Falls back to the content view
+        // on any AppKit that does not hand the frame over.
+        guard let root = window?.contentView?.superview ?? window?.contentView
+        else { return false }
         root.layoutSubtreeIfNeeded()
         guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return false }
         root.cacheDisplay(in: root.bounds, to: rep)
