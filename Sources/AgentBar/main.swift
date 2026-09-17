@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.island.apply(sessions: sessions, requests: self.requestStore.requests)
             }
         }
+        // The launcher reads the same poll every other surface does, rather than
+        // going to disk for a session list of its own.
+        LauncherPanel.sessions = { [weak self] in self?.sessions ?? [] }
         TodayStripView.onChange = { [weak self] in
             guard let self, self.islandRunning else { return }
             self.island.settingsChanged()
@@ -111,6 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // it next to islandExpandDebug.
         if UserDefaults.standard.bool(forKey: "settingsOnLaunchDebug") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { SettingsWindow.shared.show() }
+        }
+        // Same reason, for the launcher: it is a panel that closes the instant it
+        // loses focus, which is exactly what happens when you go to look at it.
+        if UserDefaults.standard.bool(forKey: "launcherOnLaunchDebug") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { LauncherPanel.shared.show() }
         }
     }
 

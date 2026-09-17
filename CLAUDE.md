@@ -37,6 +37,11 @@ open "build/AgentBar.app"
    posted fifty banners. An agent finishing is not news. See `Notifier`.
    Windows are the exception, not the pattern: only `WelcomeWindow`
    and `SettingsWindow`, both small, both opened by the user.
+   `LauncherPanel` is the third surface and the only one summoned by a keystroke.
+   It earns that by the same test the banners do: it takes no space until asked,
+   it appears only on a deliberate keypress or menu click, and it closes the
+   instant it loses focus. A surface that can appear without being asked for, or
+   that stays once you look away, does not belong here.
 3. Hooks must never block the host agent: async, atomic writes, exit fast.
    Sole exception: `permission.js` blocks while the session is already waiting on
    the human, and must always time out silently to the normal terminal prompt.

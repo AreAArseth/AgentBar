@@ -122,6 +122,15 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   branch, state and elapsed time; click a row to jump to its app or terminal.
 - **Open anything** — launch any supported agent (Claude, Codex, Copilot,
   Antigravity, Cursor, Gemini, Qwen, OpenCode) straight from the menu.
+- **Start a task, not just an agent** — **New task…** in the menu (or ⌥⌘N, once you
+  switch that on) opens a small panel: a project you have worked in, an agent, and a
+  line of what you want. The agent opens in a terminal, in that directory, with the
+  prompt already given. It closes the moment it loses focus and takes no space until
+  you ask for it. The prompt goes in as an argument, never as synthesized
+  keystrokes, and only to the agents whose CLI documents one — the rest open in the
+  right place and wait for you to type. A terminal that can't be handed a command
+  (Warp) gets the command on your clipboard and says so, rather than opening on the
+  wrong thing.
 - **Two looks** — full-color mascots, or a monochrome System mode that matches the menu bar.
 - **Remote Allow/Deny** — answer Claude Code permission prompts straight from the menu:
   see exactly what's requested, then Allow once, Always allow, Deny, or defer to terminal.

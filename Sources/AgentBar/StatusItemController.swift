@@ -95,11 +95,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var lastHotkey = Date.distantPast
 
     private func applyHotKeyState() {
-        HotKeyCenter.shared.setEnabled(approvalShortcutEnabled,
-            allow: KeyCombo.allow, deny: KeyCombo.deny,
-            onAllow: { [weak self] in self?.hotkeyAnswer("allow") },
-            onDeny:  { [weak self] in self?.hotkeyAnswer("deny") })
+        var bindings: [(combo: KeyCombo, handler: () -> Void)] = []
+        if approvalShortcutEnabled {
+            bindings.append((KeyCombo.allow, { [weak self] in self?.hotkeyAnswer("allow") }))
+            bindings.append((KeyCombo.deny, { [weak self] in self?.hotkeyAnswer("deny") }))
+        }
+        if LauncherPanel.shortcutEnabled {
+            bindings.append((KeyCombo.launch, { LauncherPanel.shared.toggle() }))
+        }
+        HotKeyCenter.shared.apply(bindings)
     }
+
+    @objc func openLauncher(_ sender: Any?) { LauncherPanel.shared.show() }
 
     /// Answer the newest pending PERMISSION request. Debounced so a held chord
     /// can't double-fire. Questions are skipped: Allow/Deny is not an answer to

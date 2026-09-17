@@ -13,10 +13,15 @@ struct KeyCombo: Equatable {
                                        carbonModifiers: UInt32(optionKey | cmdKey), display: "⌥⌘A")
     static let defaultDeny = KeyCombo(keyCode: UInt32(kVK_ANSI_D),
                                       carbonModifiers: UInt32(optionKey | cmdKey), display: "⌥⌘D")
+    /// Opens the launcher. ⌥⌘N for "new", and next to the other two so the three
+    /// live on one finger pattern.
+    static let defaultLaunch = KeyCombo(keyCode: UInt32(kVK_ANSI_N),
+                                        carbonModifiers: UInt32(optionKey | cmdKey), display: "⌥⌘N")
 
     /// The currently configured combos (defaults when never customized).
     static var allow: KeyCombo { stored("allowHotKey", fallback: .defaultAllow) }
     static var deny: KeyCombo { stored("denyHotKey", fallback: .defaultDeny) }
+    static var launch: KeyCombo { stored("launchHotKey", fallback: .defaultLaunch) }
 
     static func stored(_ key: String, fallback: KeyCombo) -> KeyCombo {
         guard let d = UserDefaults.standard.dictionary(forKey: key),
@@ -44,19 +49,20 @@ final class HotKeyCenter {
     private var installed = false
     private var nextID: UInt32 = 1
 
-    /// Turn the Allow/Deny hotkeys on or off with the given combos.
-    func setEnabled(_ enabled: Bool, allow: KeyCombo, deny: KeyCombo,
-                    onAllow: @escaping () -> Void, onDeny: @escaping () -> Void) {
+    /// Replaces every registration with exactly these. One call rather than one per
+    /// feature, because registering is all-or-nothing here: anything that starts by
+    /// clearing the table would silently drop somebody else's chord, and two
+    /// features owning global keys is now the normal case.
+    func apply(_ bindings: [(combo: KeyCombo, handler: () -> Void)]) {
         unregisterAll()
-        guard enabled else { return }
+        guard !bindings.isEmpty else { return }
         installHandlerIfNeeded()
-        register(combo: allow, handler: onAllow)
-        register(combo: deny, handler: onDeny)
+        for binding in bindings { register(combo: binding.combo, handler: binding.handler) }
     }
 
     /// Release the registrations without forgetting the configuration — used while
     /// the Settings recorder captures keystrokes, so pressing the current combo
-    /// records it instead of firing an answer. Re-enable via `setEnabled`.
+    /// records it instead of firing an answer. Re-enable via `apply`.
     func suspend() {
         unregisterAll()
     }

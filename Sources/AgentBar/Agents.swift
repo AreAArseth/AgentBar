@@ -34,22 +34,38 @@ struct Agent {
     /// nil = no keystroke backend (Claude has the native hook path; Antigravity is an IDE).
     let approveKeys: [CGKeyCode]?
 
+    /// The command that starts this agent in a terminal, if it has one. nil for the
+    /// agents that only exist as an app or in somebody's cloud — the launcher does
+    /// not offer those, because it could not start them.
+    var cli: String?
+    /// Whether that command takes the prompt as a plain argument.
+    ///
+    /// **Verified, not assumed** — each `true` here was read out of the tool's own
+    /// `--help`. Copilot, OpenCode and Qwen document a prompt *flag* for their
+    /// non-interactive modes, which is a different thing: guessing would start a
+    /// session that runs once and exits with the work half done, so they open in
+    /// the directory and wait for you to type.
+    var takesPrompt = false
+
     static let all: [Agent] = [
         Agent(id: "claude", name: "Claude",
               brand: NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1), // #D97757
               artwork: .frames(clawdCrabFramePNGs, fps: 12.5),
               open: .bundle("com.anthropic.claudefordesktop"),
-              approveKeys: nil),
+              approveKeys: nil,
+              cli: "claude", takesPrompt: true),        // claude [options] [prompt]
         Agent(id: "codex", name: "Codex",
               brand: NSColor(srgbRed: 0.063, green: 0.639, blue: 0.498, alpha: 1), // #10A37F
               artwork: .markFrames(codexMascotFramePNGs, fps: 11),
               open: .terminal,
-              approveKeys: [36]), // Return — Codex prompts default to approve
+              approveKeys: [36], // Return — Codex prompts default to approve
+              cli: "codex", takesPrompt: true),         // codex [OPTIONS] [PROMPT]
         Agent(id: "copilot", name: "Copilot",
               brand: NSColor(srgbRed: 0.510, green: 0.314, blue: 0.875, alpha: 1), // #8250DF
               artwork: .frames(copilotMascotFramePNGs, fps: 11),
               open: .terminal,
-              approveKeys: [16, 36]), // "y" then Return
+              approveKeys: [16, 36], // "y" then Return
+              cli: "copilot"),                          // -p is non-interactive only
         Agent(id: "antigravity", name: "Antigravity",
               brand: NSColor(srgbRed: 0.259, green: 0.522, blue: 0.957, alpha: 1), // #4285F4
               artwork: .markFrames(antigravityMascotFramePNGs, fps: 11),
@@ -60,24 +76,28 @@ struct Agent {
               brand: .labelColor, // Cursor's brand is monochrome; adapt to menu appearance
               artwork: .appIconMark(cursorLogoPNG),
               open: .terminal,
-              approveKeys: nil),
+              approveKeys: nil,
+              cli: "cursor-agent", takesPrompt: true),  // agent [options] [prompt...]
         Agent(id: "gemini", name: "Gemini",
               brand: NSColor(srgbRed: 0.102, green: 0.502, blue: 0.992, alpha: 1), // #1A80FD — CLI icon blue
               artwork: .colorMark(geminiLogoPNG),
               open: .terminal,
-              approveKeys: nil),
+              approveKeys: nil,
+              cli: "gemini", takesPrompt: true),        // gemini [query..]
         // Hook-driven live status: Qwen Code speaks Claude-style hooks
         // (~/.qwen/settings.json), OpenCode loads a JS plugin.
         Agent(id: "qwen", name: "Qwen",
               brand: NSColor(srgbRed: 0.380, green: 0.361, blue: 0.929, alpha: 1), // #615CED
               artwork: .tintedMark(qwenMarkPNG),
               open: .terminal,
-              approveKeys: nil),
+              approveKeys: nil,
+              cli: "qwen"),                             // prompt argument unverified
         Agent(id: "opencode", name: "OpenCode",
               brand: .labelColor, // monochrome brand; adapt to menu appearance
               artwork: .appIconMark(opencodeMarkPNG),
               open: .terminal,
-              approveKeys: nil),
+              approveKeys: nil,
+              cli: "opencode"),                         // `run` is non-interactive only
         // Cloud-only: rows come from the external poller (Scripts/cloud), never hooks.
         Agent(id: "devin", name: "Devin",
               brand: NSColor(srgbRed: 0.169, green: 0.502, blue: 1.0, alpha: 1), // #2B80FF

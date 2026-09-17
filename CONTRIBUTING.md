@@ -92,6 +92,9 @@ defaults write com.michalstrnadel.agentbar presentationMode -string island  # or
 defaults delete com.michalstrnadel.agentbar showWelcomeOnLaunch             # first-run window back
 defaults write com.michalstrnadel.agentbar islandExpandDebug -bool true     # hold the island open (layout work)
 defaults write com.michalstrnadel.agentbar settingsOnLaunchDebug -bool true # open Settings on launch (layout work)
+defaults write com.michalstrnadel.agentbar launcherOnLaunchDebug -bool true # open the launcher on launch — it closes
+                                                                           # the instant it loses focus, which is what
+                                                                           # happens when you go and look at it
 defaults write com.michalstrnadel.agentbar notifyProbeDebug -bool true      # ask for notification permission at launch and
                                                                            # write the answer to ~/.agentbar/notify-probe.txt
 defaults write com.michalstrnadel.agentbar notifyQuietDebug -bool true      # "all quiet" after 10s instead of 2min, and

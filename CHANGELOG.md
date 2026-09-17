@@ -3,6 +3,45 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.22.0 - 2026-09-17
+
+### Added
+
+- **Start a task, not just an agent.** The menu could always bring an agent
+  forward; it could never put one in a particular repository with a particular job.
+  **New task…** — or ⌥⌘N once you switch the chord on — opens a small panel: a
+  project you have worked in, an agent, and a line of what you want. The agent opens
+  in a terminal, in that directory, with the prompt already given.
+
+  It is the app's third surface and the first one summoned by a keystroke, so it
+  earns that the same way the banners do, and rule 2 now says so: it takes no space
+  until asked, it appears only on a deliberate press or click, and it closes the
+  instant it loses focus.
+
+  Two refusals are the feature:
+
+  - **The prompt is never typed as keystrokes.** It goes in as an argument, through
+    one escaper — checked against a real `/bin/sh`, not against the shape of a
+    string. Synthesizing arbitrary text into whatever happens to be in front, with
+    somebody's shell on the other end, is not a thing this app will do.
+  - **Only agents whose CLI documents a prompt argument get one**: Claude, Codex,
+    Cursor and Gemini, each read out of the tool's own `--help`. Copilot, OpenCode
+    and Qwen document a prompt *flag* for their non-interactive modes, which is a
+    different thing — guessing would start a session that runs once and exits with
+    the work half done. They open in the right directory and wait for you to type,
+    and the panel says so before you press return.
+
+  Terminals it can hand a command to: Terminal.app and iTerm2 (AppleScript, the
+  consent macOS already asks for), Ghostty, WezTerm, kitty and Alacritty (their own
+  CLIs). Warp has no documented way in, so the command goes to the clipboard and the
+  panel says that out loud — a half-started session is worse than an unstarted one.
+
+### Changed
+
+- Global shortcuts are registered as one list rather than one pair, because two
+  features now own chords and anything that starts by clearing the table would
+  silently drop the other one's.
+
 ## 1.21.0 - 2026-09-17
 
 ### Fixed

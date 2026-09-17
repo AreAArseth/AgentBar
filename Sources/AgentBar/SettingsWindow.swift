@@ -19,6 +19,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var enableBox: NSButton!
     private var allowRecorder: ShortcutRecorder!
     private var denyRecorder: ShortcutRecorder!
+    private var launchBox: NSButton!
+    private var launchRecorder: ShortcutRecorder!
     private var soundsBox: NSButton!
     private var volumeSlider: NSSlider!
     private var testButton: NSButton!
@@ -95,26 +97,38 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let enableCaption = caption(
             "Answer the newest pending permission request from anywhere,\nwithout opening the menu. No Accessibility permission needed.")
 
+        launchBox = NSButton(checkboxWithTitle: "Launcher shortcut",
+                             target: self, action: #selector(toggleLauncher))
+        let launchCaption = caption(
+            "A chord that opens the launcher from anywhere: a project you have worked\n"
+            + "in, an agent, and what you want it to do. The menu's New task… opens the\n"
+            + "same thing whether or not this is on.")
+
         allowRecorder = ShortcutRecorder(defaultsKey: "allowHotKey", fallback: .defaultAllow)
         denyRecorder = ShortcutRecorder(defaultsKey: "denyHotKey", fallback: .defaultDeny)
-        for recorder in [allowRecorder!, denyRecorder!] {
+        launchRecorder = ShortcutRecorder(defaultsKey: "launchHotKey", fallback: .defaultLaunch)
+        let recorders = [allowRecorder!, denyRecorder!, launchRecorder!]
+        for recorder in recorders {
             recorder.onCaptureChange = { [weak self, weak recorder] capturing in
                 guard let self else { return }
                 if capturing {
                     // One recorder at a time, and while recording the current combo
                     // must reach the recorder, not the Carbon hotkey — suspend,
                     // then re-register on the way out.
-                    let other = recorder === self.allowRecorder ? self.denyRecorder : self.allowRecorder
-                    other?.cancelCapture()
+                    for other in [self.allowRecorder, self.denyRecorder, self.launchRecorder]
+                    where other !== recorder {
+                        other?.cancelCapture()
+                    }
                     HotKeyCenter.shared.suspend()
                 } else {
                     self.onChange?()
                 }
             }
             recorder.rejectCombo = { [weak self, weak recorder] combo in
-                // The two actions may not share one combo.
-                let other = recorder === self?.allowRecorder ? self?.denyRecorder : self?.allowRecorder
-                return combo == other?.combo
+                // No two of them may share one chord.
+                guard let self else { return false }
+                return [self.allowRecorder, self.denyRecorder, self.launchRecorder]
+                    .contains { $0 !== recorder && $0?.combo == combo }
             }
             recorder.onRecord = { [weak self] in self?.onChange?() }
         }
@@ -123,6 +137,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             [gridLabel("Allow:"), allowRecorder!],
             [gridLabel("Deny:"), denyRecorder!],
         ])
+        let launchGrid = NSGridView(views: [[gridLabel("Launcher:"), launchRecorder!]])
+        launchGrid.rowSpacing = 8
+        launchGrid.columnSpacing = 10
+        launchGrid.column(at: 0).xPlacement = .trailing
+        launchGrid.translatesAutoresizingMaskIntoConstraints = false
         grid.rowSpacing = 8
         grid.columnSpacing = 10
         grid.column(at: 0).xPlacement = .trailing
@@ -201,7 +220,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
             sectionLabel("Notifications"), notifyApprovalsBox, notifyFailuresBox,
             notifyQuietBox, notifyCaption, notifyButtons, seps[1],
-            sectionLabel("Shortcuts"), enableBox, enableCaption, grid, seps[2],
+            sectionLabel("Shortcuts"), enableBox, enableCaption, grid,
+            launchBox, launchCaption, launchGrid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
             sectionLabel("Usage"), claudeQuotaBox, quotaCaption, seps[4],
             sectionLabel("Approvals"), rememberBox, rememberCaption, seps[5],
@@ -215,6 +235,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         for sep in seps { stack.setCustomSpacing(16, after: sep) }
         stack.setCustomSpacing(14, after: enableCaption)
         stack.setCustomSpacing(16, after: grid)
+        stack.setCustomSpacing(14, after: launchCaption)
+        stack.setCustomSpacing(16, after: launchGrid)
         stack.setCustomSpacing(16, after: islandCaption)
         stack.setCustomSpacing(16, after: quotaCaption)
         stack.setCustomSpacing(16, after: rememberCaption)
@@ -249,6 +271,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
             doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             grid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
+            launchGrid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             volumeRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
             diagnostics.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             // Before Diagnostics the width fell out of whichever caption was longest,
@@ -290,8 +313,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     private func reload() {
         enableBox.state = UserDefaults.standard.bool(forKey: "globalApprovalShortcut") ? .on : .off
+        launchBox.state = LauncherPanel.shortcutEnabled ? .on : .off
         allowRecorder.reload()
         denyRecorder.reload()
+        launchRecorder.reload()
         soundsBox.state = SoundCenter.enabled ? .on : .off
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
@@ -313,6 +338,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// switch that appears to do nothing for the first tick reads as broken. macOS
     /// raises its own Keychain prompt on that first attempt; a refusal there simply
     /// means no reading, and the local token line stays.
+    @objc private func toggleLauncher() {
+        LauncherPanel.shortcutEnabled = launchBox.state == .on
+        syncRecorderState()
+        onChange?()
+    }
+
     @objc private func toggleClaudeQuota() {
         ClaudeQuota.enabled = claudeQuotaBox.state == .on
         UsageCenter.shared.refresh()
@@ -444,6 +475,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let on = enableBox.state == .on
         allowRecorder.isEnabled = on
         denyRecorder.isEnabled = on
+        launchRecorder.isEnabled = launchBox.state == .on
     }
 
     private func syncSoundControls() {

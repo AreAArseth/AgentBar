@@ -72,6 +72,16 @@ enum MenuBuilder {
         menu.addItem(today)
         menu.addItem(.separator())
 
+        // Start a task, rather than an agent: the launcher, reachable without the
+        // global chord — a keystroke nobody has heard of is a feature nobody has.
+        let newTask = NSMenuItem(title: "New task…",
+                                 action: #selector(StatusItemController.openLauncher(_:)),
+                                 keyEquivalent: "")
+        newTask.target = controller
+        newTask.image = NSImage(systemSymbolName: "plus.bubble", accessibilityDescription: nil)
+        if LauncherPanel.shortcutEnabled { newTask.toolTip = KeyCombo.launch.display }
+        menu.addItem(newTask)
+
         // Open
         let openParent = NSMenuItem(title: "Open", action: nil, keyEquivalent: "")
         openParent.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)

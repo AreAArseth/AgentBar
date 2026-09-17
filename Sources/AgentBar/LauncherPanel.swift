@@ -1,0 +1,263 @@
+import Cocoa
+
+/// The launcher: a repo, an agent, a line of what you want, and return.
+///
+/// A third surface, and the only one the user summons rather than the app showing.
+/// It takes no space until a keystroke asks for it, it closes the moment it loses
+/// focus, and it never appears on its own — the conditions rule 2 sets for
+/// anything beyond the menu bar item and the island.
+///
+/// Off until switched on, like every other global key this app registers: a chord
+/// claimed system-wide by an app you did not ask to claim it is a chord stolen from
+/// whatever you were already using it for.
+final class LauncherPanel: NSObject, NSWindowDelegate {
+    static let shared = LauncherPanel()
+
+    static var shortcutEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "launcherShortcut") }
+        set { UserDefaults.standard.set(newValue, forKey: "launcherShortcut") }
+    }
+
+    /// Fed by the app delegate, so the panel reads one poll like every other
+    /// surface instead of going to disk itself.
+    static var sessions: () -> [Session] = { [] }
+
+    private var panel: NSPanel?
+    private var field: NSTextField!
+    private var projectRow: NSStackView!
+    private var agentRow: NSStackView!
+    private var hint: NSTextField!
+    private var projects: [(project: String, cwd: String)] = []
+    private var agents: [Agent] = []
+    private var chosenProject = 0
+    private var chosenAgent = 0
+
+    // MARK: - Showing
+
+    func toggle() {
+        if panel?.isVisible == true { close() } else { show() }
+    }
+
+    func show() {
+        projects = Launcher.recentProjects(sessions: Self.sessions(),
+                                           history: HistoryStore.cached())
+        agents = Launcher.launchableAgents()
+        guard !agents.isEmpty else {
+            // Nothing on this machine could be started. Saying so beats a panel
+            // whose buttons all do nothing.
+            NSSound.beep()
+            return
+        }
+        chosenProject = 0
+        chosenAgent = 0
+        if panel == nil { build() }
+        rebuildRows()
+        field.stringValue = ""
+        syncHint()
+        centreOnActiveScreen()
+        NSApp.activate(ignoringOtherApps: true)
+        panel?.makeKeyAndOrderFront(nil)
+        panel?.makeFirstResponder(field)
+    }
+
+    func close() { panel?.orderOut(nil) }
+
+    /// Closing on blur is what makes it a launcher rather than a window: it is
+    /// either the thing you are doing or it is gone.
+    func windowDidResignKey(_ notification: Notification) { close() }
+
+    private func centreOnActiveScreen() {
+        guard let panel, let screen = NSScreen.screens.first(where: {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        }) ?? NSScreen.main else { return }
+        let size = panel.frame.size
+        let visible = screen.visibleFrame
+        // A third of the way down, where a launcher belongs: high enough to read
+        // without covering what you were looking at.
+        panel.setFrameOrigin(NSPoint(
+            x: visible.midX - size.width / 2,
+            y: visible.maxY - visible.height / 3 - size.height / 2))
+    }
+
+    // MARK: - Building
+
+    private func build() {
+        let p = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 150),
+                         styleMask: [.titled, .fullSizeContentView],
+                         backing: .buffered, defer: false)
+        p.titleVisibility = .hidden
+        p.titlebarAppearsTransparent = true
+        p.isMovableByWindowBackground = true
+        p.hidesOnDeactivate = false
+        p.level = .floating
+        p.delegate = self
+        p.isReleasedWhenClosed = false
+
+        field = NSTextField()
+        field.placeholderString = "What should it do?"
+        field.font = .systemFont(ofSize: 15)
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .none
+        field.target = self
+        field.action = #selector(startFromField)
+
+        projectRow = row()
+        agentRow = row()
+        hint = NSTextField(labelWithString: "")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .tertiaryLabelColor
+
+        let stack = NSStackView(views: [field, projectRow, agentRow, hint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 18, bottom: 18, right: 18)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let content = NSView()
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36),
+        ])
+        p.contentView = content
+        panel = p
+    }
+
+    private func row() -> NSStackView {
+        let r = NSStackView()
+        r.orientation = .horizontal
+        r.spacing = 6
+        return r
+    }
+
+    private func rebuildRows() {
+        projectRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        agentRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (i, project) in projects.enumerated() {
+            let b = pill(project.project, tag: i, action: #selector(chooseProject(_:)))
+            b.toolTip = project.cwd
+            projectRow.addArrangedSubview(b)
+        }
+        if projects.isEmpty {
+            let none = NSTextField(labelWithString: "No project yet — finish a session anywhere first")
+            none.font = .systemFont(ofSize: 11)
+            none.textColor = .tertiaryLabelColor
+            projectRow.addArrangedSubview(none)
+        }
+        for (i, agent) in agents.enumerated() {
+            agentRow.addArrangedSubview(pill(agent.name, tag: i, action: #selector(chooseAgent(_:))))
+        }
+        syncSelection()
+        panel?.setContentSize(NSSize(width: 460,
+                                     height: panel?.contentView?.fittingSize.height ?? 150))
+    }
+
+    private func pill(_ title: String, tag: Int, action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.tag = tag
+        b.bezelStyle = .recessed
+        b.setButtonType(.pushOnPushOff)
+        b.controlSize = .small
+        b.font = .systemFont(ofSize: 11)
+        return b
+    }
+
+    private func syncSelection() {
+        for (i, v) in projectRow.arrangedSubviews.enumerated() {
+            (v as? NSButton)?.state = i == chosenProject ? .on : .off
+        }
+        for (i, v) in agentRow.arrangedSubviews.enumerated() {
+            (v as? NSButton)?.state = i == chosenAgent ? .on : .off
+        }
+        syncHint()
+    }
+
+    /// Says what return will do, including when it will not do all of it. An agent
+    /// that cannot be handed a prompt says so here rather than swallowing what you
+    /// typed.
+    private func syncHint() {
+        guard let agent = agents.indices.contains(chosenAgent) ? agents[chosenAgent] : nil,
+              let project = projects.indices.contains(chosenProject) ? projects[chosenProject] : nil
+        else {
+            hint.stringValue = "⏎ start · esc close"
+            return
+        }
+        var text = "⏎ opens \(agent.name) in \(project.project)"
+        if !agent.takesPrompt {
+            text += " — it takes no prompt on the command line, so type it there"
+        }
+        hint.stringValue = text + " · esc closes"
+    }
+
+    // MARK: - Acting
+
+    @objc private func chooseProject(_ sender: NSButton) {
+        chosenProject = sender.tag
+        syncSelection()
+        panel?.makeFirstResponder(field)
+    }
+
+    @objc private func chooseAgent(_ sender: NSButton) {
+        chosenAgent = sender.tag
+        syncSelection()
+        panel?.makeFirstResponder(field)
+    }
+
+    @objc private func startFromField() { start() }
+
+    func start() {
+        guard agents.indices.contains(chosenAgent),
+              projects.indices.contains(chosenProject) else { return }
+        let task = Launcher.Task(agent: agents[chosenAgent],
+                                 cwd: projects[chosenProject].cwd,
+                                 prompt: field.stringValue)
+        close()
+        // Off the main thread: an AppleScript that has never been allowed sits on
+        // the consent dialog for as long as it takes somebody to read it.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let terminal = TerminalApp.preferred(sessions: Self.sessions())
+            let outcome = Launcher.start(task, terminal: terminal)
+            DispatchQueue.main.async { Self.report(outcome, terminal: terminal) }
+        }
+    }
+
+    /// The two outcomes that are not "it started" get said out loud. A launcher
+    /// that quietly does nothing is worse than no launcher.
+    private static func report(_ outcome: Launcher.Outcome, terminal: TerminalApp) {
+        switch outcome {
+        case .started:
+            return
+        case .copied:
+            note("\(terminal.name) can't be handed a command",
+                 "The command is on your clipboard — paste it in the window that just opened.")
+        case .noCLI:
+            note("That agent isn't installed here",
+                 "AgentBar found no command for it on this machine.")
+        }
+    }
+
+    private static func note(_ title: String, _ body: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = body
+        alert.alertStyle = .informational
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+}
+
+/// A borderless-looking panel still has to take the keyboard, and a plain `NSPanel`
+/// will not become key while its title bar is hidden.
+final class KeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    /// Escape closes it. `cancelOperation` is what the responder chain sends for
+    /// escape, and without it the key beeps at a window with nothing to cancel.
+    override func cancelOperation(_ sender: Any?) {
+        LauncherPanel.shared.close()
+    }
+}
