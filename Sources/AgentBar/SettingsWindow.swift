@@ -474,6 +474,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// changes height as checks come and go; that is the scroller's problem, not
     /// the window's.
     private func refit() {
+        // Diagnostics changes height as checks come and go, and it is usually the
+        // tallest page — so the window is re-measured, not just nudged back onto
+        // the screen.
+        sizeToTallestPage()
         clampToScreen()
         window?.contentView?.needsDisplay = true
     }

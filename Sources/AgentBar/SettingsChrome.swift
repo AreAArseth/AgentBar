@@ -221,10 +221,15 @@ enum SettingsChrome {
         // with the labels above it instead of floating at its own natural width.
         view.widthAnchor.constraint(equalTo: row.widthAnchor,
                                     constant: -rowInset * 2).isActive = true
-        let content = height ?? ceil(view.fittingSize.height)
+        // Tied to what it holds, not measured from it once. Diagnostics starts as
+        // the word "Checking…" and ends as a list of checks with a fix under each
+        // one; a height taken at build time cut the last line off at the card's
+        // edge. Everything in this window that can change size now follows the
+        // thing that changes.
+        row.heightAnchor.constraint(greaterThanOrEqualTo: view.heightAnchor,
+                                    constant: Space.step * 2).isActive = true
         row.heightAnchor.constraint(
-            greaterThanOrEqualToConstant: max(rowHeight, content + Space.step * 2)
-        ).isActive = true
+            greaterThanOrEqualToConstant: height ?? rowHeight).isActive = true
         return row
     }
 

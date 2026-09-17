@@ -34,6 +34,10 @@ All notable changes to AgentBar are documented here. This project follows
   rather than from a measurement taken of it once: that sentence changes while
   the window is open, and a longer one had the separator drawn through its
   second line.
+- Diagnostics' last line — the fix under a check — was cut off at the card's
+  edge: that view starts as the word "Checking…" and ends as a list, and its row
+  had been sized once, at the start. Everything in that window which can change
+  size now follows the thing that changes, rather than a number copied from it.
 - The sign-in window presents itself the way a browser does. WebKit's own user
   agent leaves off the `Version/… Safari/…` tail, and claude.ai answered the
   first attempt with "there was an error logging you in" before a character had
