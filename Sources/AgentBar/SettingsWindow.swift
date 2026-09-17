@@ -80,6 +80,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var quotaStatus: NSTextField!
     private var quotaCheck: NSButton!
     private var quotaToken: NSButton!
+    private var quotaConnect: NSButton!
     private var rememberBox: NSSwitch!
     private var notifyApprovalsBox: NSSwitch!
     private var notifyFailuresBox: NSSwitch!
@@ -107,6 +108,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // reader, and a closure held past that would redraw a window nobody is
         // looking at.
         ClaudeQuota.shared.onStatus = { [weak self] in self?.syncQuota() }
+        ClaudeWebQuota.shared.onStatus = { [weak self] in self?.syncQuota() }
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -328,6 +330,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // asking politely changes it. A token handed over on purpose does.
         quotaToken = SettingsChrome.smallButton("Use a token…", target: self,
                                                 action: #selector(editQuotaToken))
+        // The one that needs no terminal and no permission dialog: claude.ai's
+        // own login page, in a window of ours, and the session stays in
+        // AgentBar's cookie store. See `ClaudeWeb`.
+        quotaConnect = SettingsChrome.smallButton("Sign in to Claude…", target: self,
+                                                  action: #selector(connectClaudeWeb))
+        quotaConnect.toolTip = "Opens claude.ai's login page. The session stays in "
+            + "AgentBar and is used for nothing but reading your usage."
 
         rememberBox = SettingsChrome.toggle(target: self, action: #selector(toggleRemember))
 
@@ -400,12 +409,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             add([
                 SettingsChrome.card([
                     SettingsChrome.row("Ask Anthropic for Claude's usage",
-                                       "Claude keeps its percentages on its own servers; this "
-                                       + "is the only way to show them. One request every five "
-                                       + "minutes, and the only network call besides updates.",
+                                       "Claude keeps its percentages on its own servers. Sign "
+                                       + "in once and AgentBar asks every five minutes — the "
+                                       + "only network call it makes besides checking for "
+                                       + "updates.",
                                        control: claudeQuotaBox),
                     SettingsChrome.noteRow(quotaStatus),
-                    SettingsChrome.customRow(buttonRow([quotaCheck, quotaToken])),
+                    SettingsChrome.customRow(buttonRow([quotaConnect, quotaCheck, quotaToken])),
                 ]),
                 SettingsChrome.header("Codex and Copilot need none of this — both are read "
                                       + "off this Mac."),
@@ -544,8 +554,31 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         onChange?()
     }
 
+    /// Signing in, and signing out again — the same button, because a person who
+    /// has connected an account wants the way back more than they want the way
+    /// in, and two buttons where one will do is how a settings pane fills up.
+    @objc private func connectClaudeWeb() {
+        guard !ClaudeWeb.connected else {
+            ClaudeWeb.signOut { [weak self] in
+                UsageCenter.shared.refresh()
+                self?.syncQuota()
+            }
+            return
+        }
+        ClaudeWebLogin.shared.show { [weak self] in
+            // A sign-in is worth switching the feature on: nobody signs in to a
+            // thing they meant to leave off.
+            ClaudeQuota.enabled = true
+            self?.claudeQuotaBox.state = .on
+            ClaudeWebQuota.shared.checkNow { UsageCenter.shared.refresh() }
+            self?.syncQuota()
+            self?.onChange?()
+        }
+    }
+
     @objc private func checkQuotaNow() {
         ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+        ClaudeWebQuota.shared.checkNow { UsageCenter.shared.refresh() }
         syncQuota()
     }
 
@@ -593,7 +626,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private func syncQuota() {
         quotaCheck.isEnabled = ClaudeQuota.enabled
         quotaToken.title = ClaudeQuota.storedToken() != nil ? "Replace token…" : "Use a token…"
-        let sentence = ClaudeQuota.sentence(for: ClaudeQuota.shared.status)
+        quotaConnect.title = ClaudeWeb.connected ? "Sign out" : "Sign in to Claude…"
+        // Whichever door is actually in use is the one whose news this is.
+        let status = ClaudeWeb.connected ? ClaudeWebQuota.shared.status : ClaudeQuota.shared.status
+        let sentence = ClaudeQuota.sentence(for: status)
         guard quotaStatus.stringValue != sentence else { return }
         quotaStatus.stringValue = sentence
         // A longer sentence is a taller label, and the row is sized to what was
@@ -740,6 +776,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         cancelCaptures()
         ClaudeQuota.shared.onStatus = nil
+        ClaudeWebQuota.shared.onStatus = nil
     }
 
     /// Clicking away mid-recording: a background window can't see key events, so a

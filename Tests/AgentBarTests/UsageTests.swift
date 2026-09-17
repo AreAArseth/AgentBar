@@ -562,6 +562,47 @@ import Testing
                 == .expiredToken(at: Date(timeIntervalSince1970: 1_000_000)))
     }
 
+    // MARK: - The signed-in web session
+
+    /// The usage call needs the account's uuid and nothing local knows it, so the
+    /// first call is for the account — and the name travels with the number,
+    /// because a percentage with the wrong account's name on it is worse than one
+    /// with none.
+    @Test func theAccountComesFromTheOrganisationsCall() throws {
+        let body = """
+        [{"uuid":"org-1","name":"Slevomat Group","capabilities":["chat"]},
+         {"uuid":"org-2","name":"Personal"}]
+        """
+        let org = try #require(ClaudeWeb.organization(in: Data(body.utf8)))
+        #expect(org.uuid == "org-1")
+        #expect(org.name == "Slevomat Group")
+
+        // An entry with no uuid is not an account we can ask about.
+        let partial = #"[{"name":"no uuid"},{"uuid":"org-9"}]"#
+        #expect(ClaudeWeb.organization(in: Data(partial.utf8))?.uuid == "org-9")
+        #expect(ClaudeWeb.organization(in: Data("{}".utf8)) == nil)
+        #expect(ClaudeWeb.organization(in: Data("nonsense".utf8)) == nil)
+    }
+
+    /// The web path's failures speak the same vocabulary as the token path's, so
+    /// one sentence under the switch covers both doors.
+    @Test func theWebPathFailsInTheSameWords() {
+        #expect(ClaudeWebQuota.status(for: .noSession) == .loggedOut)
+        #expect(ClaudeWebQuota.status(for: .declined(401))
+                == .declined(code: 401, message: nil))
+        #expect(ClaudeWebQuota.status(for: .unreachable) == .unreachable)
+        #expect(ClaudeWebQuota.status(for: .unexpected(503)) == .unexpected(503))
+    }
+
+    /// The body claude.ai answers with has the shape the OAuth endpoint uses, so
+    /// there is one parser and not two — worth a test, because the day that stops
+    /// being true is the day this reads zeroes.
+    @Test func bothDoorsShareOneParser() throws {
+        let snap = try #require(ClaudeQuota.parse(Data(Self.payload.utf8), account: "Personal"))
+        #expect(snap.windows.map(\.name) == ["5h", "weekly"])
+        #expect(snap.account == "Personal")
+    }
+
     // MARK: - Copilot's own ledger
 
     private func copilotDB(rows: [(created: String, nano: Int, input: Int, output: Int,

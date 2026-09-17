@@ -32,7 +32,14 @@ guarantees worth knowing when auditing:
   item (`AgentBar-claude-quota`), never in a file, never logged, used for nothing but
   that one request, and removed by the same button. It is the only secret this app
   stores, and nothing is stored unless somebody pastes it in.
-  See `Sources/AgentBar/ClaudeQuota.swift`.
+  The third way in is **Settings ▸ Usage ▸ Sign in to Claude…**, which opens
+  claude.ai's login page in a WebKit window and leaves the session cookie in
+  AgentBar's own cookie store. Two GETs to `claude.ai/api/organizations` and
+  `…/usage` carry it, with `httpShouldSetCookies` off so the shared storage never
+  acquires a session as a side effect. AgentBar does **not** read any browser's
+  cookie store, nor any other application's credentials, for this or anything
+  else. **Sign out** empties the store.
+  See `Sources/AgentBar/ClaudeQuota.swift` and `ClaudeWeb.swift`.
 - "Always allow" can only persist a rule that Claude Code itself suggested for
   that request: the hook structurally compares the answer's rule against the
   received `permission_suggestions` and downgrades anything else to a one-shot

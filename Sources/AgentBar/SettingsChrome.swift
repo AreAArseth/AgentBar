@@ -191,11 +191,18 @@ enum SettingsChrome {
     /// existence. The field knows how it lays its own text out; nothing else does.
     static func measure(_ label: NSTextField, width: CGFloat) -> CGFloat {
         guard !label.stringValue.isEmpty else { return 0 }
+        // Its own height constraint has to come off first: `fittingSize` honours
+        // active constraints, so a label already pinned to the height of its old
+        // text answers with that height — and a status line that starts empty
+        // stays pinned at zero and never shows a word. Which is what it did.
+        let pinned = label.fittedHeight
+        pinned?.isActive = false
         let remembered = label.preferredMaxLayoutWidth
         label.preferredMaxLayoutWidth = width
         label.invalidateIntrinsicContentSize()
         let height = ceil(label.fittingSize.height)
         label.preferredMaxLayoutWidth = remembered
+        pinned?.isActive = true
         return height
     }
 

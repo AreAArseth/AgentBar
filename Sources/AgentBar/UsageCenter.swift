@@ -99,6 +99,7 @@ final class UsageCenter {
             // Off by default and rate-limited from the inside; when it lands it
             // asks for another pass rather than editing anything from under us.
             ClaudeQuota.shared.refreshIfDue { [weak self] in self?.refresh() }
+            ClaudeWebQuota.shared.refreshIfDue { [weak self] in self?.refresh() }
             DispatchQueue.main.async {
                 let changed = fresh.map(Self.signature) != self.readings.map(Self.signature)
                 self.readings = fresh
@@ -370,7 +371,10 @@ final class UsageCenter {
         // The real windows when the switch is on and the answer arrived; the
         // local half-measure otherwise. Never both — two Claude rows saying
         // different things is worse than either of them alone.
-        if let snap = ClaudeQuota.shared.latest() {
+        // Two doors to the same numbers: the login you signed into here, and
+        // Claude Code's own stored token. Either is a real answer; whichever
+        // answered is the one shown, and never both.
+        if let snap = ClaudeWebQuota.shared.latest() ?? ClaudeQuota.shared.latest() {
             return Self.reading(provider: "Claude", windows: snap.windows,
                                 account: snap.account)
         }
@@ -458,7 +462,9 @@ final class UsageCenter {
         // that line is for numbers — and not as part of `text`, which the island
         // does show.
         let why = ClaudeQuota.enabled
-            ? ClaudeQuota.shortReason(for: ClaudeQuota.shared.status) : nil
+            ? ClaudeQuota.shortReason(for: ClaudeWeb.connected ? ClaudeWebQuota.shared.status
+                                                               : ClaudeQuota.shared.status)
+            : nil
         return Reading(provider: "Claude",
                        text: "~\(Self.compact(total)) tok this 5h block · resets \(Self.clock(resets))",
                        detail: why.map { "Percentages: \($0)." },

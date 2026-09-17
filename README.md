@@ -53,7 +53,9 @@ which is off until you switch it on: the daily update check against GitHub Relea
 — only if you tick **Settings ▸ Usage** — a request to Anthropic for Claude's own quota,
 using the login Claude Code already stored. That switch reports what came back, in a
 sentence under itself, including every way it can fail; **Check now** asks again on the
-spot. If your sessions run under their own `CLAUDE_CONFIG_DIR`, that login is somewhere
+spot. The simplest way in is **Sign in to Claude…**, which opens claude.ai's own login
+page in a window and keeps the session in AgentBar — no terminal, no token, and no
+reading of your browser's cookies, which AgentBar does not do. If your sessions run under their own `CLAUDE_CONFIG_DIR`, that login is somewhere
 AgentBar cannot read — **Use a token…** takes one from `claude setup-token` and keeps it
 in AgentBar's own Keychain item, which is the only secret this app stores and the same
 button removes. Everything else, including every token count

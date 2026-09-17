@@ -3,6 +3,31 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.27.0 - 2026-09-17
+
+### Added
+
+- **Sign in to Claude, and the percentages appear.** One button in
+  **Settings ▸ Usage** opens claude.ai's own login page in a window of AgentBar's,
+  and from then on Claude gets the same meters Codex has: the 5-hour window, the
+  weekly one, the reset times. No terminal, no token to paste, nothing to grant.
+
+  It exists because the other route ran out. `ClaudeQuota` borrows the login
+  Claude Code stored in the Keychain, which is right whenever the CLI keeps one
+  there — and on a Mac whose sessions run under their own `CLAUDE_CONFIG_DIR`
+  that record is empty, so there was nothing to borrow.
+
+  What this does **not** do is read your browser. The usual answer to this problem
+  is to open Chrome's cookie database (decrypting it with a key out of *its*
+  Keychain item) or Safari's (behind Full Disk Access). Both work; both are this
+  app reading another application's credential store; and both still end in a
+  permission dialog, so they buy nothing a sign-in does not. The session lives in
+  AgentBar's own cookie store, WebKit renews it, and **Sign out** empties it.
+
+  The numbers come from the two calls the site itself makes — the account, then
+  its usage — and the body has the same shape the OAuth endpoint uses, so both
+  doors go through one parser rather than two.
+
 ## 1.26.1 - 2026-09-17
 
 ### Fixed
