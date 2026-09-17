@@ -134,7 +134,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false)
         w.title = "AgentBar Settings"
-        w.titleVisibility = .visible
+        // The string stays, for the Window menu and for anything reading the
+        // window aloud; the drawing does not. AppKit centres a title across the
+        // whole window, and a third of this one is sidebar — see
+        // `SettingsChrome.title`, which puts the page's name over the page.
+        w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.delegate = self
@@ -164,7 +168,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         // ---- the page ----
         pageTitle = SettingsChrome.title(page.title)
-        pageTitle.isHidden = true   // the title bar carries it
         pageTitle.translatesAutoresizingMaskIntoConstraints = false
         pageHost = NSView()
         pageHost.translatesAutoresizingMaskIntoConstraints = false
@@ -212,12 +215,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             content.topAnchor.constraint(equalTo: root.topAnchor),
             content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
 
-            pageTitle.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
-            pageTitle.leadingAnchor.constraint(equalTo: content.leadingAnchor,
+            // Level with the traffic lights and centred on the page, not on the
+            // window: the sidebar is not part of what this names.
+            pageTitle.centerYAnchor.constraint(equalTo: content.topAnchor,
+                                               constant: SettingsChrome.titleBand / 2),
+            pageTitle.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            pageTitle.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor,
                                                constant: SettingsChrome.Space.page),
 
-            scroll.topAnchor.constraint(equalTo: pageTitle.bottomAnchor,
-                                       constant: SettingsChrome.Space.page),
+            // From the band, not from the title: a one-line label's own height is
+            // not what sets where a page begins.
+            scroll.topAnchor.constraint(equalTo: content.topAnchor,
+                                        constant: SettingsChrome.titleBand
+                                            + SettingsChrome.Space.gap),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -493,8 +503,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             view.layoutSubtreeIfNeeded()
             return view.fittingSize.height
         }.max() ?? 0
-        // The title, the gap under it, and the page's own bottom margin.
-        let chrome = SettingsChrome.Space.page * 2
+        // What the page itself does not measure: the title band above it, the gap
+        // under that, and its own bottom margin inside the scroller. Guessed at
+        // twice the page margin before, which was 20-odd points short — enough to
+        // put a scroller on the tallest page for no reason anybody could see.
+        let chrome = SettingsChrome.titleBand + SettingsChrome.Space.gap
+            + SettingsChrome.Space.page
         let height = min(max(tallest + chrome, SettingsChrome.minWindowHeight),
                          SettingsChrome.maxWindowHeight)
         window.setContentSize(NSSize(width: window.frame.width, height: height))
@@ -793,6 +807,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// still-armed recorder would leave the hotkeys suspended forever. End it now.
     func windowDidResignKey(_ notification: Notification) {
         cancelCaptures()
+        // AppKit dims a window's own title when the window is not key. This one
+        // is drawn by hand, so the dimming is too — without it, an inactive
+        // Settings window reads as the active one.
+        pageTitle?.textColor = .secondaryLabelColor
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        pageTitle?.textColor = .labelColor
     }
 
     private func speakerGlyph(_ symbol: String) -> NSImageView {

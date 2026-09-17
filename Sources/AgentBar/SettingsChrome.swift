@@ -25,6 +25,11 @@ enum SettingsChrome {
         static let page: CGFloat = 24
     }
 
+    /// The height of a standard window's title bar. The window draws its own
+    /// content up into it (`fullSizeContentView`), so this is the band the page's
+    /// name sits in, level with the traffic lights, exactly where macOS puts a
+    /// window title.
+    static let titleBand: CGFloat = 28
     static let sidebarWidth: CGFloat = 212
     static let contentWidth: CGFloat = 540
     static let cardRadius: CGFloat = 12
@@ -251,9 +256,19 @@ enum SettingsChrome {
         return l
     }
 
+    /// The page's name, in the system's own title-bar face.
+    ///
+    /// It is drawn here rather than left to `NSWindow` for one reason: AppKit
+    /// centres a window's title across the whole window, and half of this window
+    /// is a sidebar. The title came out a third of the way into the content,
+    /// lined up with nothing — the one thing on the page that had been placed by
+    /// accident. Centred on the content column instead, it lands where the eye
+    /// expects a title bar's title to be.
     static func title(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = .systemFont(ofSize: 19, weight: .semibold)
+        l.font = .titleBarFont(ofSize: NSFont.systemFontSize)
+        l.textColor = .labelColor
+        l.alignment = .center
         return l
     }
 

@@ -3,6 +3,19 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.27.1 - 2026-09-17
+
+### Fixed
+
+- **The page's name is over the page.** AppKit centres a window's title across
+  the whole window, and a third of the Settings window is sidebar — so "Usage"
+  and "Approvals" sat a third of the way into the content, lined up with nothing,
+  the one thing on the page placed by accident. The title is now drawn over the
+  content column, level with the traffic lights, in the system's own title-bar
+  face, and it dims with the window the way a real one does.
+- The window's height allowed 48 points for what sits above and below a page and
+  needed 68, so the tallest page could get a scroller for no visible reason.
+
 ## 1.27.0 - 2026-09-17
 
 ### Added
