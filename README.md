@@ -6,7 +6,10 @@
 ![Linux CLI](https://img.shields.io/badge/Linux-CLI-yellow)
 ![Swift](https://img.shields.io/badge/Swift-AppKit-orange)
 
-**One menu bar item for all your AI coding agents.**
+**One approval queue for every AI coding agent.**
+
+Your agents stop and ask before they run something. AgentBar is where they ask —
+all of them, in one place, without a terminal to hunt for.
 
 <p align="center">
   <img src="docs/assets/demo-claude-codex.gif" width="640" alt="AgentBar demo: Claude session works, needs approval, one-click Allow, then a Codex session takes over the bar">
@@ -18,9 +21,12 @@
   <br><sub><b>Dynamic Island mode</b> — pick either (or both) in the welcome window</sub>
 </p>
 
-AgentBar is a lightweight, native macOS app that shows the live state of your
-AI coding sessions — Claude Code and Claude Cowork, Codex, Cursor CLI, Gemini CLI,
-Qwen Code, OpenCode, plus GitHub Copilot and Google Antigravity in one place. Each agent gets its own mark built from its
+AgentBar is a lightweight, native macOS app that sits in the permission path of
+your AI coding sessions — Claude Code and Claude Cowork, Codex, Cursor CLI, Gemini CLI,
+Qwen Code, OpenCode, plus GitHub Copilot and Google Antigravity. When one of them wants
+to run a command or write a file, you see exactly what it asked for and answer it in a
+click; the rest of the time it shows you which session is working and which is waiting.
+Nothing decides on your behalf, ever. Each agent gets its own mark built from its
 real identity — Clawd the crab for Claude, the OpenAI knot with a braille dot-matrix
 for Codex, the official pixel-art head for Copilot, the pixel rainbow arch for
 Antigravity — and it always surfaces the session that needs you most.
@@ -203,16 +209,16 @@ don't use. Hooks are snapshotted per session — start a new agent session after
 
 ## Install
 
+**Homebrew** — the recommended way:
+
+```bash
+brew install --cask michalstrnadel/tap/agentbar
+```
+
 **One-liner** — downloads the latest release (or builds from source when none exists):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/michalstrnadel/AgentBar/main/Scripts/install.sh | bash
-```
-
-**Homebrew:**
-
-```bash
-brew install --cask michalstrnadel/tap/agentbar
 ```
 
 **Via your AI agent** — paste into Claude Code (or any coding agent):

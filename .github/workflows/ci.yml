@@ -55,6 +55,12 @@ jobs:
   build:
     name: Build app (universal)
     runs-on: macos-14
+    # Provenance needs to mint an OIDC token and write an attestation; everything
+    # else in this workflow reads.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v5
       - name: Build AgentBar.app
@@ -81,6 +87,20 @@ jobs:
       # and resource forks; a plain zip of a .app does not.
       - name: Package the bundle for release
         run: ditto -c -k --sequesterRsrc --keepParent build/AgentBar.app AgentBar.app.zip
+      # Says, verifiably, that this exact zip came out of this workflow at this
+      # commit. `gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar`
+      # checks it, and it answers a question this project cannot answer any other
+      # way: the release is signed with a certificate that is not Apple's, so the
+      # signature proves the bundle was not altered after signing and nothing
+      # more. Provenance is what ties it back to a commit anybody can read.
+      #
+      # Only on push: a pull request from a fork cannot mint the token, and a step
+      # that fails for everyone outside the repo is a broken gate, not a strict one.
+      - name: Attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: AgentBar.app.zip
       - uses: actions/upload-artifact@v4
         with:
           name: AgentBar-app-universal

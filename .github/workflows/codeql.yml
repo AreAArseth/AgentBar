@@ -1,0 +1,69 @@
+# Static analysis, kept separate from `ci.yml` on purpose: CI gates every push and
+# has to stay fast, while CodeQL builds Swift from scratch and takes minutes. A
+# slow gate is a gate people learn to ignore.
+#
+# It exists because of what this app is allowed to do. AgentBar sits in the
+# permission path — it installs hooks into other tools' configs, renders commands
+# an agent wants to run, and writes the answer that lets them run. Nobody should
+# have to take "we read our own code carefully" on trust for software in that
+# position.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, because a new query can find an old bug: the code need not change
+    # for the analysis to start saying something new.
+    - cron: "17 4 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Analyse Swift
+    # Swift analysis needs a real macOS toolchain, and macos-15 is what the Swift
+    # test job already uses.
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          # Manual, not autobuild: `Scripts/build.sh` produces a universal binary
+          # and signs it, which analysis does not need and which doubles the time.
+          build-mode: manual
+      - name: Build for analysis
+        run: swift build
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:swift"
+
+  javascript:
+    name: Analyse hooks and CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # No build step exists and none is needed: the hooks are plain Node
+          # scripts with no dependencies to resolve.
+          build-mode: none
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
