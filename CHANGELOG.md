@@ -38,6 +38,15 @@ All notable changes to AgentBar are documented here. This project follows
   appearing on your island, on your screen, while you work. A test has no
   business being visible.
 
+- Three layout faults in that new window, each found by looking at a picture of
+  it rather than at the code: a subtitle measured two points short of what its
+  own field wanted, so its second line was clipped out of existence; rows whose
+  vertical padding collapsed to nothing, because a stack aligned on centreY does
+  not pin its views to its edges; and every card, hairline and page background
+  assigned as a `CGColor`, which is a dynamic colour flattened against whichever
+  appearance happened to be current — the whole window would have kept its
+  light-mode greys in dark mode.
+
 ### Added
 
 - `--render-settings` writes every settings page to one PNG. Same idea as

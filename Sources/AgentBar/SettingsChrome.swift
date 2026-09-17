@@ -25,12 +25,21 @@ enum SettingsChrome {
         static let page: CGFloat = 24
     }
 
-    static let sidebarWidth: CGFloat = 196
-    static let contentWidth: CGFloat = 520
-    static let cardRadius: CGFloat = 10
+    static let sidebarWidth: CGFloat = 212
+    static let contentWidth: CGFloat = 540
+    static let cardRadius: CGFloat = 12
     static let rowInset: CGFloat = Space.gap
     /// Two lines of label and a control, with the same air above and below.
-    static let rowHeight: CGFloat = 52
+    static let rowHeight: CGFloat = 44
+    /// The card is the page less its margins; a row is the card less its insets;
+    /// a subtitle is that less the control column. Stated, not guessed: a
+    /// multiline label whose `preferredMaxLayoutWidth` is wider than the width it
+    /// actually gets computes one line too few and renders clipped through the
+    /// row below it. Which is exactly what it did.
+    static let cardWidth: CGFloat = contentWidth - Space.page * 2
+    /// One line of the row's title font, measured once.
+    static let titleHeight: CGFloat = ceil(NSFont.systemFont(ofSize: 13.5).boundingRectForFont.height)
+    static let captionWidth: CGFloat = cardWidth - rowInset * 2 - 56
     /// A floor, not the size: `SettingsWindow` measures the tallest page and uses
     /// that, so no page opens with a field of empty grey under it.
     static let minWindowHeight: CGFloat = 320
@@ -52,14 +61,10 @@ enum SettingsChrome {
             stack.addArrangedSubview(row)
         }
 
-        let panel = NSView()
-        panel.wantsLayer = true
+        // A filled group rather than an outlined box, and a fill that re-resolves
+        // itself when the appearance changes — see `SettingsSurface`.
+        let panel = SettingsSurface(fill: { NSColor.quaternaryLabelColor.withAlphaComponent(0.11) })
         panel.layer?.cornerRadius = cardRadius
-        // A filled group rather than an outlined box, and a fill that is defined
-        // against the label colour so it holds up in both appearances instead of
-        // being a light-mode guess.
-        panel.layer?.backgroundColor = NSColor.quaternaryLabelColor
-            .withAlphaComponent(0.07).cgColor
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -88,8 +93,17 @@ enum SettingsChrome {
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 3
+        // The row's own height, worked out rather than left to the stack: a
+        // horizontal stack aligned on centreY does not pin its arranged views to
+        // its top and bottom edges, so its `edgeInsets` collapse to nothing and
+        // two-line rows come out with their text touching the separators. (The
+        // layout dump said `{{16, 0}, {404, 45}}` inside a 45 pt row — no air at
+        // all.) So: measure the text, add the air, and state the height.
+        var textHeight = titleHeight
         if let subtitle, !subtitle.isEmpty {
-            text.addArrangedSubview(caption(subtitle))
+            let line = caption(subtitle)
+            textHeight += text.spacing + fit(line, to: captionWidth).constant
+            text.addArrangedSubview(line)
         }
         text.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
@@ -112,10 +126,11 @@ enum SettingsChrome {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = Space.step
-        row.edgeInsets = NSEdgeInsets(top: Space.step, left: rowInset,
-                                      bottom: Space.step, right: rowInset)
+        row.edgeInsets = NSEdgeInsets(top: 0, left: rowInset, bottom: 0, right: rowInset)
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: rowHeight).isActive = true
+        row.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: max(rowHeight, textHeight + Space.step * 2)
+        ).isActive = true
         return row
     }
 
@@ -123,17 +138,53 @@ enum SettingsChrome {
     /// states the width it wraps at — a label that doesn't is how the old window
     /// came to be nineteen hundred points wide.
     static func noteRow(_ label: NSTextField) -> NSView {
-        label.preferredMaxLayoutWidth = contentWidth - Space.page * 2 - rowInset * 2
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fit(label, to: cardWidth - rowInset * 2)
         let row = NSStackView(views: [label])
         row.orientation = .horizontal
-        row.alignment = .top
-        row.edgeInsets = NSEdgeInsets(top: Space.step, left: rowInset,
-                                      bottom: Space.step, right: rowInset)
+        row.alignment = .centerY
+        row.edgeInsets = NSEdgeInsets(top: 0, left: rowInset, bottom: 0, right: rowInset)
         row.translatesAutoresizingMaskIntoConstraints = false
-        label.widthAnchor.constraint(equalTo: row.widthAnchor,
-                                     constant: -rowInset * 2).isActive = true
+        row.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: measure(label, width: cardWidth - rowInset * 2)
+                + Space.step * 2
+        ).isActive = true
         return row
+    }
+
+    /// Pins a wrapping label to a width and to the height that width actually
+    /// needs, measured.
+    ///
+    /// Intrinsic height was the obvious way and it does not survive two nested
+    /// stacks: the label reported one line, the row sized itself for one line, and
+    /// the second line drew straight through the separator below it. Measuring is
+    /// four lines of code and cannot be wrong about its own text.
+    @discardableResult
+    static func fit(_ label: NSTextField, to width: CGFloat) -> NSLayoutConstraint {
+        label.preferredMaxLayoutWidth = width
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.widthAnchor.constraint(equalToConstant: width).isActive = true
+        let height = label.heightAnchor.constraint(equalToConstant: measure(label, width: width))
+        height.isActive = true
+        // Kept on the label so a status line that changes at runtime can be
+        // re-measured — see `SettingsWindow.syncQuota`.
+        label.fittedHeight = height
+        return height
+    }
+
+    /// The height this label needs at this width — asked of the label, not of its
+    /// string.
+    ///
+    /// `boundingRect` answered 26 where the field itself wanted 28, and two points
+    /// is the difference between a second line and a second line clipped out of
+    /// existence. The field knows how it lays its own text out; nothing else does.
+    static func measure(_ label: NSTextField, width: CGFloat) -> CGFloat {
+        guard !label.stringValue.isEmpty else { return 0 }
+        let remembered = label.preferredMaxLayoutWidth
+        label.preferredMaxLayoutWidth = width
+        label.invalidateIntrinsicContentSize()
+        let height = ceil(label.fittingSize.height)
+        label.preferredMaxLayoutWidth = remembered
+        return height
     }
 
     /// A row holding whatever it is given, at the row's own margins — buttons, a
@@ -142,16 +193,16 @@ enum SettingsChrome {
         let row = NSStackView(views: [view])
         row.orientation = .horizontal
         row.alignment = .centerY
-        row.edgeInsets = NSEdgeInsets(top: Space.step, left: rowInset,
-                                      bottom: Space.step, right: rowInset)
+        row.edgeInsets = NSEdgeInsets(top: 0, left: rowInset, bottom: 0, right: rowInset)
         row.translatesAutoresizingMaskIntoConstraints = false
         // Whatever it holds spans the row, so a slider or a button strip lines up
         // with the labels above it instead of floating at its own natural width.
         view.widthAnchor.constraint(equalTo: row.widthAnchor,
                                     constant: -rowInset * 2).isActive = true
-        if let height {
-            row.heightAnchor.constraint(greaterThanOrEqualToConstant: height).isActive = true
-        }
+        let content = height ?? ceil(view.fittingSize.height)
+        row.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: max(rowHeight, content + Space.step * 2)
+        ).isActive = true
         return row
     }
 
@@ -167,7 +218,7 @@ enum SettingsChrome {
 
     static func header(_ text: String) -> NSTextField {
         let l = NSTextField(wrappingLabelWithString: text)
-        l.preferredMaxLayoutWidth = contentWidth - Space.page * 2
+        l.preferredMaxLayoutWidth = cardWidth
         l.font = .systemFont(ofSize: 11)
         l.textColor = .secondaryLabelColor
         return l
@@ -183,7 +234,7 @@ enum SettingsChrome {
         let l = NSTextField(wrappingLabelWithString: text)
         l.font = .systemFont(ofSize: 11.5)
         l.textColor = .secondaryLabelColor
-        l.preferredMaxLayoutWidth = contentWidth - Space.page * 2 - rowInset * 2 - 60
+        l.preferredMaxLayoutWidth = captionWidth
         l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return l
     }
@@ -200,22 +251,52 @@ enum SettingsChrome {
     /// runs the full width cuts the card in two and the rows stop reading as one
     /// group.
     private static func hairline() -> NSView {
-        let line = NSView()
-        line.wantsLayer = true
-        line.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+        let line = SettingsSurface(fill: { NSColor.separatorColor.withAlphaComponent(0.7) })
         line.translatesAutoresizingMaskIntoConstraints = false
 
         let holder = NSView()
         holder.translatesAutoresizingMaskIntoConstraints = false
         holder.addSubview(line)
         NSLayoutConstraint.activate([
-            holder.heightAnchor.constraint(equalToConstant: 1),
+            // Hairline means hairline: a 1 pt line is two device pixels on this
+            // screen and reads as a rule drawn through the card.
+            holder.heightAnchor.constraint(equalToConstant: 0.5),
             line.topAnchor.constraint(equalTo: holder.topAnchor),
             line.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
             line.leadingAnchor.constraint(equalTo: holder.leadingAnchor, constant: rowInset),
             line.trailingAnchor.constraint(equalTo: holder.trailingAnchor),
         ])
         return holder
+    }
+}
+
+/// A plain filled rectangle that knows its own colour.
+///
+/// `layer.backgroundColor` is a `CGColor`: a dynamic `NSColor` is flattened the
+/// moment it is assigned, against whatever appearance happened to be current.
+/// Every card and every hairline in this window would then keep its light-mode
+/// grey after somebody switched to dark — which nobody notices while building in
+/// one appearance, and everybody notices in the other.
+final class SettingsSurface: NSView {
+    private let fill: () -> NSColor
+
+    init(fill: @escaping () -> NSColor) {
+        self.fill = fill
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = fill().cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 }
 
@@ -243,7 +324,7 @@ final class SidebarItem: NSButton {
         image = Self.chip(symbol: page.symbol, tint: page.tint)
         imageScaling = .scaleNone
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 30).isActive = true
+        heightAnchor.constraint(equalToConstant: 32).isActive = true
         apply()
     }
 
@@ -252,6 +333,11 @@ final class SidebarItem: NSButton {
     var isSelected: Bool {
         get { selected }
         set { selected = newValue; apply() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        apply()   // the accent colour is the user's, and it is a dynamic colour
     }
 
     private func apply() {
@@ -267,14 +353,14 @@ final class SidebarItem: NSButton {
     /// settings list marks each pane. Drawn once per item: a tinted image cannot
     /// come from a symbol configuration alone.
     private static func chip(symbol: String, tint: NSColor) -> NSImage {
-        let side: CGFloat = 18
+        let side: CGFloat = 20
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
         tint.setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: side, height: side),
-                     xRadius: 4.5, yRadius: 4.5).fill()
+                     xRadius: 5, yRadius: 5).fill()
         if let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)) {
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium)) {
             let tinted = NSImage(size: glyph.size)
             tinted.lockFocus()
             NSColor.white.set()
@@ -289,5 +375,16 @@ final class SidebarItem: NSButton {
         }
         image.unlockFocus()
         return image
+    }
+}
+
+private var fittedHeightKey: UInt8 = 0
+
+extension NSTextField {
+    /// The measured-height constraint `SettingsChrome.fit` installed, so a label
+    /// whose text changes can be re-measured rather than re-built.
+    var fittedHeight: NSLayoutConstraint? {
+        get { objc_getAssociatedObject(self, &fittedHeightKey) as? NSLayoutConstraint }
+        set { objc_setAssociatedObject(self, &fittedHeightKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
     }
 }

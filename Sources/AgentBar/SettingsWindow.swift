@@ -132,7 +132,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false)
         w.title = "AgentBar Settings"
-        w.titleVisibility = .hidden
+        w.titleVisibility = .visible
         w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.delegate = self
@@ -162,6 +162,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         // ---- the page ----
         pageTitle = SettingsChrome.title(page.title)
+        pageTitle.isHidden = true   // the title bar carries it
         pageTitle.translatesAutoresizingMaskIntoConstraints = false
         pageHost = NSView()
         pageHost.translatesAutoresizingMaskIntoConstraints = false
@@ -177,9 +178,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         doc.addSubview(pageHost)
         scroll.documentView = doc
 
-        let content = NSView()
-        content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        // Not a CGColor assigned once: the page is white in one appearance and
+        // near-black in the other, and a flattened colour keeps whichever was
+        // current when the window was built.
+        let content = SettingsSurface(fill: { .textBackgroundColor })
         content.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(pageTitle)
         content.addSubview(scroll)
@@ -442,6 +444,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private func select(_ page: Page) {
         self.page = page
         pageTitle.stringValue = page.title
+        window?.title = page.title
         for item in sidebarItems { item.isSelected = item.page == page }
         for sub in pageHost.subviews { sub.removeFromSuperview() }
         guard let view = pageViews[page] else { return }
@@ -475,7 +478,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             return view.fittingSize.height
         }.max() ?? 0
         // The title, the gap under it, and the page's own bottom margin.
-        let chrome = 20 + 19 + 14 + SettingsChrome.Space.page
+        let chrome = SettingsChrome.Space.gap * 3 + SettingsChrome.Space.page
         let height = min(max(tallest + chrome, SettingsChrome.minWindowHeight),
                          SettingsChrome.maxWindowHeight)
         window.setContentSize(NSSize(width: window.frame.width, height: height))
@@ -592,6 +595,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let sentence = ClaudeQuota.sentence(for: ClaudeQuota.shared.status)
         guard quotaStatus.stringValue != sentence else { return }
         quotaStatus.stringValue = sentence
+        // A longer sentence is a taller label, and the row is sized to what was
+        // measured — not to what the label thinks it needs.
+        quotaStatus.fittedHeight?.constant = SettingsChrome.measure(
+            quotaStatus, width: SettingsChrome.cardWidth - SettingsChrome.rowInset * 2)
     }
 
     /// Switching it off stops new rows; it does not delete the old ones, because
@@ -766,6 +773,19 @@ extension SettingsWindow {
     /// scrolled out of sight. A single unwrapped label once stretched it to 1900 pt
     /// and pushed two sections off the right edge; nothing in the build said a
     /// word, and a picture would have.
+    /// One page at its true size, for reading rather than for the overview.
+    func renderPageForVerification(_ page: Page, to url: URL) -> Bool {
+        if window == nil { build() }
+        reload()
+        select(page)
+        guard let root = window?.contentView else { return false }
+        root.layoutSubtreeIfNeeded()
+        guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return false }
+        root.cacheDisplay(in: root.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: url)) != nil
+    }
+
     func renderForVerification(to url: URL) -> Bool {
         if window == nil { build() }
         reload()

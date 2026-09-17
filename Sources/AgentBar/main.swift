@@ -159,8 +159,14 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-usage"),
 if let i = CommandLine.arguments.firstIndex(of: "--render-settings"),
    CommandLine.arguments.indices.contains(i + 1) {
     _ = NSApplication.shared
-    exit(SettingsWindow.shared.renderForVerification(
-        to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
+    let url = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    // A page name after the path renders that one page at its true size; the
+    // six-up sheet is for the overview and too small to read a caption in.
+    if CommandLine.arguments.indices.contains(i + 2),
+       let page = SettingsWindow.Page(rawValue: CommandLine.arguments[i + 2]) {
+        exit(SettingsWindow.shared.renderPageForVerification(page, to: url) ? 0 : 1)
+    }
+    exit(SettingsWindow.shared.renderForVerification(to: url) ? 0 : 1)
 }
 
 // Whether Claude's quota can be read at all, in one line, without the menu and
