@@ -15,6 +15,15 @@
 # ts older than the one already recorded (real mtimes only ever age forward).
 set -uo pipefail
 
+if [ "${AGENTBAR_LIVE_TESTS:-0}" != "1" ]; then
+  # This suite drives the RUNNING app, so its synthetic sessions appear on the
+  # island and in the menu for as long as it runs — an agent the person never
+  # started, on their screen, while they are working. Opt in when the watcher is
+  # what you are changing: AGENTBAR_LIVE_TESTS=1 bash Scripts/test/antigravity-watcher-test.sh
+  echo "skip: live-app test (set AGENTBAR_LIVE_TESTS=1 to run it)"
+  exit 0
+fi
+
 if [ "$(uname)" != "Darwin" ] || ! pgrep -xq AgentBar; then
   echo "skip: AgentBar app not running (this test needs the live watcher)"
   exit 0
@@ -64,6 +73,23 @@ walk() {
 
 walk antigravity     antigravity-app   # desktop app: row clicks focus the app
 walk antigravity-cli cli               # `agy` in a terminal: row clicks focus it
+
+# The live app records every session that ends — including these. They are ours,
+# not the user's, and left behind they show up in Today as agents somebody never
+# ran. (Reported exactly that way: "I never used Antigravity once.") Twice, with a
+# pause between: the row is appended after the state file is removed, so the first
+# pass can run before the app has written it.
+prune_test_rows() {
+  HIST="$HOME/.agentbar/history.jsonl"
+  [ -f "$HIST" ] || return 0
+  TMP="$(mktemp)"
+  grep -v '"agbwtest' "$HIST" > "$TMP" 2>/dev/null
+  cat "$TMP" > "$HIST"
+  rm -f "$TMP"
+}
+prune_test_rows
+sleep 3
+prune_test_rows
 
 echo "---"
 echo "$pass passed, $fail failed"

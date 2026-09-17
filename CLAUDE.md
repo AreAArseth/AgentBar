@@ -36,7 +36,10 @@ open "build/AgentBar.app"
    `done`, Claude Code enters `done` after every turn, and a fifty-turn conversation
    posted fifty banners. An agent finishing is not news. See `Notifier`.
    Windows are the exception, not the pattern: only `WelcomeWindow`
-   and `SettingsWindow`, both small, both opened by the user.
+   and `SettingsWindow`, both small, both opened by the user. Settings is a
+   sidebar of pages (`SettingsChrome` is its furniture), not a scroll: a new
+   preference joins a page or earns one, and never lengthens a column until the
+   last section falls off the screen.
    `LauncherPanel` is the third surface and the only one summoned by a keystroke.
    It earns that by the same test the banners do: it takes no space until asked,
    it appears only on a deliberate keypress or menu click, and it closes the

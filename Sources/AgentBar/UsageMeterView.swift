@@ -106,8 +106,14 @@ final class UsageMeterView: NSView {
     static func compactRows(for readings: [UsageCenter.Reading]) -> [Row] {
         readings.compactMap { r in
             guard let w = r.windows.first(where: { !$0.expired() }) ?? r.windows.first else {
-                return r.text.isEmpty ? nil : Row(provider: r.provider, window: "",
-                                                  used: nil, trailing: r.text)
+                guard !r.text.isEmpty else { return nil }
+                // A provider with no meter and a reason for it says the reason
+                // here too. The island is meant for numbers, and a missing bar
+                // with no explanation is not a number — it is an app that looks
+                // broken, which is exactly how it was read.
+                let why = r.note.map { " · \($0)" } ?? ""
+                return Row(provider: r.provider, window: "", used: nil,
+                           trailing: r.text + why)
             }
             guard !w.expired() else {
                 return Row(provider: r.provider, window: "", used: nil, trailing: "window reset")

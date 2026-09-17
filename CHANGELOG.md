@@ -3,6 +3,47 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.26.0 - 2026-09-17
+
+### Changed
+
+- **Settings is a window again, not a document.** Six pages behind a sidebar —
+  General, Notifications, Shortcuts, Usage, Approvals, Diagnostics — each a short
+  column of grouped rows with the control on the right, the way a Mac settings
+  window has looked for years.
+
+  The old one stacked every section down a single scroll, which has two faults that
+  compound: everything is visible at once, so nothing is findable, and each switch
+  carried a paragraph, so the window grew until Diagnostics sat off the bottom of
+  the screen. Every explanation is now one sentence under its own row; the rest was
+  always in the README.
+
+- **A missing meter says why on the island too.** A bar that is simply absent reads
+  as a broken app — it was read exactly that way — so when the quota is switched on
+  and cannot be read, the island's line carries the short reason after the number.
+  It disappears the moment there is a number to show.
+
+### Fixed
+
+- **Today counted sessions nobody ran.** Six "Antigravity · <1m" rows on a Mac
+  where Antigravity has never been opened — they were the watcher's own
+  integration tests. That suite has to drive the *live* app, so unlike every other
+  suite it writes into the real `~/.agentbar`, and the app dutifully recorded each
+  synthetic session in the day's history. It now takes its own rows back out, and
+  so does the Cowork suite, which had the same shape. A test that leaves rows
+  behind is a test that lies about your day.
+
+  Those two suites are also opt-in now (`AGENTBAR_LIVE_TESTS=1`), because while
+  they run their synthetic sessions are *live*: an agent you never started,
+  appearing on your island, on your screen, while you work. A test has no
+  business being visible.
+
+### Added
+
+- `--render-settings` writes every settings page to one PNG. Same idea as
+  `--render-sounds` and `--render-usage`, and the same reason: this window opens
+  over the work being done to it, so nobody looks at it while changing it.
+
 ## 1.25.0 - 2026-09-17
 
 ### Added

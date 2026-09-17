@@ -265,6 +265,21 @@ import Testing
         #expect(rows[0].trailing == "2.4 AIU today")
     }
 
+    /// …and when the missing bar has a reason, the island says it. A meter that is
+    /// absent without a word reads as a broken app, which is how it was read.
+    @Test func aMissingMeterSaysWhyOnTheIslandToo() {
+        let rows = UsageMeterView.compactRows(for: [
+            UsageCenter.Reading(provider: "Claude", text: "~1.1M tok this 5h block",
+                                note: "the stored login is empty"),
+        ])
+        #expect(rows[0].trailing == "~1.1M tok this 5h block · the stored login is empty")
+        // A provider that simply has no ceiling is not a problem and says nothing.
+        let quiet = UsageMeterView.compactRows(for: [
+            UsageCenter.Reading(provider: "Copilot", text: "2.4 AIU today"),
+        ])
+        #expect(quiet[0].trailing == "2.4 AIU today")
+    }
+
     @Test func aiuKeepsTheDecimalsThatMatter() {
         #expect(UsageCenter.aiu(33_104_000) == "0.03")   // a morning of small edits
         #expect(UsageCenter.aiu(2_373_072_000) == "2.4")

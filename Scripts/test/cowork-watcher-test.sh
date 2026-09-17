@@ -15,6 +15,15 @@
 # to, so a session parked outside it can't surface in the Cowork UI.
 set -uo pipefail
 
+if [ "${AGENTBAR_LIVE_TESTS:-0}" != "1" ]; then
+  # This suite drives the RUNNING app, so its synthetic sessions appear on the
+  # island and in the menu for as long as it runs — an agent the person never
+  # started, on their screen, while they are working. Opt in when the watcher is
+  # what you are changing: AGENTBAR_LIVE_TESTS=1 bash Scripts/test/cowork-watcher-test.sh
+  echo "skip: live-app test (set AGENTBAR_LIVE_TESTS=1 to run it)"
+  exit 0
+fi
+
 if [ "$(uname)" != "Darwin" ] || ! pgrep -xq AgentBar; then
   echo "skip: AgentBar app not running (this test needs the live watcher)"
   exit 0
@@ -82,6 +91,21 @@ check "oversized line -> still live"  'wait_state thinking 8'
 # 6. turn end
 echo '{"type":"result","subtype":"success","uuid":"r1","is_error":false}' >> "$A"
 check "result event -> done"          'wait_state done 8'
+
+# Same reason as the Antigravity suite: the live app records the session this
+# test ends, and a row nobody ran is a lie about the user's day. The id carries
+# the `agbwtest` marker so it can be taken back out.
+prune_test_rows() {
+  HIST="$HOME/.agentbar/history.jsonl"
+  [ -f "$HIST" ] || return 0
+  TMP="$(mktemp)"
+  grep -v '"agbwtest' "$HIST" > "$TMP" 2>/dev/null
+  cat "$TMP" > "$HIST"
+  rm -f "$TMP"
+}
+prune_test_rows
+sleep 3
+prune_test_rows
 
 echo "---"
 echo "$pass passed, $fail failed"

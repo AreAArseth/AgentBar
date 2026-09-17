@@ -33,8 +33,9 @@ swift test                                # Swift unit tests (needs Swift 6)
 ./Scripts/test/opencode-plugin-test.sh    # OpenCode plugin driven through its event bus
 ./Scripts/test/cli-test.sh                # cross-platform CLI tests
 node --test Scripts/cloud/test/*.test.js  # cloud poller tests
-./Scripts/test/antigravity-watcher-test.sh # live-app integration test (needs the app running)
-./Scripts/test/cowork-watcher-test.sh     # live-app integration test (needs AgentBar + Claude.app running)
+AGENTBAR_LIVE_TESTS=1 ./Scripts/test/antigravity-watcher-test.sh # live-app test: opt-in, because while it
+                                          # runs its sessions are real ones on your island
+AGENTBAR_LIVE_TESTS=1 ./Scripts/test/cowork-watcher-test.sh     # the same, with Claude.app running too
 ```
 
 `swift build` works for quick compile checks and SourceKit-LSP; the shippable app
@@ -92,6 +93,7 @@ defaults write com.michalstrnadel.agentbar presentationMode -string island  # or
 defaults delete com.michalstrnadel.agentbar showWelcomeOnLaunch             # first-run window back
 defaults write com.michalstrnadel.agentbar islandExpandDebug -bool true     # hold the island open (layout work)
 defaults write com.michalstrnadel.agentbar settingsOnLaunchDebug -bool true # open Settings on launch (layout work)
+./build/AgentBar.app/Contents/MacOS/AgentBar --render-settings /tmp/settings.png   # every settings page as one picture
 /Applications/AgentBar.app/Contents/MacOS/AgentBar --quota-status                 # can Claude's quota be read here, and
                                                                            # if not, why — macOS decides Keychain access
                                                                            # on the signature, so run the *bundle's*

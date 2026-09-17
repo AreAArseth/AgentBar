@@ -1,13 +1,21 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: one small window, seven quiet sections — Sounds,
-/// Notifications, the global Allow/Deny shortcut, the island, usage, approvals,
-/// and Diagnostics.
-/// Every control writes
-/// UserDefaults directly and fires `onChange`, so changes apply live; the app
-/// delegate owns the fan-out to whichever surfaces care. Diagnostics is the odd
-/// one out: it sets nothing, it reports — see `DiagnosticsView`.
+/// AgentBar's Settings: a sidebar of six pages — General, Notifications,
+/// Shortcuts, Usage, Approvals and Diagnostics — each a short column of grouped
+/// rows.
+///
+/// It used to be one scroll with every section stacked down it, which has two
+/// faults that compound: everything is visible at once, so nothing is findable,
+/// and each switch carried a paragraph, so the window grew until Diagnostics sat
+/// off the bottom of the screen. A page you scroll is a document; this is a
+/// window.
+///
+/// Every control still writes UserDefaults directly and fires `onChange`, so
+/// changes apply live and the app delegate fans them out to whichever surfaces
+/// care. Diagnostics is the odd one out: it sets nothing, it reports — see
+/// `DiagnosticsView`. The furniture (cards, rows, the sidebar) is
+/// `SettingsChrome`; this file owns what the controls *mean*.
 final class SettingsWindow: NSObject, NSWindowDelegate {
     static let shared = SettingsWindow()
     /// Wide enough that a diagnostic's detail and its fix each sit on one or two
@@ -15,33 +23,64 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     static let minWidth: CGFloat = 470
     var onChange: (() -> Void)?
 
+    enum Page: String, CaseIterable {
+        case general, notifications, shortcuts, usage, approvals, diagnostics
+
+        var title: String {
+            switch self {
+            case .general:     return "General"
+            case .notifications: return "Notifications"
+            case .shortcuts:   return "Shortcuts"
+            case .usage:       return "Usage"
+            case .approvals:   return "Approvals"
+            case .diagnostics: return "Diagnostics"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .general:     return "gearshape"
+            case .notifications: return "bell"
+            case .shortcuts:   return "keyboard"
+            case .usage:       return "speedometer"
+            case .approvals:   return "checkmark.shield"
+            case .diagnostics: return "stethoscope"
+            }
+        }
+    }
+
     private var window: NSWindow?
-    private var enableBox: NSButton!
+    private var enableBox: NSSwitch!
     private var allowRecorder: ShortcutRecorder!
     private var denyRecorder: ShortcutRecorder!
-    private var launchBox: NSButton!
+    private var launchBox: NSSwitch!
     private var launchRecorder: ShortcutRecorder!
-    private var soundsBox: NSButton!
+    private var soundsBox: NSSwitch!
     private var volumeSlider: NSSlider!
     private var testButton: NSButton!
     private var volumeRow: NSStackView!
-    private var hideIslandBox: NSButton!
+    private var hideIslandBox: NSSwitch!
     private var diagnostics: DiagnosticsView!
-    private var claudeQuotaBox: NSButton!
+    private var claudeQuotaBox: NSSwitch!
     private var quotaStatus: NSTextField!
     private var quotaCheck: NSButton!
     private var quotaToken: NSButton!
-    private var rememberBox: NSButton!
-    private var notifyApprovalsBox: NSButton!
-    private var notifyFailuresBox: NSButton!
-    private var notifyQuietBox: NSButton!
+    private var rememberBox: NSSwitch!
+    private var notifyApprovalsBox: NSSwitch!
+    private var notifyFailuresBox: NSSwitch!
+    private var notifyQuietBox: NSSwitch!
+
+    private var sidebarItems: [SidebarItem] = []
+    private var pageViews: [Page: NSView] = [:]
+    private var pageHost: NSView!
+    private var pageTitle: NSTextField!
+    private(set) var page: Page = .general
 
     /// Lives in one place because the caption is rebuilt from scratch whenever macOS
     /// has something to say about authorization — two copies of it drifted once.
     static let notifyCaptionText =
-        "A banner from macOS, with Allow and Deny on it. Only for what wants an\n"
-        + "answer — nothing is announced just for finishing. The summary waits until\n"
-        + "you've been away from the keyboard for two minutes. Sounds are separate, above."
+        "Only for what wants an answer — nothing is announced just for finishing. "
+        + "The summary waits until you have been away from the keyboard for two minutes."
     private var notifyCaption: NSTextField!
     private var notifySettingsButton: NSButton!
     private var notifyTestButton: NSButton!
@@ -71,26 +110,122 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     private func build() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
-                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0,
+                                width: SettingsChrome.sidebarWidth + SettingsChrome.contentWidth,
+                                height: SettingsChrome.minWindowHeight),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered, defer: false)
         w.title = "AgentBar Settings"
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.delegate = self
         w.center()
 
-        // ---- Sounds ----
-        soundsBox = NSButton(checkboxWithTitle: "Play sounds for agent events",
-                             target: self, action: #selector(toggleSounds))
-        let soundsCap = caption(
-            "A soft cue when a session needs approval, asks a question,\nor finishes. Nothing plays while agents are working.")
+        buildControls()
 
+        // ---- the sidebar ----
+        sidebarItems = Page.allCases.map {
+            SidebarItem(page: $0, target: self, action: #selector(pick(_:)))
+        }
+        let list = NSStackView(views: sidebarItems)
+        list.orientation = .vertical
+        list.alignment = .leading
+        list.spacing = 2
+        list.translatesAutoresizingMaskIntoConstraints = false
+
+        let sidebar = NSVisualEffectView()
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.state = .followsWindowActiveState
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(list)
+
+        // ---- the page ----
+        pageTitle = SettingsChrome.title(page.title)
+        pageTitle.translatesAutoresizingMaskIntoConstraints = false
+        pageHost = NSView()
+        pageHost.translatesAutoresizingMaskIntoConstraints = false
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let doc = FlippedView()          // top-down, like the island's row list
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(pageHost)
+        scroll.documentView = doc
+
+        let content = NSView()
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(pageTitle)
+        content.addSubview(scroll)
+
+        let root = NSView(frame: NSRect(x: 0, y: 0,
+                                        width: SettingsChrome.sidebarWidth
+                                            + SettingsChrome.contentWidth,
+                                        height: SettingsChrome.minWindowHeight))
+        root.addSubview(sidebar)
+        root.addSubview(content)
+        w.contentView = root
+
+        NSLayoutConstraint.activate([
+            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            sidebar.topAnchor.constraint(equalTo: root.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: SettingsChrome.sidebarWidth),
+            // Below the traffic lights, which sit over the sidebar in a window
+            // with no title bar of its own.
+            list.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 46),
+            list.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
+            list.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
+
+            content.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            content.topAnchor.constraint(equalTo: root.topAnchor),
+            content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+
+            pageTitle.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
+            pageTitle.leadingAnchor.constraint(equalTo: content.leadingAnchor,
+                                               constant: SettingsChrome.Space.page),
+
+            scroll.topAnchor.constraint(equalTo: pageTitle.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            pageHost.topAnchor.constraint(equalTo: doc.topAnchor),
+            pageHost.leadingAnchor.constraint(equalTo: doc.leadingAnchor,
+                                              constant: SettingsChrome.Space.page),
+            pageHost.trailingAnchor.constraint(equalTo: doc.trailingAnchor,
+                                               constant: -SettingsChrome.Space.page),
+            pageHost.bottomAnchor.constraint(equalTo: doc.bottomAnchor,
+                                             constant: -SettingsChrome.Space.page),
+        ])
+
+        for p in Page.allCases { pageViews[p] = buildPage(p) }
+        window = w
+        select(page)
+        sizeToTallestPage()
+        clampToScreen()
+    }
+
+    /// Every control, made once. Which page each one lands on is `buildPage`'s
+    /// business, and what it means is the rest of this file's.
+    private func buildControls() {
+        soundsBox = SettingsChrome.toggle(target: self, action: #selector(toggleSounds))
         volumeSlider = NSSlider(value: 0.5, minValue: 0, maxValue: 1,
                                 target: self, action: #selector(volumeChanged(_:)))
         volumeSlider.isContinuous = true
         volumeSlider.widthAnchor.constraint(equalToConstant: 168).isActive = true
         volumeSlider.setAccessibilityLabel("Sound volume")
-        testButton = NSButton(title: "Test", target: self, action: #selector(testClicked))
-        testButton.bezelStyle = .rounded
+        testButton = SettingsChrome.smallButton("Test", target: self, action: #selector(testClicked))
         volumeRow = NSStackView(views: [speakerGlyph("speaker.fill"), volumeSlider,
                                         speakerGlyph("speaker.wave.3.fill"), testButton])
         volumeRow.orientation = .horizontal
@@ -98,24 +233,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         volumeRow.spacing = 8
         volumeRow.setCustomSpacing(12, after: volumeRow.arrangedSubviews[2])
 
-        // ---- Shortcuts ----
-        enableBox = NSButton(checkboxWithTitle: "Global Allow / Deny shortcut",
-                             target: self, action: #selector(toggleEnabled))
-        let enableCaption = caption(
-            "Answer the newest pending permission request from anywhere,\nwithout opening the menu. No Accessibility permission needed.")
+        hideIslandBox = SettingsChrome.toggle(target: self, action: #selector(toggleHideIsland))
 
-        launchBox = NSButton(checkboxWithTitle: "Launcher shortcut",
-                             target: self, action: #selector(toggleLauncher))
-        let launchCaption = caption(
-            "A chord that opens the launcher from anywhere: a project you have worked\n"
-            + "in, an agent, and what you want it to do. The menu's New task… opens the\n"
-            + "same thing whether or not this is on.")
-
+        enableBox = SettingsChrome.toggle(target: self, action: #selector(toggleEnabled))
+        launchBox = SettingsChrome.toggle(target: self, action: #selector(toggleLauncher))
         allowRecorder = ShortcutRecorder(defaultsKey: "allowHotKey", fallback: .defaultAllow)
         denyRecorder = ShortcutRecorder(defaultsKey: "denyHotKey", fallback: .defaultDeny)
         launchRecorder = ShortcutRecorder(defaultsKey: "launchHotKey", fallback: .defaultLaunch)
-        let recorders = [allowRecorder!, denyRecorder!, launchRecorder!]
-        for recorder in recorders {
+        for recorder in [allowRecorder!, denyRecorder!, launchRecorder!] {
             recorder.onCaptureChange = { [weak self, weak recorder] capturing in
                 guard let self else { return }
                 if capturing {
@@ -143,224 +268,208 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             recorder.onRecord = { [weak self] in self?.onChange?() }
         }
 
-        let grid = NSGridView(views: [
-            [gridLabel("Allow:"), allowRecorder!],
-            [gridLabel("Deny:"), denyRecorder!],
-        ])
-        let launchGrid = NSGridView(views: [[gridLabel("Launcher:"), launchRecorder!]])
-        launchGrid.rowSpacing = 8
-        launchGrid.columnSpacing = 10
-        launchGrid.column(at: 0).xPlacement = .trailing
-        launchGrid.translatesAutoresizingMaskIntoConstraints = false
-        grid.rowSpacing = 8
-        grid.columnSpacing = 10
-        grid.column(at: 0).xPlacement = .trailing
-
-        // ---- Island ----
-        hideIslandBox = NSButton(checkboxWithTitle: "Hide island when no sessions",
-                                 target: self, action: #selector(toggleHideIsland))
-        let islandCaption = caption(
-            "The pill slips away when nothing is running and returns with\nthe next session. Applies when the menu bar mark is shown too.")
-
-        // ---- Notifications ----
         // Off by default, and the ask for permission happens on the tick, never at
         // launch — see Notifier.start().
-        notifyApprovalsBox = NSButton(checkboxWithTitle: "When an agent needs approval",
-                                      target: self, action: #selector(toggleNotifications))
-        notifyFailuresBox = NSButton(checkboxWithTitle: "When a session fails",
-                                     target: self, action: #selector(toggleNotifications))
-        notifyQuietBox = NSButton(checkboxWithTitle: "When everything goes quiet, and you're away",
-                                  target: self, action: #selector(toggleNotifications))
-        notifyCaption = caption(Self.notifyCaptionText)
+        notifyApprovalsBox = SettingsChrome.toggle(target: self,
+                                                   action: #selector(toggleNotifications(_:)))
+        notifyFailuresBox = SettingsChrome.toggle(target: self,
+                                                  action: #selector(toggleNotifications(_:)))
+        notifyQuietBox = SettingsChrome.toggle(target: self,
+                                               action: #selector(toggleNotifications(_:)))
+        notifyCaption = SettingsChrome.caption(Self.notifyCaptionText)
         // Telling someone where a switch lives is not the same as taking them there.
         // Shown only when macOS has actually refused, so it is never a button that
         // opens a pane with nothing to do in it.
-        notifySettingsButton = NSButton(title: "Open System Settings", target: self,
-                                        action: #selector(openNotificationSettings))
-        notifySettingsButton.bezelStyle = .rounded
-        notifySettingsButton.controlSize = .small
-        notifySettingsButton.font = .systemFont(ofSize: 11)
+        notifySettingsButton = SettingsChrome.smallButton("Open System Settings", target: self,
+                                                          action: #selector(openNotificationSettings))
         notifySettingsButton.isHidden = true
-
         // Same affordance the Sounds section has, for the same reason: "is this
         // reaching me?" deserves an answer that isn't "wait for an agent to need
         // something". It also separates suppressed-by-Focus from broken, which from
         // the outside look identical.
-        notifyTestButton = NSButton(title: "Send a test", target: self,
-                                    action: #selector(sendTestNotification))
-        notifyTestButton.bezelStyle = .rounded
-        notifyTestButton.controlSize = .small
-        notifyTestButton.font = .systemFont(ofSize: 11)
-        notifyTestButton.toolTip = "Nothing appears? A Focus is probably on — macOS files banners in Notification Center instead of showing them."
+        notifyTestButton = SettingsChrome.smallButton("Send a test", target: self,
+                                                      action: #selector(sendTestNotification))
+        notifyTestButton.toolTip = "Nothing appears? A Focus is probably on — macOS files "
+            + "banners in Notification Center instead of showing them."
 
-        let notifyButtons = NSStackView(views: [notifyTestButton, notifySettingsButton])
-        notifyButtons.orientation = .horizontal
-        notifyButtons.spacing = 8
-
-        // ---- Usage ----
-        // The one switch in this window that lets anything off the machine, so it
-        // says so in the caption rather than in a doc nobody opens.
-        claudeQuotaBox = NSButton(checkboxWithTitle: "Ask Anthropic for Claude's usage",
-                                  target: self, action: #selector(toggleClaudeQuota))
-        let quotaCaption = caption(
-            "Claude keeps its 5-hour and weekly percentages on its own servers, not on\n"
-            + "this Mac — this is the only way to show them. It uses the login Claude Code\n"
-            + "already stored, asks every five minutes, and is the one network call\n"
-            + "AgentBar makes besides checking for updates. Codex and Copilot need none.")
+        claudeQuotaBox = SettingsChrome.toggle(target: self, action: #selector(toggleClaudeQuota))
         // Everywhere else a failed reading is silent, because an error message
         // where a number belongs is worse than an empty space. Here it is the
         // opposite: this is the switch that caused it, and a switch that does
         // nothing and says nothing cannot be told from a broken one.
-        quotaStatus = caption("")
-        // Every other caption in this window wraps because its text carries its own
-        // line breaks. This one is written at runtime and cannot, so it needs the
-        // width said out loud — without it the label takes its natural single-line
-        // width, the window grows to fit the longest sentence, and the shortcut
-        // grids (trailing-placed inside a stack that is suddenly 1900 pt wide) get
-        // dragged off the right edge. One missing line, three broken sections.
-        quotaStatus.preferredMaxLayoutWidth = Self.minWidth - 40
-        quotaStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        quotaCheck = NSButton(title: "Check now", target: self,
-                              action: #selector(checkQuotaNow))
-        quotaCheck.bezelStyle = .rounded
-        quotaCheck.controlSize = .small
-        quotaCheck.font = .systemFont(ofSize: 11)
+        quotaStatus = SettingsChrome.caption("")
+        quotaCheck = SettingsChrome.smallButton("Check now", target: self,
+                                                action: #selector(checkQuotaNow))
         quotaCheck.toolTip = "Asks straight away instead of waiting for the next five-minute "
             + "turn — and raises the macOS Keychain prompt, if that is what it is waiting for."
         // For the machine whose sessions run under their own CLAUDE_CONFIG_DIR: the
         // CLI keeps that login somewhere AgentBar cannot read, and no amount of
         // asking politely changes it. A token handed over on purpose does.
-        quotaToken = NSButton(title: "Use a token…", target: self,
-                              action: #selector(editQuotaToken))
-        quotaToken.bezelStyle = .rounded
-        quotaToken.controlSize = .small
-        quotaToken.font = .systemFont(ofSize: 11)
-        let quotaButtons = NSStackView(views: [quotaCheck, quotaToken])
-        quotaButtons.orientation = .horizontal
-        quotaButtons.spacing = 8
+        quotaToken = SettingsChrome.smallButton("Use a token…", target: self,
+                                                action: #selector(editQuotaToken))
 
+        rememberBox = SettingsChrome.toggle(target: self, action: #selector(toggleRemember))
 
-        // ---- Approvals ----
-        rememberBox = NSButton(checkboxWithTitle: "Remember what I decided",
-                               target: self, action: #selector(toggleRemember))
-        let rememberCaption = caption(
-            "So a prompt you have answered before can say so: “Allowed 23× here”.\n"
-            + "Kept in ~/.agentbar/decisions.jsonl, never sent anywhere, and never\n"
-            + "acted on by itself. `agentbar forget` empties it.")
-
-        // ---- Diagnostics ----
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
-        let diagnosticsCaption = caption(
-            "Why an agent isn't showing up: hooks wired, the node they point at\nstill there, folders writable, when each agent last reported.")
+    }
 
-        // A rule, not a per-section variable: each one is width-constrained
-        // individually, and naming them sep1…sepN meant remembering a constraint
-        // every time a section was added.
-        let seps = (0..<6).map { _ in separator() }
-        let stack = NSStackView(views: [
-            sectionLabel("Sounds"), soundsBox, soundsCap, volumeRow, seps[0],
-            sectionLabel("Notifications"), notifyApprovalsBox, notifyFailuresBox,
-            notifyQuietBox, notifyCaption, notifyButtons, seps[1],
-            sectionLabel("Shortcuts"), enableBox, enableCaption, grid,
-            launchBox, launchCaption, launchGrid, seps[2],
-            sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
-            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, quotaStatus, quotaButtons, seps[4],
-            sectionLabel("Approvals"), rememberBox, rememberCaption, seps[5],
-            sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.setCustomSpacing(12, after: stack.arrangedSubviews[2]) // caption → volume row
-        stack.setCustomSpacing(16, after: volumeRow)
-        for sep in seps { stack.setCustomSpacing(16, after: sep) }
-        stack.setCustomSpacing(14, after: enableCaption)
-        stack.setCustomSpacing(16, after: grid)
-        stack.setCustomSpacing(14, after: launchCaption)
-        stack.setCustomSpacing(16, after: launchGrid)
-        stack.setCustomSpacing(16, after: islandCaption)
-        stack.setCustomSpacing(16, after: quotaCaption)
-        stack.setCustomSpacing(16, after: rememberCaption)
-        stack.setCustomSpacing(8, after: notifyCaption)
-        stack.setCustomSpacing(14, after: notifyButtons)
-        stack.setCustomSpacing(2, after: notifyApprovalsBox)
-        stack.setCustomSpacing(2, after: notifyFailuresBox)
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+    private func buildPage(_ page: Page) -> NSView {
+        let column = NSStackView()
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = SettingsChrome.Space.gap
+        column.translatesAutoresizingMaskIntoConstraints = false
 
-        // The grid indents to line up under the checkbox title, not its box.
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        // Scrolled, because the content can now be taller than a laptop screen and a
-        // window that simply runs off the bottom puts Diagnostics somewhere nobody
-        // can reach. The scroller only appears when it is needed: `refit` sizes the
-        // window to the content until the screen runs out, and clamps there.
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
-        scroll.drawsBackground = false
-        scroll.autohidesScrollers = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        let doc = FlippedView()          // top-down, like the island's row list
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        scroll.documentView = doc
-        w.contentView = scroll
+        func add(_ views: [NSView]) {
+            for v in views {
+                column.addArrangedSubview(v)
+                if v is NSTextField { continue }
+                v.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+            }
+        }
+
+        switch page {
+        case .general:
+            add([
+                SettingsChrome.card([
+                    SettingsChrome.row("Play sounds for agent events",
+                                       "A soft cue when a session needs approval, asks a "
+                                       + "question, or finishes. Never while one is working.",
+                                       control: soundsBox),
+                    SettingsChrome.customRow(volumeRow),
+                ]),
+                SettingsChrome.card([
+                    SettingsChrome.row("Hide the island when nothing is running",
+                                       "The pill slips away and returns with the next session.",
+                                       control: hideIslandBox),
+                ]),
+            ])
+        case .notifications:
+            add([
+                SettingsChrome.card([
+                    SettingsChrome.row("When an agent needs approval", control: notifyApprovalsBox),
+                    SettingsChrome.row("When a session fails", control: notifyFailuresBox),
+                    SettingsChrome.row("When everything goes quiet, and you're away",
+                                       control: notifyQuietBox),
+                ]),
+                SettingsChrome.card([
+                    SettingsChrome.noteRow(notifyCaption),
+                    SettingsChrome.customRow(buttonRow([notifyTestButton, notifySettingsButton])),
+                ]),
+            ])
+        case .shortcuts:
+            add([
+                SettingsChrome.card([
+                    SettingsChrome.row("Global Allow / Deny",
+                                       "Answer the newest pending request from anywhere, "
+                                       + "without opening the menu.", control: enableBox),
+                    SettingsChrome.row("Allow", control: allowRecorder),
+                    SettingsChrome.row("Deny", control: denyRecorder),
+                ]),
+                SettingsChrome.card([
+                    SettingsChrome.row("Launcher",
+                                       "A project you have worked in, an agent, and what you "
+                                       + "want it to do. The menu opens it either way.",
+                                       control: launchBox),
+                    SettingsChrome.row("Open the launcher", control: launchRecorder),
+                ]),
+            ])
+        case .usage:
+            add([
+                SettingsChrome.card([
+                    SettingsChrome.row("Ask Anthropic for Claude's usage",
+                                       "Claude keeps its percentages on its own servers; this "
+                                       + "is the only way to show them. One request every five "
+                                       + "minutes, and the only network call besides updates.",
+                                       control: claudeQuotaBox),
+                    SettingsChrome.noteRow(quotaStatus),
+                    SettingsChrome.customRow(buttonRow([quotaCheck, quotaToken])),
+                ]),
+                SettingsChrome.header("Codex and Copilot need none of this — both are read "
+                                      + "off this Mac."),
+            ])
+        case .approvals:
+            add([
+                SettingsChrome.card([
+                    SettingsChrome.row("Remember what I decided",
+                                       "So a prompt you have answered before can say so: "
+                                       + "“Allowed 23× here”. Never acted on by itself.",
+                                       control: rememberBox),
+                ]),
+                SettingsChrome.header("Kept in ~/.agentbar/decisions.jsonl, sent nowhere. "
+                                      + "`agentbar forget` empties it."),
+            ])
+        case .diagnostics:
+            add([
+                SettingsChrome.card([SettingsChrome.customRow(diagnostics)]),
+                SettingsChrome.header("Why an agent isn't showing up: hooks wired, the node "
+                                      + "they point at still there, folders writable."),
+            ])
+        }
+        return column
+    }
+
+    private func buttonRow(_ buttons: [NSButton]) -> NSStackView {
+        let row = NSStackView(views: buttons)
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func pick(_ sender: SidebarItem) {
+        select(sender.page)
+    }
+
+    private func select(_ page: Page) {
+        self.page = page
+        pageTitle.stringValue = page.title
+        for item in sidebarItems { item.isSelected = item.page == page }
+        for sub in pageHost.subviews { sub.removeFromSuperview() }
+        guard let view = pageViews[page] else { return }
+        pageHost.addSubview(view)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
-            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            grid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
-            launchGrid.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
-            volumeRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 38),
-            diagnostics.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            // Before Diagnostics the width fell out of whichever caption was longest,
-            // which left a diagnostic row wrapping its fix across four lines and the
-            // window running off the bottom of the screen. A floor is cheaper than
-            // hand-breaking every caption to the same length.
-            stack.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minWidth),
-        ] + seps.map { $0.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40) })
-        self.stack = stack
-        window = w
-        refit()
+            view.topAnchor.constraint(equalTo: pageHost.topAnchor),
+            view.leadingAnchor.constraint(equalTo: pageHost.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: pageHost.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor),
+        ])
+        window?.contentView?.needsDisplay = true
     }
 
-    /// The tallest the window may get: the screen it is on, less the room a title
-    /// bar and a Dock want. Past this the content scrolls instead of the window
-    /// growing out of sight.
-    /// And no wider than the screen it is on. Width used to be whatever the
-    /// longest line of text asked for, which is fine while every line is written
-    /// by hand and a disaster the first time one isn't.
-    private func maxContentWidth(for window: NSWindow) -> CGFloat {
-        let visible = (window.screen ?? NSScreen.main)?.visibleFrame.width ?? 1_200
-        return max(Self.minWidth, min(visible - 80, 720))
-    }
-
-    private func maxContentHeight(for window: NSWindow) -> CGFloat {
-        let visible = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
-        return max(320, visible - 60)
-    }
-
-    /// Diagnostics changes height as checks come and go, so the window has to be
-    /// re-fitted *both* ways — one that only grows leaves a hole under the last row.
-    private var stack: NSStackView?
+    /// The window is a fixed shape now, so "refit" means: keep it on the screen,
+    /// and let the page scroll if a page is taller than it. Diagnostics still
+    /// changes height as checks come and go; that is the scroller's problem, not
+    /// the window's.
     private func refit() {
-        guard let window, let stack else { return }
-        // The label wraps at whatever the window actually is, not at the width it
-        // was built with, so a wide window uses the room and a narrow one wraps.
-        quotaStatus?.preferredMaxLayoutWidth = max(Self.minWidth, window.frame.width) - 40
-        stack.layoutSubtreeIfNeeded()
-        let wanted = stack.fittingSize
-        window.setContentSize(NSSize(width: min(wanted.width, maxContentWidth(for: window)),
-                                     height: min(wanted.height, maxContentHeight(for: window))))
-        // A resize that only moves constraints can leave the old pixels behind in
-        // the scrolled document — which is what an empty section really was.
-        window.contentView?.needsDisplay = true
-        // The window was centred at its old height and grows downward from its title
-        // bar, so a few diagnostic rows push its bottom under the Dock. Nudge it back
-        // into view rather than re-centring, which would yank it while it is read.
+        clampToScreen()
+        window?.contentView?.needsDisplay = true
+    }
+
+    /// One height for every page: the tallest one's. Sizing per page would make
+    /// the window jump on every click of the sidebar, and sizing to a constant
+    /// leaves whichever page is shortest sitting above a field of nothing — which
+    /// is what "it's huge" was about.
+    private func sizeToTallestPage() {
+        guard let window else { return }
+        let tallest = pageViews.values.map { view -> CGFloat in
+            view.layoutSubtreeIfNeeded()
+            return view.fittingSize.height
+        }.max() ?? 0
+        // The title, the gap under it, and the page's own bottom margin.
+        let chrome = 20 + 19 + 14 + SettingsChrome.Space.page
+        let height = min(max(tallest + chrome, SettingsChrome.minWindowHeight),
+                         SettingsChrome.maxWindowHeight)
+        window.setContentSize(NSSize(width: window.frame.width, height: height))
+    }
+
+    private func clampToScreen() {
+        guard let window else { return }
+        if let visible = window.screen?.visibleFrame, window.frame.height > visible.height - 40 {
+            window.setContentSize(NSSize(width: window.frame.width,
+                                         height: max(SettingsChrome.minWindowHeight,
+                                                     visible.height - 40)))
+        }
         guard let visible = window.screen?.visibleFrame else { return }
         var frame = window.frame
         if frame.minY < visible.minY { frame.origin.y = visible.minY }
@@ -465,9 +574,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let sentence = ClaudeQuota.sentence(for: ClaudeQuota.shared.status)
         guard quotaStatus.stringValue != sentence else { return }
         quotaStatus.stringValue = sentence
-        // A longer sentence wraps to a second line, and the window is sized to
-        // its contents.
-        refit()
     }
 
     /// Switching it off stops new rows; it does not delete the old ones, because
@@ -487,7 +593,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// Turning either switch on asks macOS for permission the first time. A refusal
     /// un-ticks the box rather than leaving a setting that quietly does nothing, and
     /// the caption says where to change your mind.
-    @objc private func toggleNotifications(_ sender: NSButton) {
+    @objc private func toggleNotifications(_ sender: NSSwitch) {
         let turningOn = sender.state == .on
         // One selector, three boxes: the sender says which preference it owns, so
         // adding a channel is a line here rather than a fourth near-identical method.
@@ -616,26 +722,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         cancelCaptures()
     }
 
-    private func caption(_ text: String) -> NSTextField {
-        let l = NSTextField(wrappingLabelWithString: text)
-        l.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        l.textColor = .secondaryLabelColor
-        return l
-    }
-
-    private func sectionLabel(_ text: String) -> NSTextField {
-        let l = NSTextField(labelWithString: text)
-        l.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        return l
-    }
-
-    private func separator() -> NSBox {
-        let b = NSBox()
-        b.boxType = .separator
-        b.translatesAutoresizingMaskIntoConstraints = false
-        return b
-    }
-
     private func speakerGlyph(_ symbol: String) -> NSImageView {
         let v = NSImageView()
         v.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -644,11 +730,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         return v
     }
 
-    private func gridLabel(_ text: String) -> NSTextField {
-        let l = NSTextField(labelWithString: text)
-        l.font = .systemFont(ofSize: NSFont.systemFontSize)
-        return l
-    }
 }
 
 /// A button that shows the current combo and, when clicked, records the next
@@ -670,18 +751,42 @@ extension SettingsWindow {
     func renderForVerification(to url: URL) -> Bool {
         if window == nil { build() }
         reload()
-        guard let stack else { return false }
-        // Lay out at the width the window actually opens at, so wrapping is the
-        // wrapping people see rather than whatever the widest line asks for.
-        stack.frame = NSRect(x: 0, y: 0, width: Self.minWidth, height: 0)
-        stack.layoutSubtreeIfNeeded()
-        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
-        stack.layoutSubtreeIfNeeded()
-        guard let rep = stack.bitmapImageRepForCachingDisplay(in: stack.bounds) else {
-            return false
+        guard let window else { return false }
+        // Every page side by side, so one picture is the whole window rather than
+        // whichever page happened to be selected.
+        var shots: [(Page, NSBitmapImageRep)] = []
+        for p in Page.allCases {
+            select(p)
+            window.contentView?.layoutSubtreeIfNeeded()
+            guard let root = window.contentView,
+                  let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds)
+            else { continue }
+            root.cacheDisplay(in: root.bounds, to: rep)
+            shots.append((p, rep))
         }
-        stack.cacheDisplay(in: stack.bounds, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        select(.general)
+        guard let first = shots.first?.1 else { return false }
+        let each = NSSize(width: CGFloat(first.pixelsWide) / 2,
+                          height: CGFloat(first.pixelsHigh) / 2)
+        let cols = 3
+        let rows = (shots.count + cols - 1) / cols
+        let gap: CGFloat = 16
+        let size = NSSize(width: CGFloat(cols) * each.width + CGFloat(cols + 1) * gap,
+                          height: CGFloat(rows) * each.height + CGFloat(rows + 1) * gap)
+        let sheet = NSImage(size: size)
+        sheet.lockFocus()
+        NSColor.windowBackgroundColor.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        for (i, shot) in shots.enumerated() {
+            let col = CGFloat(i % cols), row = CGFloat(i / cols)
+            let origin = NSPoint(x: gap + col * (each.width + gap),
+                                 y: size.height - (row + 1) * (each.height + gap))
+            shot.1.draw(in: NSRect(origin: origin, size: each))
+        }
+        sheet.unlockFocus()
+        guard let tiff = sheet.tiffRepresentation,
+              let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return false }
         return (try? data.write(to: url)) != nil
     }
 }
@@ -704,7 +809,13 @@ final class ShortcutRecorder: NSButton {
         setButtonType(.momentaryPushIn)
         target = self
         action = #selector(beginCapture)
-        widthAnchor.constraint(greaterThanOrEqualToConstant: 110).isActive = true
+        // A chord is a value, not a text field: it takes the width the longest one
+        // needs and stops there. Left to stretch inside a row it becomes a 250 pt
+        // grey slab with three glyphs floating in the middle of it.
+        let width = widthAnchor.constraint(equalToConstant: 104)
+        width.priority = .defaultHigh   // yields while "Type shortcut…" is showing
+        width.isActive = true
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 104).isActive = true
         reload()
     }
 
