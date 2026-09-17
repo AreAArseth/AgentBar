@@ -28,6 +28,17 @@ All notable changes to AgentBar are documented here. This project follows
   its usage — and the body has the same shape the OAuth endpoint uses, so both
   doors go through one parser rather than two.
 
+### Fixed
+
+- The settings row holding the quota status is sized from the label it holds
+  rather than from a measurement taken of it once: that sentence changes while
+  the window is open, and a longer one had the separator drawn through its
+  second line.
+- The sign-in window presents itself the way a browser does. WebKit's own user
+  agent leaves off the `Version/… Safari/…` tail, and claude.ai answered the
+  first attempt with "there was an error logging you in" before a character had
+  been typed.
+
 ## 1.26.1 - 2026-09-17
 
 ### Fixed
