@@ -484,6 +484,7 @@ import Testing
             case .found:            return "found"
             case .missing:          return "missing"
             case .refused(let got): return "refused:\(got)"   // the number tells them apart
+            case .notAsked:         return "not asked"
             }
         }
         #expect(outcome(errSecItemNotFound) == "missing")
@@ -496,7 +497,7 @@ import Testing
     /// silence is indistinguishable from a broken switch.
     @Test func everyFailureHasASentenceAndACause() {
         let cases: [ClaudeQuota.Status] = [
-            .off, .asking, .noCredential, .loggedOut, .refused(errSecAuthFailed),
+            .off, .asking, .noCredential, .loggedOut, .notAsked, .refused(errSecAuthFailed),
             .expiredToken(at: Self.noon), .declined(code: 401, message: nil),
             .rateLimited(until: Self.noon), .unreachable, .unexpected(503),
         ]
@@ -518,7 +519,7 @@ import Testing
         #expect(ClaudeQuota.shortReason(for: .refused(errSecAuthFailed))
                 == "waiting on Keychain permission")
         // Short enough for a menu row: the long form lives in Settings.
-        for status: ClaudeQuota.Status in [.asking, .noCredential, .loggedOut,
+        for status: ClaudeQuota.Status in [.asking, .noCredential, .loggedOut, .notAsked,
                                            .expiredToken(at: Self.noon),
                                            .declined(code: 401, message: nil),
                                            .rateLimited(until: Self.noon), .unreachable] {
@@ -560,6 +561,43 @@ import Testing
                                                       "expiresAt": 1_000_000]]
         #expect(failure(nil, .found(json: stale, account: nil))
                 == .expiredToken(at: Date(timeIntervalSince1970: 1_000_000)))
+    }
+
+    /// The dialog macOS raises for another application's Keychain item comes
+    /// back after every reinstall, so what becomes of the answer matters more
+    /// than the answer: a grant outlives the build that earned it, a refusal
+    /// closes the door until somebody presses the button again, and "no such
+    /// item" settles nothing, because nothing was refused. Without this, ten
+    /// releases in a day cost ten prompts and one Deny cost one every five
+    /// minutes.
+    @Test func oneAnswerToTheKeychainPromptIsRemembered() {
+        #expect(ClaudeQuota.allowed(after: errSecSuccess, was: false))
+        #expect(ClaudeQuota.allowed(after: errSecSuccess, was: true))
+        #expect(!ClaudeQuota.allowed(after: errSecAuthFailed, was: true))
+        #expect(!ClaudeQuota.allowed(after: errSecUserCanceled, was: true))
+        #expect(!ClaudeQuota.allowed(after: errSecInteractionNotAllowed, was: true))
+        #expect(ClaudeQuota.allowed(after: errSecItemNotFound, was: true))
+        #expect(!ClaudeQuota.allowed(after: errSecItemNotFound, was: false))
+    }
+
+    /// And a question nobody asked is not a login nobody has: one is answered by
+    /// pressing a button, the other by signing in somewhere, and a person told
+    /// the wrong one goes looking in the wrong place.
+    @Test func aQuestionNotAskedIsNotALoginNotThere() throws {
+        func failure(_ lookup: ClaudeQuota.Lookup) -> ClaudeQuota.Status? {
+            if case .failure(let why) = ClaudeQuota.token(storedBy: nil, orIn: lookup) {
+                return why
+            }
+            return nil
+        }
+        #expect(failure(.notAsked) == .notAsked)
+        #expect(failure(.missing) == .noCredential)
+        #expect(ClaudeQuota.sentence(for: .notAsked).contains("Check now"))
+
+        // A token handed over on purpose is read without anyone being asked
+        // anything, so the shut door costs it nothing.
+        let mine = try ClaudeQuota.token(storedBy: "pasted-by-hand", orIn: .notAsked).get()
+        #expect(mine.token == "pasted-by-hand")
     }
 
     // MARK: - The signed-in web session

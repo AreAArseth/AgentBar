@@ -28,6 +28,16 @@ import Security
 ///   This exists because a machine whose sessions run under their own
 ///   `CLAUDE_CONFIG_DIR` keeps its login somewhere AgentBar cannot read, and
 ///   "switch it on and get nothing forever" is not an answer.
+/// - **Nothing on a clock raises a permission dialog.** Claude Code's record
+///   belongs to another application, so the first read of it brings up macOS's
+///   own password prompt — and that prompt returns after every reinstall. A
+///   five-minute refresh allowed to raise it would meet somebody shipping ten
+///   builds a day ten times over, and somebody who once pressed Deny every five
+///   minutes thereafter. So only a press asks; a success is remembered and the
+///   clock reads quietly from then on, a refusal shuts the door until the next
+///   press. The two credentials that cost nobody a dialog — a signed-in
+///   claude.ai session, a token pasted in on purpose — are read on the clock
+///   like anything else.
 /// - **AgentBar never refreshes it.** That is Claude Code's job; two processes
 ///   racing on one refresh token is how people get logged out. An expired token
 ///   means no reading until the CLI renews it on its own next run.
@@ -40,9 +50,9 @@ import Security
 ///   thing: a switch that does nothing and says nothing is indistinguishable from
 ///   a broken one, and the first person to meet that was the one who turned it
 ///   on. So every attempt leaves a `Status` behind, Settings says it in a
-///   sentence, and *Check now* asks again on demand — which is also the only way
-///   to raise the Keychain prompt deliberately rather than waiting five minutes
-///   for one that may be behind another window.
+///   sentence, and *Check now* asks again on demand — which is also the only
+///   thing in this app that opens Claude Code's Keychain record, and so the only
+///   thing that can raise the password dialog.
 final class ClaudeQuota {
     static let shared = ClaudeQuota()
 
@@ -51,6 +61,21 @@ final class ClaudeQuota {
     static var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: "claudeQuotaNetwork") }
         set { UserDefaults.standard.set(newValue, forKey: "claudeQuotaNetwork") }
+    }
+
+    /// Whether the five-minute refresh may read **Claude Code's** Keychain
+    /// record — another application's item, whose first read raises the system's
+    /// "AgentBar wants to use an item in your keychain, enter your password"
+    /// dialog.
+    ///
+    /// Off until a deliberate press has been answered with Allow, and off again
+    /// the moment macOS refuses. Nothing on a clock may raise that dialog: an
+    /// answer of Deny was not remembered, so a person who dismissed it once met
+    /// it again five minutes later, and forever after. The switch turns the
+    /// reading on; only a button opens that door.
+    static var keychainAllowed: Bool {
+        get { UserDefaults.standard.bool(forKey: "claudeQuotaKeychain") }
+        set { UserDefaults.standard.set(newValue, forKey: "claudeQuotaKeychain") }
     }
 
     // MARK: - What comes back
@@ -91,6 +116,10 @@ final class ClaudeQuota {
         /// elsewhere, so this is also what a machine looks like when the config
         /// AgentBar can read is not the one being used.
         case loggedOut
+        /// There may well be a login in Claude Code's Keychain record, and
+        /// AgentBar has not asked for it — asking is what raises the password
+        /// dialog. *Check now* asks; the clock never does.
+        case notAsked
         /// macOS was asked and did not hand it over: the prompt was refused,
         /// dismissed, or never shown. Carries the `OSStatus` because the number
         /// is the only thing that tells those apart.
@@ -162,8 +191,13 @@ final class ClaudeQuota {
 
     /// Fetch if the switch is on and enough time has passed. `changed` fires on
     /// an arbitrary queue, and only when there is something new to draw.
-    func refreshIfDue(now: Date = Date(), changed: @escaping () -> Void) {
-        guard Self.enabled else {
+    func refreshIfDue(now: Date = Date(), deliberate: Bool = false,
+                      changed: @escaping () -> Void) {
+        // A signed-in claude.ai session answers the same question for the same
+        // account without a Keychain anywhere near it. Both paths asking at once
+        // would double the traffic to buy nothing — and would raise a password
+        // prompt for a number already on screen.
+        guard Self.enabled, !ClaudeWeb.connected else {
             lock.lock(); snapshot = nil; set(.off); lock.unlock()
             return
         }
@@ -176,7 +210,7 @@ final class ClaudeQuota {
         if snapshot == nil { set(.asking) }
         lock.unlock()
 
-        fetch { [weak self] result in
+        fetch(deliberate: deliberate) { [weak self] result in
             guard let self else { return }
             self.lock.lock()
             self.inFlight = false
@@ -215,20 +249,26 @@ final class ClaudeQuota {
     /// when the call is made, and a person who has just switched this on should
     /// be able to summon it rather than wait up to five minutes for it to arrive
     /// behind whatever they are looking at.
-    func checkNow(changed: @escaping () -> Void) {
+    /// `deliberate: false` is the same impatience without the door: it forgets
+    /// the schedule but leaves Claude Code's Keychain record alone, which is what
+    /// flipping the switch on wants — turn the reading on, raise nothing.
+    func checkNow(deliberate: Bool = true, changed: @escaping () -> Void) {
         lock.lock()
         nextAllowed = .distantPast
         backoffStep = 0
         lock.unlock()
-        refreshIfDue(changed: changed)
+        refreshIfDue(deliberate: deliberate, changed: changed)
     }
 
     // MARK: - The call
 
-    private func fetch(_ done: @escaping (Outcome) -> Void) {
+    private func fetch(deliberate: Bool, _ done: @escaping (Outcome) -> Void) {
         let token: String
         let account: String?
-        switch Self.token() {
+        // A press asks whatever the standing answer was; the clock reads only
+        // where a press was already allowed once.
+        switch Self.token(orIn: Self.credential(askingKeychain:
+                                                deliberate || Self.keychainAllowed)) {
         case .success(let found): (token, account) = (found.token, found.account)
         case .failure(let why): done(.failed(why)); return
         }
@@ -412,11 +452,13 @@ final class ClaudeQuota {
     /// a deliberate act, and it is the only thing that works on a machine whose
     /// CLI keeps its login out of reach.
     static func token(storedBy stored: @autoclosure () -> String? = storedToken(),
-                      orIn lookup: @autoclosure () -> Lookup = credential())
+                      orIn lookup: @autoclosure () -> Lookup
+                          = credential(askingKeychain: keychainAllowed))
         -> Result<(token: String, account: String?), Status> {
         if let mine = stored() { return .success((mine, "your own token")) }
         switch lookup() {
         case .missing: return .failure(.noCredential)
+        case .notAsked: return .failure(.notAsked)
         case .refused(let code): return .failure(.refused(code))
         case .found(let json, let account):
             guard let token = accessToken(in: json) else {
@@ -436,10 +478,17 @@ final class ClaudeQuota {
         case found(json: [String: Any], account: String?)
         case missing
         case refused(OSStatus)
+        /// Not asked. Distinct from `missing` in the only way that matters to
+        /// the person reading the sentence: there may be a login sitting there,
+        /// and the reason nobody knows is that asking costs a password prompt.
+        case notAsked
     }
 
-    static func credential() -> Lookup {
-        let keychain = keychainCredential()
+    /// `askingKeychain: false` leaves the one door that costs a password prompt
+    /// shut and still reads the file form, which costs nothing and prompts for
+    /// nothing.
+    static func credential(askingKeychain ask: Bool = true) -> Lookup {
+        let keychain = ask ? keychainCredential() : Lookup.notAsked
         if case .found = keychain { return keychain }
         let fm = FileManager.default
         // Claude Code relocates its credential file with two environment
@@ -461,8 +510,9 @@ final class ClaudeQuota {
             else { continue }
             return .found(json: o, account: root.lastPathComponent)
         }
-        // A refusal outranks "missing": the file fallback found nothing, but the
-        // Keychain does hold a login and is waiting on an answer.
+        // A refusal — or an unasked question — outranks "missing": the file
+        // fallback found nothing, but the Keychain may hold a login and is
+        // either waiting on an answer or waiting to be asked.
         return keychain
     }
 
@@ -477,12 +527,26 @@ final class ClaudeQuota {
         if let account { query[kSecAttrAccount as String] = account }
         var item: CFTypeRef?
         let code = SecItemCopyMatching(query as CFDictionary, &item)
+        // The one place the answer is observed is the one place it is recorded.
+        keychainAllowed = allowed(after: code, was: keychainAllowed)
         guard code == errSecSuccess else { return lookup(forKeychain: code) }
         guard let found = item as? [String: Any],
               let data = found[kSecValueData as String] as? Data,
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .missing }
         return .found(json: o, account: found[kSecAttrAccount as String] as? String)
+    }
+
+    /// What one Keychain answer means for the standing permission. A success is
+    /// a grant, and the clock may read quietly from then on. A refusal ends it:
+    /// nothing asks again until a person does, which is the whole point — the
+    /// dialog comes back after every reinstall, and somebody shipping ten builds
+    /// a day should meet it at most when they go looking for it. "Not there"
+    /// changes nothing, because there was nothing to refuse.
+    static func allowed(after code: OSStatus, was standing: Bool) -> Bool {
+        if code == errSecSuccess { return true }
+        if code == errSecItemNotFound { return standing }
+        return false
     }
 
     /// Every non-success is a refusal except the one that means the item is not
@@ -587,6 +651,10 @@ final class ClaudeQuota {
             return "Read at \(UsageCenter.when(at, now: now))\(who)."
         case .noCredential:
             return "No Claude Code login on this Mac. Sign in with the CLI, or use a token."
+        case .notAsked:
+            return "Claude Code's login is in the Keychain, and reading another app's item "
+                + "raises a macOS password prompt — so AgentBar asks only when you press "
+                + "“Check now”, never on its own."
         case .loggedOut:
             return "The stored Claude Code login is empty — as it is on any Mac whose "
                 + "sessions run under their own CLAUDE_CONFIG_DIR. Use a token instead."
@@ -620,6 +688,7 @@ final class ClaudeQuota {
         case .off, .ok:        return nil
         case .asking:          return "asking Anthropic…"
         case .noCredential:    return "no Claude Code login found"
+        case .notAsked:        return "press Check now in Settings"
         case .loggedOut:       return "the stored login is empty"
         case .refused:         return "waiting on Keychain permission"
         case .expiredToken:    return "login expired, the CLI renews it"

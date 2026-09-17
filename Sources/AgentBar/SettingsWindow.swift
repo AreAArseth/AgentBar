@@ -324,7 +324,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         quotaCheck = SettingsChrome.smallButton("Check now", target: self,
                                                 action: #selector(checkQuotaNow))
         quotaCheck.toolTip = "Asks straight away instead of waiting for the next five-minute "
-            + "turn — and raises the macOS Keychain prompt, if that is what it is waiting for."
+            + "turn — and it is the only thing that opens Claude Code's Keychain login, which "
+            + "macOS guards with a password prompt. Nothing here raises that on its own."
         // For the machine whose sessions run under their own CLAUDE_CONFIG_DIR: the
         // CLI keeps that login somewhere AgentBar cannot read, and no amount of
         // asking politely changes it. A token handed over on purpose does.
@@ -551,7 +552,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     @objc private func toggleClaudeQuota() {
         ClaudeQuota.enabled = claudeQuotaBox.state == .on
         if ClaudeQuota.enabled {
-            ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+            // Not deliberate: switching this on asks with whatever needs no
+            // permission — a signed-in session, a pasted token, a login already
+            // allowed once. Claude Code's Keychain record waits for the button.
+            ClaudeQuota.shared.checkNow(deliberate: false) { UsageCenter.shared.refresh() }
         }
         UsageCenter.shared.refresh()
         syncQuota()
@@ -622,7 +626,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // Whatever changed, find out now rather than at the next five-minute turn:
         // the sentence under the switch is the only feedback this has.
         if ClaudeQuota.enabled {
-            ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+            // A token was just pasted or just removed; neither is a reason to
+            // knock on the CLI's Keychain record.
+            ClaudeQuota.shared.checkNow(deliberate: false) { UsageCenter.shared.refresh() }
         }
         syncQuota()
     }

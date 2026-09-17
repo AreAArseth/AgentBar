@@ -18,7 +18,11 @@ guarantees worth knowing when auditing:
   **Settings ▸ Usage** is ticked, off by default — a `GET` to
   `api.anthropic.com/api/oauth/usage` for Claude's own quota. That one reads the
   OAuth token Claude Code stored (Keychain item `Claude Code-credentials`, so macOS
-  raises its own consent dialog the first time), sends it to Anthropic and nowhere
+  raises its own consent dialog the first time — and **only ever in answer to
+  *Check now***: that record belongs to another application, its dialog returns
+  after every reinstall, and nothing on a timer is allowed to raise it. An Allow is
+  remembered and the five-minute refresh reads quietly from then on; a Deny shuts
+  the door until somebody presses the button again), sends it to Anthropic and nowhere
   else, keeps it only for the duration of the request, never logs it, and never
   refreshes it — an expired token simply means no reading until the CLI renews it.
   It reads exactly one field, `claudeAiOauth.accessToken`, and never searches that

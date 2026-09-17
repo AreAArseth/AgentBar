@@ -30,6 +30,23 @@ All notable changes to AgentBar are documented here. This project follows
 
 ### Fixed
 
+- **The macOS password prompt no longer arrives on a clock.** Reading the login
+  Claude Code keeps in the Keychain means reading another application's item, and
+  macOS guards that with its own "enter your password" dialog. AgentBar asked for
+  it from the five-minute refresh, which made it appear at no particular moment
+  and made a **Deny** worth nothing: the answer was not remembered, so the same
+  dialog came back five minutes later, and again, and the dialog also returns
+  after every reinstall — anyone shipping a handful of builds in a day met it
+  once per build.
+
+  Now only **Settings ▸ Usage ▸ Check now** opens that door. An Allow is
+  remembered and the refresh reads quietly from then on; a Deny closes it until
+  the button is pressed again; and the switch itself raises nothing. The two
+  credentials that cost nobody a dialog — a signed-in claude.ai session and a
+  token pasted in on purpose — are read on the clock as before, so on a Mac that
+  has either, no prompt ever appears at all. A signed-in session also stands the
+  Keychain path down entirely rather than asking Anthropic the same question
+  twice.
 - The settings row holding the quota status is sized from the label it holds
   rather than from a measurement taken of it once: that sentence changes while
   the window is open, and a longer one had the separator drawn through its
