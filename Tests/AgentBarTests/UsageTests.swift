@@ -602,6 +602,29 @@ import Testing
 
     // MARK: - The signed-in web session
 
+    /// WebKit initialises itself the first time anything touches it, and traps
+    /// if that happens off the main thread. The usage refresh runs on its own
+    /// serial queue, so reaching the cookie store from there took the whole app
+    /// down inside `WebKit::InitializeWebKit2()` — and only once somebody was
+    /// signed in, because until then the refresh stopped before it got that far.
+    ///
+    /// The hop has to be immediate when it is already home: the sign-in window
+    /// polls for the cookie and closes itself on the answer, and deferring that
+    /// would put a closed window's work after the window.
+    @Test func theWebKitHopLandsOnTheMainThread() async {
+        final class Flag: @unchecked Sendable { var value = false }
+        let immediate = Flag()
+        await MainActor.run { ClaudeWeb.onMain { immediate.value = true } }
+        #expect(immediate.value)
+
+        let landed: Bool = await withCheckedContinuation { c in
+            DispatchQueue.global().async {
+                ClaudeWeb.onMain { c.resume(returning: Thread.isMainThread) }
+            }
+        }
+        #expect(landed)
+    }
+
     /// The usage call needs the account's uuid and nothing local knows it, so the
     /// first call is for the account — and the name travels with the number,
     /// because a percentage with the wrong account's name on it is worse than one

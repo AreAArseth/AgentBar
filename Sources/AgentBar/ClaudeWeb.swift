@@ -38,22 +38,43 @@ enum ClaudeWeb {
     /// The store the sign-in window writes to and the fetcher reads from. The
     /// default (persistent) store, so a session survives a restart the way it
     /// does in a browser — and so "sign out" has exactly one place to empty.
+    ///
+    /// **Main thread only.** Touching it is what initialises WebKit, and WebKit
+    /// traps if that happens anywhere else. Every caller here goes through
+    /// `onMain`; nothing may reach this property without it.
     static var store: WKHTTPCookieStore { WKWebsiteDataStore.default().httpCookieStore }
+
+    /// Run `work` on the main thread — now, if that is where we already are.
+    ///
+    /// The usage refresh runs on its own serial queue, and from there the first
+    /// touch of `WKWebsiteDataStore` took the whole app down inside
+    /// `WebKit::InitializeWebKit2()`. It only began happening once somebody was
+    /// signed in: before that, the refresh stopped at `connected` and never
+    /// reached WebKit at all.
+    ///
+    /// Synchronous when already on the main thread, because the sign-in window's
+    /// two-second poll asks for the cookie and acts on the answer, and deferring
+    /// that would put a closed window's work after the window.
+    static func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+    }
 
     // MARK: - The session
 
     /// The claude.ai session cookie, if the sign-in left one. Asked of WebKit,
     /// never of another application's files.
     static func session(_ done: @escaping (String?) -> Void) {
-        store.getAllCookies { cookies in
-            let match = cookies.first {
-                $0.name == cookieName && $0.domain.hasSuffix(host) && !$0.value.isEmpty
+        onMain {
+            store.getAllCookies { cookies in
+                let match = cookies.first {
+                    $0.name == cookieName && $0.domain.hasSuffix(host) && !$0.value.isEmpty
+                }
+                // An expired cookie is not a session; WebKit hands them over anyway.
+                if let match, let expiry = match.expiresDate, expiry <= Date() {
+                    done(nil); return
+                }
+                done(match?.value)
             }
-            // An expired cookie is not a session; WebKit hands them over anyway.
-            if let match, let expiry = match.expiresDate, expiry <= Date() {
-                done(nil); return
-            }
-            done(match?.value)
         }
     }
 
@@ -70,16 +91,19 @@ enum ClaudeWeb {
         // First, so that a failure halfway through leaves the app claiming
         // nothing rather than claiming a session it no longer has.
         connected = false
-        let data = WKWebsiteDataStore.default()
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        data.fetchDataRecords(ofTypes: types) { records in
-            let mine = records.filter {
-                $0.displayName == host || $0.displayName.hasSuffix("." + host)
+        onMain {
+            let data = WKWebsiteDataStore.default()
+            let types = WKWebsiteDataStore.allWebsiteDataTypes()
+            data.fetchDataRecords(ofTypes: types) { records in
+                let mine = records.filter {
+                    $0.displayName == host || $0.displayName.hasSuffix("." + host)
+                }
+                data.removeData(ofTypes: types, for: mine) { sweepCookies(done) }
             }
-            data.removeData(ofTypes: types, for: mine) { sweepCookies(done) }
         }
     }
 
+    /// Always reached from `signOut`, which is already on the main thread.
     private static func sweepCookies(_ done: @escaping () -> Void) {
         store.getAllCookies { cookies in
             let mine = cookies.filter { $0.domain.hasSuffix(host) }

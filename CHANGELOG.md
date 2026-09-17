@@ -3,6 +3,22 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.27.2 - 2026-09-17
+
+### Fixed
+
+- **AgentBar crashed every few minutes once you were signed in to Claude.**
+  WebKit initialises itself the first time anything touches it, and it traps if
+  that happens off the main thread. The five-minute usage refresh runs on its own
+  serial queue, and from there it reached the cookie store — which took the whole
+  app down inside `WebKit::InitializeWebKit2()`, over and over, because the hooks
+  bring AgentBar back up again.
+
+  It could only happen to somebody signed in: until 1.27.0 there was no session
+  to reach for, and the refresh stopped before it got that far. Every WebKit
+  touch now goes through one hop to the main thread — immediate when it is
+  already there, because the sign-in window acts on what it gets back.
+
 ## 1.27.1 - 2026-09-17
 
 ### Fixed
