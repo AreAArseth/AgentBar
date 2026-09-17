@@ -140,9 +140,10 @@ enum SettingsChrome {
         row.spacing = Space.step
         row.edgeInsets = NSEdgeInsets(top: 0, left: rowInset, bottom: 0, right: rowInset)
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(
-            greaterThanOrEqualToConstant: max(rowHeight, textHeight + Space.step * 2)
-        ).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualTo: text.heightAnchor,
+                                    constant: Space.step * 2).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: rowHeight).isActive = true
+        _ = textHeight   // kept for the reading: the row is never shorter than this
         return row
     }
 
@@ -156,10 +157,12 @@ enum SettingsChrome {
         row.alignment = .centerY
         row.edgeInsets = NSEdgeInsets(top: 0, left: rowInset, bottom: 0, right: rowInset)
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(
-            greaterThanOrEqualToConstant: measure(label, width: cardWidth - rowInset * 2)
-                + Space.step * 2
-        ).isActive = true
+        // Tied to the label's own height, not to a number measured from it once:
+        // this row holds the quota status, whose sentence changes at runtime, and
+        // a height copied at build time left the separator drawn through the
+        // second line of a longer one.
+        row.heightAnchor.constraint(greaterThanOrEqualTo: label.heightAnchor,
+                                    constant: Space.step * 2).isActive = true
         return row
     }
 

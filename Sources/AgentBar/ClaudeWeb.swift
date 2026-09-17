@@ -173,6 +173,13 @@ final class ClaudeWebLogin: NSObject, WKNavigationDelegate {
     private var onDone: (() -> Void)?
     private var poll: Timer?
 
+    /// A plain, current desktop Safari string. Not a disguise — this *is* WebKit,
+    /// rendering their page, in a window the person opened — but the shape a site
+    /// expects, so feature detection lands where it would in Safari.
+    static let browserUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+        + "(KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+
     func show(onConnected: @escaping () -> Void) {
         onDone = onConnected
         if window == nil { build() }
@@ -193,6 +200,11 @@ final class ClaudeWebLogin: NSObject, WKNavigationDelegate {
         config.websiteDataStore = .default()   // persistent: the session outlives the window
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 520, height: 680),
                             configuration: config)
+        // WKWebView's own user agent omits the `Version/… Safari/…` tail, and a
+        // site that reads it decides this is not a browser it knows. claude.ai
+        // answered the first attempt with "there was an error logging you in"
+        // before a single character had been typed.
+        web.customUserAgent = Self.browserUserAgent
         web.navigationDelegate = self
         self.web = web
 
