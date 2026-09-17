@@ -511,6 +511,42 @@ import Testing
         }
     }
 
+    /// A token handed over on purpose wins over the CLI's own record: it is the
+    /// only thing that works on a Mac whose sessions keep their login out of
+    /// reach, and pasting one is a deliberate act with a deliberate meaning.
+    @Test func aTokenGivenOnPurposeWins() throws {
+        let record = ClaudeQuota.Lookup.found(
+            json: ["claudeAiOauth": ["accessToken": "from-the-cli"]],
+            account: "someone")
+        let mine = try ClaudeQuota.token(storedBy: "pasted-by-hand", orIn: record).get()
+        #expect(mine.token == "pasted-by-hand")
+        #expect(mine.account == "your own token")
+
+        let cli = try ClaudeQuota.token(storedBy: nil, orIn: record).get()
+        #expect(cli.token == "from-the-cli")
+        #expect(cli.account == "someone")
+    }
+
+    /// And every way there is to have none says which one it was, because they
+    /// send a person to four different places.
+    @Test func noTokenSaysWhichKindOfNothing() {
+        func failure(_ stored: String?, _ lookup: ClaudeQuota.Lookup) -> ClaudeQuota.Status? {
+            if case .failure(let why) = ClaudeQuota.token(storedBy: stored, orIn: lookup) {
+                return why
+            }
+            return nil
+        }
+        #expect(failure(nil, .missing) == .noCredential)
+        #expect(failure(nil, .refused(errSecAuthFailed)) == .refused(errSecAuthFailed))
+        #expect(failure(nil, .found(json: ["claudeAiOauth": ["accessToken": ""]],
+                                    account: nil)) == .loggedOut)
+        #expect(failure(nil, .found(json: ["nothing": 1], account: nil)) == .noCredential)
+        let stale: [String: Any] = ["claudeAiOauth": ["accessToken": "long-lapsed",
+                                                      "expiresAt": 1_000_000]]
+        #expect(failure(nil, .found(json: stale, account: nil))
+                == .expiredToken(at: Date(timeIntervalSince1970: 1_000_000)))
+    }
+
     // MARK: - Copilot's own ledger
 
     private func copilotDB(rows: [(created: String, nano: Int, input: Int, output: Int,

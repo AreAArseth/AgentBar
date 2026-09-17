@@ -26,6 +26,12 @@ guarantees worth knowing when auditing:
   every MCP server you have authorised**, and 1.19.0–1.23.0 could pick one of those
   and send it to Anthropic. Fixed in 1.24.0; if you had the switch on in those
   versions, rotating any MCP OAuth login you had authorised is the cautious move.
+  Where Claude Code signs in under its own `CLAUDE_CONFIG_DIR`, that login is kept
+  where AgentBar cannot read it; **Settings ▸ Usage ▸ Use a token…** takes one from
+  `claude setup-token` instead. That token *is* stored — in AgentBar's own Keychain
+  item (`AgentBar-claude-quota`), never in a file, never logged, used for nothing but
+  that one request, and removed by the same button. It is the only secret this app
+  stores, and nothing is stored unless somebody pastes it in.
   See `Sources/AgentBar/ClaudeQuota.swift`.
 - "Always allow" can only persist a rule that Claude Code itself suggested for
   that request: the hook structurally compares the answer's rule against the

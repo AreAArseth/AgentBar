@@ -3,6 +3,26 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.25.0 - 2026-09-17
+
+### Added
+
+- **A way to get Claude's percentages on a Mac whose login AgentBar cannot read.**
+  1.24.0 could finally say *why* there was no bar, and on the machine it was written
+  on the answer turned out to be: Claude Code's Keychain record is empty. Sessions
+  running under their own `CLAUDE_CONFIG_DIR` keep their login elsewhere, and no
+  amount of asking politely reaches it.
+
+  **Settings ▸ Usage ▸ Use a token…** takes one from `claude setup-token` instead. It
+  is kept in AgentBar's own Keychain item — the only secret this app has ever stored,
+  never in a file, never logged, used for nothing but the five-minute request for your
+  quota, and removed by the same button. Nothing is stored unless you paste it in, and
+  a token given this way outranks whatever the CLI left behind, because pasting one is
+  a deliberate act with a deliberate meaning.
+
+  The file's standing promise — *the token is borrowed, never kept* — now carries that
+  exception in the same breath, rather than being quietly broken.
+
 ## 1.24.0 - 2026-09-17
 
 ### Fixed

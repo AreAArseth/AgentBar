@@ -53,7 +53,10 @@ which is off until you switch it on: the daily update check against GitHub Relea
 — only if you tick **Settings ▸ Usage** — a request to Anthropic for Claude's own quota,
 using the login Claude Code already stored. That switch reports what came back, in a
 sentence under itself, including every way it can fail; **Check now** asks again on the
-spot. Everything else, including every token count
+spot. If your sessions run under their own `CLAUDE_CONFIG_DIR`, that login is somewhere
+AgentBar cannot read — **Use a token…** takes one from `claude setup-token` and keeps it
+in AgentBar's own Keychain item, which is the only secret this app stores and the same
+button removes. Everything else, including every token count
 and every other provider's quota, is read from files already on your disk.
 The install touches exactly these, all reversible (see [Uninstall](#uninstall)):
 

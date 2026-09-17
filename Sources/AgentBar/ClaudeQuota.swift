@@ -17,9 +17,17 @@ import Security
 /// - **Off until asked.** `enabled` is false by default and nothing here runs
 ///   until it is true. It is the second network call the app can make, and the
 ///   README says so in the same breath as the first.
-/// - **The token is borrowed, never kept.** It is read at the moment of the call,
-///   never cached in memory between calls, never written anywhere, and never put
-///   into a string that could reach a label, a log or a crash report.
+/// - **The token is borrowed, never kept.** Claude Code's own login is read at the
+///   moment of the call, never cached in memory between calls, never written
+///   anywhere, and never put into a string that could reach a label, a log or a
+///   crash report. The one exception is a token *you* hand over on purpose —
+///   `claude setup-token`, pasted into Settings — which is kept, because there is
+///   no other way to hold onto something the CLI did not store for us. It goes in
+///   AgentBar's own Keychain item, it is the only secret this app has ever
+///   stored, and **Remove** takes it out again. Nothing is ever written to a file.
+///   This exists because a machine whose sessions run under their own
+///   `CLAUDE_CONFIG_DIR` keeps its login somewhere AgentBar cannot read, and
+///   "switch it on and get nothing forever" is not an answer.
 /// - **AgentBar never refreshes it.** That is Claude Code's job; two processes
 ///   racing on one refresh token is how people get logged out. An expired token
 ///   means no reading until the CLI renews it on its own next run.
@@ -68,7 +76,9 @@ final class ClaudeQuota {
     /// No case carries anything from the credential. The token is borrowed for
     /// the length of one request and the reason it failed is all that outlives
     /// it.
-    enum Status: Equatable {
+    /// `Error` so a failed lookup can be a `Result`'s failure — this type names
+    /// what went wrong, which is the whole job of an error.
+    enum Status: Equatable, Error {
         case off
         /// On, with nothing back yet — including the moment the Keychain prompt
         /// is on screen waiting to be answered.
@@ -216,17 +226,11 @@ final class ClaudeQuota {
     // MARK: - The call
 
     private func fetch(_ done: @escaping (Outcome) -> Void) {
-        let credential: (json: [String: Any], account: String?)
-        switch Self.credential() {
-        case .found(let json, let account): credential = (json, account)
-        case .missing: done(.failed(.noCredential)); return
-        case .refused(let code): done(.failed(.refused(code))); return
-        }
-        guard let token = Self.accessToken(in: credential.json) else {
-            done(.failed(Self.loggedOut(credential.json) ? .loggedOut : .noCredential)); return
-        }
-        if let when = Self.expiry(in: credential.json), when <= Date() {
-            done(.failed(.expiredToken(at: when))); return
+        let token: String
+        let account: String?
+        switch Self.token() {
+        case .success(let found): (token, account) = (found.token, found.account)
+        case .failure(let why): done(.failed(why)); return
         }
 
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
@@ -244,7 +248,6 @@ final class ClaudeQuota {
         config.httpCookieStorage = nil
         config.urlCache = nil
         let session = URLSession(configuration: config)
-        let account = credential.account
         session.dataTask(with: request) { data, response, error in
             defer { session.finishTasksAndInvalidate() }
             guard let http = response as? HTTPURLResponse else {
@@ -364,6 +367,67 @@ final class ClaudeQuota {
     /// AgentBar to use this keychain item" dialog, and a refusal is final until
     /// the person changes their mind.
     static let service = "Claude Code-credentials"
+    /// AgentBar's own Keychain item, holding only a token the person pasted in.
+    /// A separate service name from Claude Code's on purpose: this app writes
+    /// here and reads here, and never writes to the CLI's record.
+    static let ownService = "AgentBar-claude-quota"
+    private static let ownAccount = "pasted-token"
+
+    /// The token someone handed over deliberately, if there is one. Reading an
+    /// item this app created raises no prompt: macOS already trusts the writer.
+    static func storedToken() -> String? {
+        var query = ownQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let token = String(data: data, encoding: .utf8), !token.isEmpty
+        else { return nil }
+        return token
+    }
+
+    /// Store one, replace one, or — with nil or an empty string — remove it. The
+    /// delete runs either way, so "replace" cannot leave two.
+    @discardableResult
+    static func setStoredToken(_ token: String?) -> Bool {
+        SecItemDelete(ownQuery() as CFDictionary)
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return true }
+        var add = ownQuery()
+        add[kSecValueData as String] = Data(trimmed.utf8)
+        // Readable while the Mac is unlocked-since-boot, so a refresh on wake
+        // works without asking for anything.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    private static func ownQuery() -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: ownService,
+         kSecAttrAccount as String: ownAccount]
+    }
+
+    /// What to send, and whose it is. A token handed over on purpose wins: it was
+    /// a deliberate act, and it is the only thing that works on a machine whose
+    /// CLI keeps its login out of reach.
+    static func token(storedBy stored: @autoclosure () -> String? = storedToken(),
+                      orIn lookup: @autoclosure () -> Lookup = credential())
+        -> Result<(token: String, account: String?), Status> {
+        if let mine = stored() { return .success((mine, "your own token")) }
+        switch lookup() {
+        case .missing: return .failure(.noCredential)
+        case .refused(let code): return .failure(.refused(code))
+        case .found(let json, let account):
+            guard let token = accessToken(in: json) else {
+                return .failure(loggedOut(json) ? .loggedOut : .noCredential)
+            }
+            if let when = expiry(in: json), when <= Date() {
+                return .failure(.expiredToken(at: when))
+            }
+            return .success((token, account))
+        }
+    }
 
     /// Not an optional: "there is no login here" and "macOS would not give me
     /// the one that is here" are different facts, and the second one is the only
@@ -512,9 +576,9 @@ final class ClaudeQuota {
         case .noCredential:
             return "No Claude Code login on this Mac. Sign in with the CLI and try again."
         case .loggedOut:
-            return "The stored Claude Code login is empty. A session running with its own "
-                + "CLAUDE_CONFIG_DIR keeps its login somewhere AgentBar cannot read; "
-                + "`claude auth login` in the default one fills this in."
+            return "The stored Claude Code login is empty — which is what a Mac looks like "
+                + "when its sessions run under their own CLAUDE_CONFIG_DIR. Either sign in "
+                + "with the default config, or hand over a token from `claude setup-token`."
         case .refused(let code):
             return "macOS did not hand over the Claude Code login from the Keychain (\(code)). "
                 + "Answer its prompt with Always Allow — “Check now” raises it again."
@@ -526,8 +590,8 @@ final class ClaudeQuota {
                 + "it the next time it runs; AgentBar never does that itself."
         case .declined(let code, let message):
             let said = message.map { " It said: \($0)" } ?? ""
-            return "Anthropic declined the login (\(code)). Sign in with Claude Code "
-                + "again, or switch this off.\(said)"
+            return "Anthropic declined the token (\(code)). Sign in with Claude Code again, "
+                + "or replace the token you pasted.\(said)"
         case .rateLimited(let until):
             return "Rate-limited. Trying again at \(UsageCenter.when(until, now: now))."
         case .unreachable:

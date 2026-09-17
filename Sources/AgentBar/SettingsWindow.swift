@@ -30,6 +30,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var claudeQuotaBox: NSButton!
     private var quotaStatus: NSTextField!
     private var quotaCheck: NSButton!
+    private var quotaToken: NSButton!
     private var rememberBox: NSButton!
     private var notifyApprovalsBox: NSButton!
     private var notifyFailuresBox: NSButton!
@@ -218,6 +219,17 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         quotaCheck.font = .systemFont(ofSize: 11)
         quotaCheck.toolTip = "Asks straight away instead of waiting for the next five-minute "
             + "turn — and raises the macOS Keychain prompt, if that is what it is waiting for."
+        // For the machine whose sessions run under their own CLAUDE_CONFIG_DIR: the
+        // CLI keeps that login somewhere AgentBar cannot read, and no amount of
+        // asking politely changes it. A token handed over on purpose does.
+        quotaToken = NSButton(title: "Use a token…", target: self,
+                              action: #selector(editQuotaToken))
+        quotaToken.bezelStyle = .rounded
+        quotaToken.controlSize = .small
+        quotaToken.font = .systemFont(ofSize: 11)
+        let quotaButtons = NSStackView(views: [quotaCheck, quotaToken])
+        quotaButtons.orientation = .horizontal
+        quotaButtons.spacing = 8
 
 
         // ---- Approvals ----
@@ -245,7 +257,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid,
             launchBox, launchCaption, launchGrid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
-            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, quotaStatus, quotaCheck, seps[4],
+            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, quotaStatus, quotaButtons, seps[4],
             sectionLabel("Approvals"), rememberBox, rememberCaption, seps[5],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
@@ -386,8 +398,47 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// The status line and the button that re-runs it. Called on every reload and
     /// from `ClaudeQuota`'s own callback, so the sentence is never older than the
     /// attempt it describes.
+    @objc private func editQuotaToken() {
+        let stored = ClaudeQuota.storedToken() != nil
+        let alert = NSAlert()
+        alert.messageText = stored ? "Replace the token AgentBar is using?"
+                                   : "Use a token of your own"
+        alert.informativeText =
+            "Run `claude setup-token` in a terminal and paste what it prints. It is kept in "
+            + "AgentBar's own Keychain item — the only secret this app stores — and used for "
+            + "nothing but the five-minute request to api.anthropic.com for your quota.\n\n"
+            + "You need this only when Claude Code signs in under its own CLAUDE_CONFIG_DIR, "
+            + "because that login is kept where AgentBar cannot read it."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        field.placeholderString = "sk-ant-…"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        if stored { alert.addButton(withTitle: "Remove") }
+        alert.window.initialFirstResponder = field
+
+        let answer = alert.runModal()
+        switch answer {
+        case .alertFirstButtonReturn:
+            let typed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !typed.isEmpty else { return }
+            ClaudeQuota.setStoredToken(typed)
+        case .alertThirdButtonReturn:
+            ClaudeQuota.setStoredToken(nil)
+        default:
+            return
+        }
+        // Whatever changed, find out now rather than at the next five-minute turn:
+        // the sentence under the switch is the only feedback this has.
+        if ClaudeQuota.enabled {
+            ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+        }
+        syncQuota()
+    }
+
     private func syncQuota() {
         quotaCheck.isEnabled = ClaudeQuota.enabled
+        quotaToken.title = ClaudeQuota.storedToken() != nil ? "Replace token…" : "Use a token…"
         let sentence = ClaudeQuota.sentence(for: ClaudeQuota.shared.status)
         guard quotaStatus.stringValue != sentence else { return }
         quotaStatus.stringValue = sentence
