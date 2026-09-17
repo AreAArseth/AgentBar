@@ -442,7 +442,19 @@ final class ClaudeQuota {
         let keychain = keychainCredential()
         if case .found = keychain { return keychain }
         let fm = FileManager.default
-        for root in WeightReader.claudeConfigDirs(home: fm.homeDirectoryForCurrentUser) {
+        // Claude Code relocates its credential file with two environment
+        // variables, and an install that sets either keeps nothing in the usual
+        // place. Only visible when the app was started from a shell that had
+        // them — a GUI launch inherits neither — but a file that is there costs
+        // one `contentsOf` to check, and a file that is not costs nothing.
+        var roots: [URL] = []
+        let env = ProcessInfo.processInfo.environment
+        for key in ["CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] {
+            guard let raw = env[key], !raw.isEmpty else { continue }
+            roots.append(URL(fileURLWithPath: (raw as NSString).expandingTildeInPath))
+        }
+        roots += WeightReader.claudeConfigDirs(home: fm.homeDirectoryForCurrentUser)
+        for root in roots {
             let file = root.appendingPathComponent(".credentials.json")
             guard let data = try? Data(contentsOf: file),
                   let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

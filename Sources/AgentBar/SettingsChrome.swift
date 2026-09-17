@@ -219,8 +219,12 @@ enum SettingsChrome {
     }
 }
 
-/// One entry in the sidebar: an icon, a name, and a rounded highlight when it is
-/// the page you are on.
+/// One entry in the sidebar: a tinted glyph, a name, and a selection that fills
+/// the column.
+///
+/// It fills the column because that is what a source list does — a highlight that
+/// stops at the end of the word reads as a tag somebody stuck on the text, and
+/// that is exactly how it was read.
 final class SidebarItem: NSButton {
     let page: SettingsWindow.Page
     private var selected = false
@@ -236,12 +240,10 @@ final class SidebarItem: NSButton {
         imagePosition = .imageLeading
         imageHugsTitle = true
         alignment = .left
-        font = .systemFont(ofSize: 13)
-        image = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
-        title = "  " + page.title
+        image = Self.chip(symbol: page.symbol, tint: page.tint)
+        imageScaling = .scaleNone
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 32).isActive = true
+        heightAnchor.constraint(equalToConstant: 30).isActive = true
         apply()
     }
 
@@ -255,10 +257,37 @@ final class SidebarItem: NSButton {
     private func apply() {
         layer?.backgroundColor = selected
             ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor
-        contentTintColor = selected ? .white : .labelColor
-        attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: selected ? .medium : .regular),
+        attributedTitle = NSAttributedString(string: " " + page.title, attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
             .foregroundColor: selected ? NSColor.white : NSColor.labelColor,
         ])
+    }
+
+    /// A rounded tile with the glyph knocked out of it, the way the system's own
+    /// settings list marks each pane. Drawn once per item: a tinted image cannot
+    /// come from a symbol configuration alone.
+    private static func chip(symbol: String, tint: NSColor) -> NSImage {
+        let side: CGFloat = 18
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        tint.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: side, height: side),
+                     xRadius: 4.5, yRadius: 4.5).fill()
+        if let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)) {
+            let tinted = NSImage(size: glyph.size)
+            tinted.lockFocus()
+            NSColor.white.set()
+            NSRect(origin: .zero, size: glyph.size).fill(using: .sourceOver)
+            glyph.draw(at: .zero, from: NSRect(origin: .zero, size: glyph.size),
+                       operation: .destinationIn, fraction: 1)
+            tinted.unlockFocus()
+            let box = NSRect(x: (side - glyph.size.width) / 2,
+                             y: (side - glyph.size.height) / 2,
+                             width: glyph.size.width, height: glyph.size.height)
+            tinted.draw(in: box)
+        }
+        image.unlockFocus()
+        return image
     }
 }

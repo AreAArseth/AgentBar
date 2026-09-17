@@ -37,6 +37,21 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             }
         }
 
+        /// The tile colour, the way the system's settings list tells its panes
+        /// apart at a glance. Meaning where there is meaning — the one that can
+        /// interrupt you is red, the one that reports is orange — and a quiet
+        /// grey where there is none.
+        var tint: NSColor {
+            switch self {
+            case .general:       return .systemGray
+            case .notifications: return .systemRed
+            case .shortcuts:     return NSColor.darkGray
+            case .usage:         return .systemBlue
+            case .approvals:     return .systemGreen
+            case .diagnostics:   return .systemOrange
+            }
+        }
+
         var symbol: String {
             switch self {
             case .general:     return "gearshape"
@@ -134,6 +149,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         list.alignment = .leading
         list.spacing = 2
         list.translatesAutoresizingMaskIntoConstraints = false
+        for item in sidebarItems {
+            item.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true
+        }
 
         let sidebar = NSVisualEffectView()
         sidebar.material = .sidebar
