@@ -591,11 +591,15 @@ final class IslandController: NSObject {
     /// something to keep showing when nothing is running. Only asked for when
     /// nothing is — the history is memoised, but the scan is not free.
     private func lastUsedProvider() -> String? {
-        HistoryStore.cached()
-            .sorted { $0.endedAt > $1.endedAt }
-            .lazy
-            .compactMap { UsageCenter.provider(forAgent: $0.agent) }
-            .first
+        // One pass, not a sort: the newest record that belongs to a provider,
+        // which is rarely the newest record.
+        var best: (at: TimeInterval, provider: String)?
+        for r in HistoryStore.cached() {
+            guard let provider = UsageCenter.provider(forAgent: r.agent),
+                  r.endedAt > (best?.at ?? 0) else { continue }
+            best = (r.endedAt, provider)
+        }
+        return best?.provider
     }
 
     // MARK: - Interaction
