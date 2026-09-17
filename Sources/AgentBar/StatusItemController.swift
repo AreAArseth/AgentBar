@@ -127,8 +127,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             // would tick success over a no-op, the exact thing the comment above
             // promises never happens. Deny still works: it's a real hook decision.
             if r.isPlanRequest, behavior == "allow" { return }
-            AgentActions.ack(AgentActions.reportFailedAnswer(
-                AnswerWriter.write(behavior: behavior, for: r)))
+            let written = AgentActions.reportFailedAnswer(
+                AnswerWriter.write(behavior: behavior, for: r))
+            // Recorded like every other decision that reached disk. It was not
+            // until 1.28.0: this branch wrote the answer straight out and skipped
+            // the ledger, so a chord pressed on a session the app had not yet seen
+            // was a decision that never happened as far as "allowed 23× here" was
+            // concerned — and that count is what a rule is offered from.
+            if written {
+                DecisionLedger.shared.record(behavior, request: r, session: nil)
+            }
+            AgentActions.ack(written)
             return
         }
         AgentActions.answer(ApprovalAction(request: r, behavior: behavior, session: session))
@@ -233,6 +242,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc func openShortcutSettings(_ sender: NSMenuItem) {
         SettingsWindow.shared.show()
+    }
+
+    /// The offer beside a repeat count: open the rule sheet, filled in with the
+    /// prompt that is on screen. It writes nothing — the person still presses Add,
+    /// and the sheet spends most of its room saying what the rule would refuse.
+    @objc func makeRule(_ sender: NSMenuItem) {
+        guard let payload = sender.identifier?.rawValue else { return }
+        let parts = payload.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let r = requestStore.requests.first(where: { $0.fileName == parts[1] })
+        else { return }
+        let session = sessions.first { $0.id == r.sessionId }
+        SettingsWindow.shared.addRule(from: RuleSheet.Prefill(
+            decision: parts[0],
+            shape: DecisionLedger.shape(of: r),
+            cwd: r.cwd.isEmpty ? (session?.cwd ?? "") : r.cwd,
+            display: r.display))
     }
 
     /// Same window; Settings re-runs the checks every time it is shown.

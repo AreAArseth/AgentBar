@@ -282,6 +282,14 @@ function run() {
     const suggestions = Array.isArray(p.permission_suggestions) ? p.permission_suggestions : [];
     const suggestion = isQuestion ? null : suggestions[0] || null;
 
+    // The directory this session is working in. Both dialects send it and it was
+    // dropped here until 1.28.0, which forced every reader to join back through
+    // state.d on sessionId just to learn where a command was about to run — and a
+    // rule that says "in this repository" cannot be evaluated without it. Omitted
+    // rather than truncated when it is implausible: half a path is not a path, and
+    // a prefix comparison against half a path would match the wrong directory.
+    const cwd = typeof p.cwd === "string" && p.cwd.length <= 1024 ? p.cwd : "";
+
     fs.mkdirSync(reqDir, { recursive: true });
     fs.mkdirSync(ansDir, { recursive: true });
 
@@ -314,6 +322,7 @@ function run() {
       // safeId to match Session.id, which the app derives from the state file name.
       sessionId: safeId(p.session_id), agent,
       toolName: p.tool_name || "", display, toolInputPretty: pretty,
+      ...(cwd ? { cwd } : {}),
       context: buildContext(p.tool_name, p.tool_input),
       ruleSuggestion: suggestion, pid: process.ppid, hookPid: process.pid,
       ts: Math.floor(Date.now() / 1000),

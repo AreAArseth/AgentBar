@@ -97,6 +97,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         "Only for what wants an answer — nothing is announced just for finishing. "
         + "The summary waits until you have been away from the keyboard for two minutes."
     private var notifyCaption: NSTextField!
+    private var rulesBox: NSSwitch!
+    private var rulesView: RulesView!
     private var notifySettingsButton: NSButton!
     private var notifyTestButton: NSButton!
 
@@ -339,6 +341,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             + "AgentBar and is used for nothing but reading your usage."
 
         rememberBox = SettingsChrome.toggle(target: self, action: #selector(toggleRemember))
+        rulesBox = SettingsChrome.toggle(target: self, action: #selector(toggleRules))
+        rulesView = RulesView()
+        rulesView.onResize = { [weak self] in self?.refit() }
+        rulesView.onNew = { [weak self] in self?.addRule() }
 
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
@@ -425,11 +431,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                 SettingsChrome.card([
                     SettingsChrome.row("Remember what I decided",
                                        "So a prompt you have answered before can say so: "
-                                       + "“Allowed 23× here”. Never acted on by itself.",
+                                       + "“Allowed 23× here”, and so a rule can be offered "
+                                       + "from it.",
                                        control: rememberBox),
+                    SettingsChrome.row("Answer from my rules",
+                                       "A rule you wrote answers a prompt the way you would "
+                                       + "have. Off stops every rule at once and deletes none.",
+                                       control: rulesBox),
                 ]),
-                SettingsChrome.header("Kept in ~/.agentbar/decisions.jsonl, sent nowhere. "
-                                      + "`agentbar forget` empties it."),
+                SettingsChrome.card([SettingsChrome.customRow(rulesView)]),
+                SettingsChrome.header("Rules live in ~/.agentbar/rules.json and decisions in "
+                                      + "~/.agentbar/decisions.jsonl, both on this Mac and "
+                                      + "sent nowhere. `agentbar rules` lists them; "
+                                      + "`agentbar forget` empties the history."),
             ])
         case .diagnostics:
             add([
@@ -527,6 +541,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         claudeQuotaBox.state = ClaudeQuota.enabled ? .on : .off
         syncQuota()
         rememberBox.state = DecisionLedger.enabled ? .on : .off
+        rulesBox.state = RulesStore.enabled ? .on : .off
+        rulesView.reload()
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
         notifyFailuresBox.state = Notifier.Prefs.failures ? .on : .off
         notifyQuietBox.state = Notifier.Prefs.quiet ? .on : .off
@@ -655,6 +671,43 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     @objc private func toggleRemember() {
         DecisionLedger.enabled = rememberBox.state == .on
         onChange?()
+    }
+
+    /// The master switch. Off means no rule fires and none is deleted — the list
+    /// stays exactly as it was, which is the difference between "pause" and the
+    /// thing people are afraid a switch will do.
+    @objc private func toggleRules() {
+        RulesStore.enabled = rulesBox.state == .on
+        onChange?()
+    }
+
+    /// One rule, written in a sheet and appended. Nothing here edits an existing
+    /// rule in place: the file is the editor for that, and it says so.
+    private func addRule() {
+        guard let window else { return }
+        RuleSheet.present(on: window) { [weak self] rule in
+            guard let self, let rule else { return }
+            var all = RulesStore.load().rules
+            all.append(rule)
+            RulesStore.save(all)
+            rulesView.reload()
+        }
+    }
+
+    /// From a pending approval card: the same sheet, already filled in with what is
+    /// on screen. The person still presses the button — an offer is not consent,
+    /// and this is the only difference between a rule and the count beside it.
+    func addRule(from prefill: RuleSheet.Prefill) {
+        show()
+        select(.approvals)
+        guard let window else { return }
+        RuleSheet.present(on: window, prefill: prefill) { [weak self] rule in
+            guard let self, let rule else { return }
+            var all = RulesStore.load().rules
+            all.append(rule)
+            RulesStore.save(all)
+            rulesView.reload()
+        }
     }
 
     @objc private func toggleEnabled() {

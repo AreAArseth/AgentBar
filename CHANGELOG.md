@@ -3,6 +3,82 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.28.0 - 2026-09-18
+
+### Added
+
+- **Rules you wrote — the first thing AgentBar will answer without asking.** For
+  six releases the rule was absolute: every decision came from a click, and the
+  code said so in three places. It is amended on purpose, not quietly. A rule you
+  typed yourself, in **Settings ▸ Approvals**, may answer a permission request the
+  way you would have — and four things earn that.
+
+  **You wrote it.** A rule is never derived from the "Always allow" Claude Code
+  suggests: that suggestion is produced by the thing being guarded. When you have
+  answered the same prompt the same way five times and never once the other way,
+  the card offers to write it down — *Always allow this here…* — and the offer
+  opens a sheet, which is where the rule is actually made. The sheet spends most
+  of its room saying what the rule will **not** answer.
+
+  **It names one place.** A rule that refuses may cover every repository on the
+  machine; refusing more than you meant costs a prompt. A rule that approves names
+  one directory, because approving more than you meant is the failure this feature
+  has to not have.
+
+  **The command is read again before it is approved.** A rule matches on the same
+  key the repeat count uses — `git push`, never `git push origin feature/PR-4113`,
+  because arguments never repeat and are where a secret would be. That key is a
+  true description and still not enough to say yes with, so every approval is
+  checked a second time against the command as it will actually run. It comes back
+  to you if the line holds more than one command, a pipe, a redirect or a
+  substitution — `git status && …` carries the shape of its head, so this one is
+  the whole design; if it runs under `sudo`; if it is a destructive or
+  history-rewriting git, an `rm` that recurses or forces, a `chmod 777`; if it
+  reaches off this Mac; if it names a path outside the rule's directory; or if it
+  touches how permission itself is configured — `~/.agentbar`, an agent's settings,
+  `.git/hooks`. **No setting turns that list off**, and anything the engine cannot
+  read is a refusal.
+
+  **You can see what it did.** Every firing writes a row naming the rule, so the
+  rules list says *"Allowed 12× · last today"* under each one and `agentbar rules`
+  says it in a terminal. The rules file itself holds no counters: intent lives in
+  `~/.agentbar/rules.json` — plain JSON, yours to edit — and the record lives in the
+  ledger, so the two can never disagree.
+
+  Nothing in the file applies while any of it is wrong. One malformed rule voids the
+  whole file rather than leaving three of your four running with nothing on screen
+  saying which, and **Diagnostics reports it** — a rule that quietly stopped working
+  looks exactly like AgentBar working normally, which is the one failure here that
+  hides itself.
+
+- **Today says how much of the day you answered and how much a rule did**:
+  *"18 answered · 3 by your rules · they waited 34m on you"*. Kept apart rather than
+  added up — a rule answers in milliseconds and nobody was asked, so folding its
+  rows in would overstate what you did and understate the wait. `agentbar approvals`
+  does the same.
+- **`agentbar rules`** lists what you wrote and what each rule has done. It lists
+  them; only the app answers from one, and it says so. The check that makes an
+  approving rule safe is one table in one language, and a second copy of it in the
+  CLI would be a second thing to keep identical in the one place where drifting
+  apart means approving something nobody meant to.
+
+### Changed
+
+- **The permission hook now carries the session's directory** on the request. Every
+  reader was joining back through `state.d` to learn something the hook had in hand,
+  and a rule that says "in this repository" cannot be evaluated without it. A host
+  that does not send one leaves the field out rather than empty: empty compares equal
+  to nothing and is indistinguishable from `/` in a prefix test, which would make a
+  rule scoped to one repository match every one.
+
+### Fixed
+
+- **A decision made with the global chord was not always counted.** When the chord
+  answered a request whose session the app had not seen yet, the answer was written
+  straight to disk and the ledger was skipped — so it never appeared in
+  "Allowed 23× here", and now that the same count is what a rule is offered from,
+  a silent gap there is worse than a wrong number.
+
 ## 1.27.2 - 2026-09-17
 
 ### Fixed

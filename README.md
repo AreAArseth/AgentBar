@@ -122,14 +122,28 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   thing, the card says so: *“Allowed 23× here · last Tue”*, counted per repo, because
   a command that is routine in one checkout is the opposite in another. Once a prompt
   has been allowed five times and never refused, **✓ Always** is pointed at — pointed
-  at, never pressed; AgentBar still answers nothing by itself. Kept in
-  `~/.agentbar/decisions.jsonl`, never sent anywhere, switchable off in **Settings ▸
-  Approvals**, and `agentbar forget` empties it. Keystroke approvals (Codex,
-  Antigravity) write **nothing**: a key pressed at a terminal is not a decision
-  anybody here witnessed.
+  at, never pressed. Kept in `~/.agentbar/decisions.jsonl`, never sent anywhere,
+  switchable off in **Settings ▸ Approvals**, and `agentbar forget` empties it.
+  Keystroke approvals (Codex, Antigravity) write **nothing**: a key pressed at a
+  terminal is not a decision anybody here witnessed.
+- **Rules you wrote** — the one thing AgentBar will answer without asking, and only
+  ever a rule you typed yourself. When you have answered the same prompt the same way
+  five times, the card offers to write it down; **Settings ▸ Approvals** is where they
+  live, in plain JSON at `~/.agentbar/rules.json` that you can edit by hand. A rule
+  that **refuses** may cover every repository on the machine. A rule that **approves**
+  names one — and before it answers, the command itself is checked again, not just its
+  shape: anything chained, piped, redirected or substituted, anything under `sudo`, a
+  destructive git or `rm`, anything reaching off this Mac, a path outside that
+  directory, or anything that touches how permission itself is configured comes back
+  to you. No setting turns that off. Every firing writes a row naming the rule, so
+  **Settings ▸ Approvals** and `agentbar rules` can tell you what each one has
+  actually done. Nothing in the file applies while any of it is wrong, and
+  Diagnostics says so — because a rule that silently stopped working looks exactly
+  like AgentBar working normally.
 - **How long they waited on you** — the other half of the day's account, under
-  **Today**: *“18 answered · they waited 34m on you”*. Nothing else on the machine is
-  standing in the right place to measure it. `agentbar approvals` says the same, with
+  **Today**: *“18 answered · 3 by your rules · they waited 34m on you”*. Nothing else
+  on the machine is standing in the right place to measure it, and the two counts stay
+  apart — a rule's answer is not one you gave. `agentbar approvals` says the same, with
   the prompts you answer most.
 - **Multi-session** — every running session listed with its agent's mark, project, git
   branch, state and elapsed time; click a row to jump to its app or terminal.
@@ -276,6 +290,7 @@ agentbar answer Blue     # answer a pending question by option label (or number)
 agentbar history         # what finished today (--days N, --json)
 agentbar usage           # what's left of each provider's quota
 agentbar approvals       # the prompts you keep answering (--days N, --json)
+agentbar rules           # the rules you wrote and what each has done (--json)
 agentbar forget          # empty the decision ledger
 agentbar doctor          # why an agent isn't showing up; --json for a bug report
 ```
@@ -290,7 +305,16 @@ Remote Allow/Deny works exactly like on macOS: while `agentbar watch` (or a
 `waybar` poll) is running, a Claude Code or Copilot CLI permission prompt appears in the CLI and
 your `a`/`d` answers it — and when Claude asks a multiple-choice question, its
 options render right in the list and a digit key (or `agentbar answer`) picks one.
-With no watcher running, hooks stay silent and the normal terminal prompt appears. Waybar module:
+With no watcher running, hooks stay silent and the normal terminal prompt appears.
+
+**Rules are listed here, not applied here.** `agentbar rules` reads the same
+`~/.agentbar/rules.json` the app does and says what is in it, but only the macOS app
+answers from a rule. The check that makes an approving rule safe — the live command,
+not its shape — is one table in one language, and a second copy of it in the CLI
+would be a second thing to keep byte-identical in the one place where drifting apart
+means approving something nobody meant to. The command says so in its own output.
+
+Waybar module:
 
 ```jsonc
 "custom/agentbar": {

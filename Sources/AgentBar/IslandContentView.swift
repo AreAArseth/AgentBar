@@ -600,6 +600,10 @@ final class IslandApprovalView: NSView {
         if let hint = DecisionLedger.hint(past), plan == nil {
             rows.append(Self.pastLine(hint))
         }
+        // The same answer every time, often enough to be a habit. The offer is a
+        // link, not a default: it opens a sheet that says what the rule would and
+        // would not answer, and nothing is written until Add is pressed.
+        let offer = plan == nil ? DecisionLedger.shouldOfferRule(past) : nil
 
         let shortcuts = UserDefaults.standard.bool(forKey: "globalApprovalShortcut")
         let deny = Self.button(plan != nil ? "Keep planning" : "Deny",
@@ -627,12 +631,20 @@ final class IslandApprovalView: NSView {
         if request.ruleSuggestion != nil, plan == nil {
             // Weight only when the same prompt has been allowed over and over and
             // never refused. A coloured link would read as the safe default, and
-            // "stop asking about this" is not a default anyone else gets to pick.
+            // "stop asking about this" is not a default anyone else gets to pick —
+            // a count is not consent, and neither is a suggestion Claude made.
             let always = Self.link(promote ? "Always allow — stop asking" : "Always allow",
                                    target: self, action: #selector(alwaysClicked),
                                    emphasised: promote)
             always.toolTip = request.ruleMenuTitle
             secondary.append(always)
+        }
+        if let offer {
+            let rule = Self.link("Always \(offer) this here…", target: self,
+                                 action: #selector(ruleClicked), emphasised: false)
+            rule.toolTip = "Writes a rule of your own — narrower than it looks, and every "
+                + "time it fires the approval history names it."
+            secondary.append(rule)
         }
         secondary.append(Self.link(deferTitle, target: self, action: #selector(deferClicked)))
         let secondaryRow = NSStackView(views: secondary)
@@ -661,6 +673,9 @@ final class IslandApprovalView: NSView {
     @objc private func denyClicked() { onChoose("deny") }
     @objc private func alwaysClicked() { onChoose("always") }
     @objc private func deferClicked() { onChoose("defer") }
+    /// Not a decision about this request: it opens the rule sheet and leaves the
+    /// card exactly where it was, still pending, still yours to answer.
+    @objc private func ruleClicked() { onChoose("rule") }
 
     /// "● Permission Request" / "● Plan Review" — names what this card is, the way
     /// the reference does.

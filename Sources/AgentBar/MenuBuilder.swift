@@ -236,14 +236,25 @@ enum MenuBuilder {
         return item
     }
 
-    /// "18 approvals answered · they waited 34m on you" — nil on a day with none,
-    /// because a zero here is an absence and not a result.
+    /// "18 answered · 3 by your rules · they waited 34m on you" — nil on a day with
+    /// none, because a zero here is an absence and not a result.
+    ///
+    /// The two counts are kept apart rather than added up. "18 answered" that
+    /// quietly included six a rule made would be the wrong number in the one place
+    /// somebody would repeat it, and how much of a day AgentBar handled without
+    /// asking is exactly the thing a person should be able to watch.
     static func waitingLine(now: Date = Date(), calendar: Calendar = .current) -> String? {
         let start = calendar.startOfDay(for: now).timeIntervalSince1970
-        let day = DecisionLedger.waiting(in: DecisionLedger.cached(), since: start,
+        let records = DecisionLedger.cached()
+        let day = DecisionLedger.waiting(in: records, since: start,
                                          until: now.timeIntervalSince1970)
-        guard day.answered > 0 else { return nil }
-        var text = "\(day.answered) answered"
+        let byRules = DecisionLedger.byRules(in: records, since: start,
+                                             until: now.timeIntervalSince1970)
+        guard day.answered > 0 || byRules > 0 else { return nil }
+        var parts: [String] = []
+        if day.answered > 0 { parts.append("\(day.answered) answered") }
+        if byRules > 0 { parts.append("\(byRules) by your rules") }
+        var text = parts.joined(separator: " · ")
         if day.waited >= 60 {
             text += " · they waited \(HistoryDigest.duration(day.waited)) on you"
         }
@@ -492,10 +503,16 @@ enum MenuBuilder {
             let past = DecisionLedger.summary(shape: DecisionLedger.shape(of: r), cwd: s.cwd,
                                               in: DecisionLedger.cached())
             let promote = DecisionLedger.shouldPromoteAlways(past, hasRule: r.ruleDescription != nil)
+            // Every time, the same answer, enough times to be a habit: the count
+            // becomes an offer to write it down. Offered, not taken — the click
+            // opens a sheet that shows what the rule would and would not answer,
+            // and the rule exists only once the person presses Add.
+            let offer = plan(r) ? nil : DecisionLedger.shouldOfferRule(past)
             if var hint = DecisionLedger.hint(past) {
                 // Enough repeats and never once refused: say that the button beside
                 // this line would end the asking. Saying, not pressing — a count is
-                // not consent, and nothing here answers anything by itself.
+                // not consent. Nothing on this card answers anything by itself; a
+                // rule does, and only one you wrote and can read back.
                 if promote { hint += " — ✓ Always stops the asking" }
                 let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
                 item.isEnabled = false
@@ -504,6 +521,23 @@ enum MenuBuilder {
                     .font: NSFont.menuFont(ofSize: 11),
                     .foregroundColor: NSColor.tertiaryLabelColor,
                 ])
+                menu.addItem(item)
+            }
+            if let offer {
+                let item = NSMenuItem(title: "", action: #selector(StatusItemController.makeRule(_:)),
+                                      keyEquivalent: "")
+                item.target = controller
+                item.representedObject = tag
+                // The request this offer belongs to. `representedObject` is spoken
+                // for by the row tag `updateInPlace` tracks, so the payload rides
+                // on the identifier instead of inventing a second tracking scheme.
+                item.identifier = NSUserInterfaceItemIdentifier("\(offer)|\(r.fileName)")
+                item.attributedTitle = NSAttributedString(
+                    string: "      Always \(offer) this here…",
+                    attributes: [.font: NSFont.menuFont(ofSize: 11),
+                                 .foregroundColor: NSColor.controlAccentColor])
+                item.toolTip = "Writes a rule of your own. It answers this prompt and nothing "
+                    + "wider, and every time it does the approval history says so."
                 menu.addItem(item)
             }
 
@@ -535,6 +569,9 @@ enum MenuBuilder {
             menu.addItem(buttons)
         }
     }
+
+    /// A plan is approved in its own dialog, so there is no rule to offer for one.
+    private static func plan(_ r: ApprovalRequest) -> Bool { r.isPlanRequest }
 
     /// The pending question inserted directly under the session row. The common
     /// case — one question, pick one option — answers on click, like the approval

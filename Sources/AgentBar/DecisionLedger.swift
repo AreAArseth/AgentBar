@@ -14,8 +14,13 @@ import Foundation
 /// - the day can say how long agents spent **blocked on you**, which nothing else
 ///   measures because nothing else is standing at that door.
 ///
-/// It never decides anything. A repeat count is offered next to the *Always* button
-/// that was already there; the click stays yours.
+/// **It never decides anything itself.** A repeat count is offered next to the
+/// *Always* button that was already there; the click stays yours. Since 1.28.0 one
+/// thing does answer without a click — a rule the person wrote in Settings ▸
+/// Approvals — and the way that stays honest is this file: every firing writes a
+/// row naming the rule, and `firings(rule:in:)` is what the rules list reads back.
+/// A rule is the person deciding in advance; this is where it is shown that they
+/// did, and what came of it. See `RuleEngine`.
 ///
 /// **What is not written here matters as much as what is.** `AgentActions.keystroke`
 /// presses a key at a terminal for agents with no request file (Codex, Antigravity)
@@ -71,14 +76,19 @@ final class DecisionLedger {
         /// How long the agent sat blocked before this landed. The half of the loop
         /// nobody measures.
         var waited: TimeInterval = 0
-        /// app | cli — which frontend answered.
+        /// app | cli | rule — which frontend answered, or that nobody did and a
+        /// rule the human wrote answered for them.
         var via = ""
+        /// The id of the rule that answered, when `via` is "rule". This is what
+        /// makes a rule auditable: the row names the decision it came from, so
+        /// "what did this rule ever do" is a question with an answer.
+        var rule = ""
 
         var json: [String: Any] {
             ["v": 1, "ts": Int(ts), "agent": agent, "sessionId": sessionId,
              "project": project, "cwd": cwd, "tool": tool, "shape": shape,
              "display": display, "decision": decision,
-             "waited": Int(waited.rounded()), "via": via]
+             "waited": Int(waited.rounded()), "via": via, "rule": rule]
         }
 
         init() {}
@@ -100,20 +110,24 @@ final class DecisionLedger {
             display = o["display"] as? String ?? ""
             waited = (o["waited"] as? NSNumber)?.doubleValue ?? 0
             via = o["via"] as? String ?? ""
+            rule = o["rule"] as? String ?? ""
         }
     }
 
     /// Records a decision that actually reached `answers.d`. Callers pass only what
     /// they already hold at the click; nothing here goes looking for more.
     func record(_ decision: String, request: ApprovalRequest, session: Session?,
-                via: String = "app", now: TimeInterval = Date().timeIntervalSince1970) {
+                via: String = "app", rule: String = "",
+                now: TimeInterval = Date().timeIntervalSince1970) {
         guard Self.enabled else { return }
         var r = Record()
         r.ts = now
         r.agent = request.agentID
         r.sessionId = request.sessionId
         r.project = session?.project ?? ""
-        r.cwd = session?.cwd ?? ""
+        // The hook carries the directory since 1.28.0; the session join is the
+        // fallback for a request written by an older one.
+        r.cwd = request.cwd.isEmpty ? (session?.cwd ?? "") : request.cwd
         r.tool = request.toolName
         r.shape = Self.shape(of: request)
         r.display = request.display
@@ -122,6 +136,7 @@ final class DecisionLedger {
         // rather than a negative one that would quietly shrink the day's total.
         r.waited = request.ts > 0 ? max(0, now - request.ts) : 0
         r.via = via
+        r.rule = rule
         writer.async { [url] in Self.append([r], to: url) }
     }
 
@@ -219,9 +234,14 @@ final class DecisionLedger {
     /// scoped by working directory and says "here" when it is shown. With no
     /// directory to scope by, everything counts — that is the honest reading of
     /// "nobody knows where this ran".
+    /// Rows a rule wrote are **not** counted here. The sentence this feeds says
+    /// "Allowed 23× here", which is a claim about the person — and a rule that
+    /// answered for them is precisely not them deciding again. Those rows are
+    /// counted by `firings(rule:in:)`, under the rule that made them.
     static func summary(shape: String, cwd: String, in records: [Record]) -> Summary {
         var out = Summary()
-        for r in records where r.shape == shape && (cwd.isEmpty || r.cwd == cwd) {
+        for r in records where r.shape == shape && r.via != "rule"
+            && (cwd.isEmpty || r.cwd == cwd) {
             switch r.decision {
             case "allow", "always": out.allowed += 1
             case "deny": out.denied += 1
@@ -264,13 +284,69 @@ final class DecisionLedger {
         hasRule && s.denied == 0 && s.allowed >= promoteAfter
     }
 
+    /// Whether a rule is worth offering for this prompt, and which way it would go.
+    ///
+    /// Note what is NOT a condition: a `ruleSuggestion`. `shouldPromoteAlways`
+    /// needs one because *Always* pins a permission Claude Code offered. A rule of
+    /// ours is the opposite kind of object — it is written from what the person
+    /// repeatedly did, and it must never originate in anything the agent produced.
+    /// That is the same posture as never reading a token out of a record by key
+    /// name: do not trust content made by the thing you are guarding.
+    ///
+    /// Only when the answer has been the same every single time. A prompt someone
+    /// has allowed nine times and refused once is exactly the prompt that still
+    /// deserves to be asked.
+    static func shouldOfferRule(_ s: Summary) -> String? {
+        if s.denied == 0, s.allowed >= promoteAfter { return "allow" }
+        if s.allowed == 0, s.denied >= promoteAfter { return "deny" }
+        return nil
+    }
+
+    /// What one rule has actually done. The rules file holds the intent and never
+    /// a counter; this is where "fired 12× · last today" comes from, so the audit
+    /// stays the single source of truth about what happened.
+    static func firings(rule id: String, in records: [Record]) -> Summary {
+        var out = Summary()
+        for r in records where r.rule == id && r.via == "rule" {
+            switch r.decision {
+            case "allow": out.allowed += 1
+            case "deny":  out.denied += 1
+            default:      continue
+            }
+            out.lastAt = max(out.lastAt, r.ts)
+        }
+        return out
+    }
+
+    /// "Allowed 12× · last today" for a rule's row. Unlike `hint`, one firing is
+    /// worth saying: it is the first proof the rule does what it says.
+    static func firingLine(_ s: Summary, now: Date = Date()) -> String {
+        guard !s.isEmpty else { return "Never fired yet" }
+        var parts: [String] = []
+        if s.allowed > 0 { parts.append("Allowed \(s.allowed)×") }
+        if s.denied > 0 { parts.append("Denied \(s.denied)×") }
+        var text = parts.joined(separator: ", ")
+        if s.lastAt > 0 { text += " · last \(ago(Date(timeIntervalSince1970: s.lastAt), now: now))" }
+        return text
+    }
+
+    /// How many decisions in a span were made by a rule rather than by a person.
+    /// The day's account says both, because "18 answered" that quietly included
+    /// six a rule made would be the wrong number in the most important place.
+    static func byRules(in records: [Record], since: TimeInterval, until: TimeInterval) -> Int {
+        records.filter { $0.ts >= since && $0.ts <= until && $0.via == "rule" }.count
+    }
+
     /// How long agents sat blocked on the human over a span. The other half of the
     /// day's account: `history.jsonl` says how long the machine worked, and this
     /// says how long it waited.
     static func waiting(in records: [Record], since: TimeInterval, until: TimeInterval)
     -> (answered: Int, waited: TimeInterval) {
         var out = (answered: 0, waited: TimeInterval(0))
-        for r in records where r.ts >= since && r.ts <= until {
+        // A rule answers in milliseconds and nobody was asked, so counting its
+        // rows here would inflate "18 answered" with decisions the person never
+        // made and deflate the average wait with times nobody waited.
+        for r in records where r.ts >= since && r.ts <= until && r.via != "rule" {
             out.answered += 1
             out.waited += r.waited
         }

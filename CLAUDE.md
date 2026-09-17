@@ -45,14 +45,31 @@ open "build/AgentBar.app"
    it appears only on a deliberate keypress or menu click, and it closes the
    instant it loses focus. A surface that can appear without being asked for, or
    that stays once you look away, does not belong here.
-3. Hooks must never block the host agent: async, atomic writes, exit fast.
+   `RuleSheet` is a sheet on Settings, not a fourth surface: it is modal to a window
+   the user already opened and it closes when it is answered.
+3. **AgentBar answers nothing by itself — only what the user wrote down.** For six
+   releases the rule was absolute: every decision came from a click, and
+   `DecisionLedger` said so in three places. Since 1.28.0 one thing answers without a
+   click, and the amendment is deliberate, the way 1.18.0's was for notifications:
+   a rule the **human** typed in Settings ▸ Approvals may answer a permission
+   request, and four conditions earn that, not one.
+   The rule was written by the person and never derived from anything the agent
+   produced (a `ruleSuggestion` may never become one); **every firing writes a ledger
+   row naming the rule**, so what a rule did is a question with an answer; a rule that
+   *refuses* may be broad while a rule that *approves* names one directory; and before
+   any approval is written the **live command** is checked again, not its shape —
+   `RuleEngine.refusal(for:)`. That table may only ever grow, it has no setting, and
+   anything it does not understand falls through to the human. The whole feature is
+   one `guard` away from the product that existed before it: no match, a malformed
+   rules file, a command that will not tokenise, and nobody answers.
+4. Hooks must never block the host agent: async, atomic writes, exit fast.
    Sole exception: `permission.js` blocks while the session is already waiting on
    the human, and must always time out silently to the normal terminal prompt.
-4. Adding an agent: entry in `Agents.swift`, sprite in `Sources/AgentBar/Sprites/`,
+5. Adding an agent: entry in `Agents.swift`, sprite in `Sources/AgentBar/Sprites/`,
    optional hook dir in `Scripts/hooks/<agent>/` plus its installer step in
    `HookInstaller.swift` AND the Linux CLI's `install-hooks`, and the agent id in
    the `docs/protocol.md` list, the README agent table, and the agent list above.
    If it gets hooks it also needs a row in the `Diagnostics.integrations` table AND
    the Linux `doctor`'s — otherwise diagnostics reports a clean bill of health for
    an integration it never looked at. Nothing else should need touching.
-5. Third-party marks stay listed in `THIRD_PARTY_NOTICES.md`.
+6. Third-party marks stay listed in `THIRD_PARTY_NOTICES.md`.

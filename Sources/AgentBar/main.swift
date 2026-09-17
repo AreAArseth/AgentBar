@@ -51,6 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.mascot.update(sessions: self.sessions, systemColor: system)
         }
+        // Before a pending request reaches any surface: a rule the human wrote may
+        // already have an answer for it. The store publishes what is left, so a
+        // rule-answered request never flashes on screen as a question nobody asked.
+        requestStore.answeredElsewhere = { [weak self] request in
+            RuleEngine.shared.handle(request,
+                                     session: self?.sessions.first { $0.id == request.sessionId })
+        }
         requestStore.onChange = { [weak self] in
             guard let self else { return }
             self.controller.requestsChanged()

@@ -119,6 +119,7 @@ Request:
   "toolName": "Bash",
   "display": "Bash: git push origin main",   // one line, <= ~60 chars
   "toolInputPretty": "{ ... }",              // full tool input, capped at 4 KB
+  "cwd": "/Users/me/AgentBar",               // the session's directory; ABSENT when unknown
   "context": { "kind": "bash", "command": "git push origin main" },
   "ruleSuggestion": { },                     // verbatim from Claude Code, or null
   "pid": 12345,                              // the claude process
@@ -126,6 +127,14 @@ Request:
   "ts": 1784844796
 }
 ```
+
+`cwd` is the directory the agent is working in, carried since 1.28.0 because a rule
+that says "in this repository" cannot be evaluated without it and because every
+reader was otherwise joining back through `state.d` on `sessionId` to learn
+something the hook already had. A writer that does not know it MUST omit the field
+rather than send an empty string: empty is indistinguishable from `/` in a prefix
+test, and a rule scoped to one repository would then match every one. A reader that
+does not find it falls back to the session join.
 
 `context` is one of: `{kind:"bash", command}`, `{kind:"diff", old, new, more}`,
 `{kind:"write", preview}`, `{kind:"question", questions}`, `{kind:"plan", plan}`,
@@ -316,7 +325,14 @@ decisions about the same command are two decisions, and counting them is the poi
   would be if one were ever typed into a command.
 - `display` is the request's own one-line summary, already capped by the hook, kept
   so a count can be shown next to what it refers to.
-- `via` names the frontend that answered: `app` | `cli`.
+- `via` names what answered: `app` | `cli` | **`rule`**. `rule` means nobody was
+  asked — a rule the user wrote answered on their behalf (see `rules.json` below).
+- `rule` is the id of that rule, and is empty for every other `via`. It is what
+  makes a rule auditable: "what has this rule ever done" is answered by filtering
+  the ledger on it, which is why the rules file itself holds no counters.
+- A reader that reports how many prompts a person answered, or how long agents
+  waited on them, MUST count `via:"rule"` rows **separately**. Nobody waited and
+  nobody was asked; folding them in overstates one number and understates the other.
 
 **What is deliberately absent.** Keystroke approvals — the ones AgentBar sends for
 agents with no request file (Codex, Antigravity), and a Claude plan approval, which
@@ -329,6 +345,68 @@ as "Codex was never approved".
 Rows are the user's own record of their own decisions. Nothing is sent anywhere, a
 frontend MAY offer a switch to stop writing them (AgentBar: **Settings ▸
 Approvals**), and `agentbar forget` empties the file.
+
+## rules.json — what the human decided in advance
+
+Optional. One JSON document at `~/.agentbar/rules.json`, written by a frontend and
+edited by hand. Its subject is the one thing everything else in this protocol
+avoids: **answering without asking.**
+
+```json
+{
+  "v": 1,
+  "rules": [
+    {
+      "id": "r-3f9c1a",            // unique in the file; names the firing in decisions.jsonl
+      "created": 1789646400,
+      "decision": "allow",         // allow | deny
+      "agent": "",                 // "" = any agent
+      "shape": "bash:git status",  // exactly the decisions.jsonl key, same normalisation
+      "cwd": "/Users/me/AgentBar", // "" = anywhere, DENIALS ONLY
+      "note": "read-only",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Normative, and the reason each one is here:
+
+- A rule is matched on `shape`, which by design carries **no arguments**. That is
+  safe for a denial and not safe on its own for an approval, which is what the
+  refusal list below exists for.
+- `cwd` empty means "any directory" and is **legal only for `decision:"deny"`**.
+  Refusing more than the user meant costs a prompt; approving more than they meant
+  is the failure this whole file has to not have. A reader MUST refuse a file
+  containing an approving rule with no `cwd`.
+- A rule MUST NOT be created from a `ruleSuggestion`. Suggestions are produced by
+  the agent being guarded; a rule is written from what the person did.
+- The file carries **no counters**. What a rule has done is read back from
+  `decisions.jsonl` by its `id`, so intent and record never disagree.
+- **A file that does not parse, or that contains one invalid rule, means no rule is
+  applied at all.** Not the valid ones, not a best effort: a policy half in force
+  leaves someone believing they wrote four rules while three are running, with
+  nothing on screen saying which. A frontend SHOULD surface the refusal (AgentBar
+  does, in Diagnostics) rather than fail silently, because silence here looks
+  exactly like working correctly.
+- An unknown `v` is refused for the same reason: a later version may add a field
+  that *narrows* a rule, and ignoring it would apply a wider rule than was written.
+
+**Before writing an `allow` answer from a rule, a frontend MUST re-check the live
+request** — the command as it will actually run, not its shape — and fall through
+to the human on any of: more than one command on the line, or a pipe, redirect,
+background or substitution; elevation (`sudo` and friends); a destructive or
+history-rewriting subcommand; anything that reaches off the machine; a path outside
+the rule's `cwd`; a path that configures permission itself (`~/.agentbar`, an
+agent's settings directory, `.git/hooks`, `.git/config`); a plan review or a
+question; and anything it cannot parse. `deny` skips these checks. The list is not
+exhaustive and is expected to grow; the rule is that it may only ever grow.
+
+Today only the macOS app applies rules. `agentbar rules` lists them and says so:
+the live-request check is one table, and a second implementation of it is a second
+thing to keep byte-identical in the one place where drifting apart means approving
+something nobody meant to. (`shape` is already normalised twice — in
+`DecisionLedger.swift` and in the CLI — and that is one copy too many already.)
 
 ## Adding a frontend or an agent
 

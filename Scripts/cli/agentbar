@@ -5,6 +5,7 @@
 //
 //   agentbar status [--json]        live sessions
 //   agentbar requests [--json]      pending approvals with inline detail
+//   agentbar rules [--json]         the rules you wrote (listed here, applied by the app)
 //   agentbar approve [n] [--always] answer the newest (or n-th) pending request
 //   agentbar deny [n]
 //   agentbar watch [-i SEC]         live view; keys: a allow · A always · d deny ·
@@ -32,6 +33,7 @@ const ansDir = path.join(base, "answers.d");
 const watcherFile = path.join(base, "watcher.json");
 const historyFile = path.join(base, "history.jsonl");
 const decisionsFile = path.join(base, "decisions.jsonl");
+const rulesFile = path.join(base, "rules.json");
 const seenFile = path.join(base, "history-seen.json");
 const PRESENCE_TTL = 60; // seconds a heartbeat stays valid (hooks use the same value)
 const HISTORY_MAX_AGE = 30 * 86400; // long enough for a sprint, short enough to stay a file
@@ -500,7 +502,12 @@ function printApprovals(argv, json) {
   const days = Number.isFinite(asked) && asked > 0 ? asked : 1;
   const midnight = new Date(nowMs()); midnight.setHours(0, 0, 0, 0);
   const since = midnight.getTime() / 1000 - (days - 1) * 86400;
-  const rows = readDecisions().filter((r) => r.ts >= since);
+  const all = readDecisions().filter((r) => r.ts >= since);
+  // A rule answers in milliseconds and nobody was asked, so its rows are counted
+  // apart: mixed into "18 answered" they would inflate what the person did and
+  // deflate the average wait with time nobody waited.
+  const rows = all.filter((r) => r.via !== "rule");
+  const byRules = all.length - rows.length;
 
   // Counted per repo: the same command is routine in one checkout and the
   // opposite in another.
@@ -520,10 +527,10 @@ function printApprovals(argv, json) {
   const list = [...byShape.values()].sort((a, b) => (b.allowed + b.denied) - (a.allowed + a.denied));
 
   if (json) {
-    console.log(JSON.stringify({ answered: rows.length, waited, repeats: list }, null, 2));
+    console.log(JSON.stringify({ answered: rows.length, byRules, waited, repeats: list }, null, 2));
     return;
   }
-  if (!rows.length) {
+  if (!rows.length && !byRules) {
     console.log(dim("Nothing answered yet" + (days > 1 ? ` in ${days} days.` : " today.")));
     return;
   }
@@ -534,7 +541,79 @@ function printApprovals(argv, json) {
   }
   if (list.length > 15) console.log(dim(`...and ${list.length - 15} more`));
   // The half of the loop nothing else is standing in the right place to measure.
-  console.log("\n" + `${rows.length} answered ${dim("·")} they waited ${durationShort(waited)} on you`);
+  const account = [`${rows.length} answered`];
+  if (byRules) account.push(`${byRules} by your rules`);
+  account.push(`they waited ${durationShort(waited)} on you`);
+  console.log("\n" + account.join(` ${dim("·")} `));
+}
+
+// --- the rules you wrote ---
+
+// Lists ~/.agentbar/rules.json and what each rule has actually done, from the same
+// ledger the app reads.
+//
+// It LISTS them; it does not apply them. Only the macOS app answers from a rule,
+// because the check that makes an approving rule safe — the live command, not its
+// shape — is one table in one language, and a second copy of it in JS would be a
+// second thing to keep byte-identical in the one place where drifting apart means
+// approving something nobody meant to approve. The `shape` normalisation already
+// lives in two places and that is one too many. Said out loud here and in
+// docs/protocol.md rather than discovered.
+function readRules() {
+  let raw;
+  try { raw = fs.readFileSync(rulesFile, "utf8"); } catch { return { state: "none", rules: [] }; }
+  let o;
+  try { o = JSON.parse(raw); } catch { return { state: "invalid", why: "not valid JSON", rules: [] }; }
+  if (!o || o.v !== 1) return { state: "invalid", why: `version ${o && o.v}, not 1`, rules: [] };
+  if (!Array.isArray(o.rules)) return { state: "invalid", why: "no `rules` list", rules: [] };
+  for (const r of o.rules) {
+    if (!r || !r.id || !r.shape) return { state: "invalid", why: "a rule with no id or shape", rules: [] };
+    if (r.decision !== "allow" && r.decision !== "deny")
+      return { state: "invalid", why: `rule ${r.id}: decision is not allow or deny`, rules: [] };
+    if (r.decision === "allow" && !r.cwd)
+      return { state: "invalid", why: `rule ${r.id}: approves without naming a directory`, rules: [] };
+  }
+  return { state: "rules", rules: o.rules };
+}
+
+function printRules(json) {
+  const loaded = readRules();
+  const decisions = readDecisions();
+  const fired = (id) => decisions.filter((d) => d.rule === id && d.via === "rule");
+
+  if (json) {
+    console.log(JSON.stringify({
+      state: loaded.state,
+      why: loaded.why || "",
+      applied: false,
+      rules: loaded.rules.map((r) => {
+        const rows = fired(r.id);
+        return { ...r,
+                 allowed: rows.filter((d) => d.decision === "allow").length,
+                 denied: rows.filter((d) => d.decision === "deny").length,
+                 last: rows.reduce((m, d) => Math.max(m, d.ts || 0), 0) };
+      }),
+    }, null, 2));
+    return;
+  }
+  if (loaded.state === "none") {
+    console.log(dim("No rules. Every prompt comes to you, which is the default and stays the default."));
+    return;
+  }
+  if (loaded.state === "invalid") {
+    console.log(red(`No rules are in force: ${loaded.why}.`));
+    console.log(dim("Nothing in the file is applied while any of it is wrong."));
+    return;
+  }
+  for (const r of loaded.rules) {
+    const rows = fired(r.id);
+    const verb = r.decision === "allow" ? green("allow") : red("deny ");
+    const where = r.cwd ? path.basename(r.cwd) : "everywhere";
+    const count = rows.length ? `${rows.length}x` : dim("never fired");
+    const off = r.enabled === false ? dim(" (off)") : "";
+    console.log(`${verb} ${bold(r.shape.padEnd(26))} ${where.padEnd(18)} ${count}${off}`);
+  }
+  console.log("\n" + dim("Applied by the macOS app. This command lists them; it does not answer from them."));
 }
 
 // Empties the ledger. Deliberately not "prune": this is the answer to "I would
@@ -1502,6 +1581,7 @@ switch (cmd) {
   case "history": printHistory(argv, json); break;
   case "usage": printUsage(json); break;
   case "approvals": printApprovals(argv, json); break;
+  case "rules": printRules(json); break;
   case "forget": forget(); break;
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
@@ -1519,6 +1599,7 @@ switch (cmd) {
   agentbar history [--days N]     what finished today (or over N days) [--json]
   agentbar usage [--json]         what's left of each provider's quota
   agentbar approvals [--days N]   prompts you keep answering + how long they waited [--json]
+  agentbar rules                  the rules you wrote and what each one has done [--json]
   agentbar forget                 empty the decision ledger
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);

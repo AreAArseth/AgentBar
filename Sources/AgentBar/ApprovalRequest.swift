@@ -9,6 +9,11 @@ struct ApprovalRequest {
     let toolName: String
     let display: String             // one line, e.g. "Bash: git push origin main"
     let toolInputPretty: String     // full tool input for the tooltip
+    /// The directory the session is working in, straight from the hook. Empty for
+    /// a request written before 1.28.0 (or by a host that sends none) — readers
+    /// fall back to joining through `state.d` on `sessionId`, which is what every
+    /// reader had to do before this field existed.
+    let cwd: String
     let ruleSuggestion: [String: Any]?  // Claude-supplied; passed back verbatim on Always allow
     let context: Context?           // structured detail for the inline mini-diff / command
     let pid: Int32                  // the waiting hook's parent (the claude process)
@@ -65,6 +70,7 @@ struct ApprovalRequest {
         toolName        = o["toolName"] as? String ?? ""
         display         = o["display"] as? String ?? (o["toolName"] as? String ?? "request")
         toolInputPretty = o["toolInputPretty"] as? String ?? ""
+        cwd             = o["cwd"] as? String ?? ""
         ruleSuggestion  = o["ruleSuggestion"] as? [String: Any]
         context         = Self.decodeContext(o["context"] as? [String: Any])
         // Same guard as Session.pid: a malformed pid degrades to 0 (no liveness

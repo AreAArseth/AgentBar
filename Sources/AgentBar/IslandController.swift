@@ -394,6 +394,20 @@ final class IslandController: NSObject {
                 cwd: s.cwd,
                 width: Self.expandedWidth - IslandContentView.hPad * 2 - Self.cardIndent
             ) { [weak self] behavior in
+                // "rule" is not an answer to this request — it opens the sheet and
+                // leaves the card pending. Handled before the answer path so a
+                // dropped-answer beep can never fire for a click that answered
+                // nothing on purpose.
+                if behavior == "rule" {
+                    SettingsWindow.shared.addRule(from: RuleSheet.Prefill(
+                        decision: DecisionLedger.shouldOfferRule(
+                            DecisionLedger.summary(shape: DecisionLedger.shape(of: r),
+                                                   cwd: s.cwd, in: DecisionLedger.cached())) ?? "allow",
+                        shape: DecisionLedger.shape(of: r),
+                        cwd: r.cwd.isEmpty ? s.cwd : r.cwd,
+                        display: r.display))
+                    return
+                }
                 // Only confirm what actually reached disk: a dropped answer leaves the
                 // request pending, and a "✓ Allowed" flash would be a lie.
                 guard AgentActions.answer(ApprovalAction(request: r, behavior: behavior, session: s))

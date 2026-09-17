@@ -15,6 +15,14 @@ final class RequestStore {
 
     private(set) var requests: [ApprovalRequest] = []
     var onChange: (() -> Void)?
+    /// Asked about every request before it is published. Returning true means it
+    /// has been answered already — by a rule the human wrote — and must not be
+    /// shown as pending. Asked *before* publication on purpose: a card that
+    /// appears and vanishes 100 ms later is a worse way to learn a rule fired than
+    /// never seeing it, and the rule's own trace is where that belongs.
+    ///
+    /// The store itself knows nothing about rules; `main.swift` supplies this.
+    var answeredElsewhere: ((ApprovalRequest) -> Bool)?
 
     private var dirSource: DispatchSourceFileSystemObject?
     private var timer: Timer?
@@ -69,6 +77,13 @@ final class RequestStore {
             }
             found.append(r)
         }
+        // Every live request, whoever ends up answering it: the memory that stops
+        // a rule answering the same request twice is keyed off this.
+        let live = Set(found.map(\.identity))
+        if let answeredElsewhere {
+            found.removeAll { answeredElsewhere($0) }
+        }
+        RuleEngine.shared.forget(keeping: live)
         found.sort { $0.ts > $1.ts }
         pruneOrphanAnswers(liveNames: Set(found.map(\.fileName)))
 

@@ -119,6 +119,7 @@ enum Diagnostics {
         out += hookScriptChecks(base: base, home: home)
         out += integrations.flatMap { integrationChecks($0, home: home, base: base, now: now) }
         out += claudeConfigDirCheck(home: home)
+        out += ruleChecks(base: base)
         out += orphanChecks(base: base, now: now)
         out += appChecks()
         return out
@@ -358,6 +359,34 @@ enum Diagnostics {
         return [Check(id: "claude.configDir", title: "Claude's config directory", status: agrees ? .ok : .warn,
                       detail: agrees ? stored : "The installer wires \(stored); this shell says CLAUDE_CONFIG_DIR=\(live ?? "").",
                       fix: agrees ? nil : "Update ~/.agentbar/claude-config-dir to the directory you actually use, then relaunch AgentBar.")]
+    }
+
+    // MARK: - Rules
+
+    /// A rules file that will not parse is the one failure in this app that is
+    /// invisible by design: nothing fires, every prompt comes back, and that is
+    /// exactly what AgentBar looks like when it is working. So it is reported
+    /// here, where somebody wondering why their rule stopped working will look.
+    static func ruleChecks(base: URL) -> [Check] {
+        let url = base.appendingPathComponent("rules.json", isDirectory: false)
+        switch RulesStore.load(url: url) {
+        case .none:
+            return [Check(id: "rules.file", title: "Rules", status: .skipped,
+                          detail: "None written — every prompt comes to you.")]
+        case .rules(let list):
+            let off = list.filter { !$0.enabled }.count
+            let live = list.count - off
+            return [Check(id: "rules.file", title: "Rules", status: .ok,
+                          detail: "\(live) in force"
+                                  + (off > 0 ? ", \(off) switched off" : "")
+                                  + (RulesStore.enabled ? "" : " — all paused by the switch in Settings ▸ Approvals"))]
+        case .invalid(let why):
+            return [Check(id: "rules.file", title: "Rules", status: .fail,
+                          detail: why + " No rule is being applied.",
+                          fix: "Fix ~/.agentbar/rules.json, or move it aside and write the "
+                               + "rules again in Settings ▸ Approvals. Nothing is applied "
+                               + "while any of it is wrong.")]
+        }
     }
 
     // MARK: - Leftovers

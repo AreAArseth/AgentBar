@@ -153,6 +153,22 @@ AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <
 hookpid=$!
 wait_req
 check "edit display is cwd-relative" 'grep -q "Edit: Sources/App/File.swift" "$HOME/.agentbar/requests.d/$REQ"'
+# A rule that says "in this repository" cannot be evaluated without knowing which
+# one, and joining back through state.d on sessionId to learn it is a lookup the
+# hook can spare every reader: it already has the directory in hand.
+check "request carries the cwd"      'grep -q "\"cwd\":\"/tmp/proj\"" "$HOME/.agentbar/requests.d/$REQ"'
+printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
+# 11a. A host that sends no cwd leaves the field OUT rather than empty. An empty
+# string would compare equal to nothing and be indistinguishable from "/" in a
+# prefix test; absent is a state readers already handle.
+fresh_home
+NOCWD_EVENT='{"session_id":"testsess","prompt_id":"p2b","tool_name":"Bash","tool_input":{"command":"ls"}}'
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$NOCWD_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "no cwd: the field is absent"  '! grep -q "\"cwd\"" "$HOME/.agentbar/requests.d/$REQ"'
 printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
 wait "$hookpid"
 

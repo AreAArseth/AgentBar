@@ -416,6 +416,37 @@ check "approvals --json carries the rows"   '"$CLI" approvals --json | grep -q "
 
 check "forget empties the ledger"           '"$CLI" forget | grep -q "Forgot 2 decisions" && [ ! -f "$LEDGER" ]'
 
+# --- rules: what the human wrote down, listed here and applied by the app
+fresh_home
+check "no rules says so plainly"            '"$CLI" rules | grep -q "No rules"'
+printf '{"v":1,"rules":[{"id":"r-aaa111","decision":"allow","shape":"bash:git status","cwd":"%s","enabled":true},{"id":"r-bbb222","decision":"deny","shape":"bash:curl","cwd":"","enabled":true}]}' \
+  "$HOME/proj" > "$HOME/.agentbar/rules.json"
+OUT="$("$CLI" rules)"
+check "a rule is listed with its verb"      'echo "$OUT" | grep -q "allow" && echo "$OUT" | grep -q "bash:git status"'
+check "a denial may name no directory"      'echo "$OUT" | grep -q "everywhere"'
+check "a rule that never fired says so"     'echo "$OUT" | grep -q "never fired"'
+# The CLI lists rules; only the app answers from one. Saying so is the point — a
+# Linux user must not believe their rules are running here.
+check "it says it does not apply them"      'echo "$OUT" | grep -q "does not answer from them"'
+check "rules --json says applied is false"  '"$CLI" rules --json | grep -q "\"applied\": false"'
+
+# A firing is counted from the ledger, never from a counter inside rules.json.
+printf '{"v":1,"ts":%s,"agent":"claude","sessionId":"s1","project":"proj","cwd":"%s","tool":"Bash","shape":"bash:git status","display":"Bash: git status","decision":"allow","waited":0,"via":"rule","rule":"r-aaa111"}\n' \
+  "$(date +%s)" "$HOME/proj" > "$HOME/.agentbar/decisions.jsonl"
+check "a firing is counted from the ledger" '"$CLI" rules | grep -q "1x"'
+check "rules.json holds no counter"         '! grep -q "fired" "$HOME/.agentbar/rules.json"'
+# A rule's row is not the person answering: it must not inflate "N answered".
+OUT="$("$CLI" approvals)"
+check "approvals keeps rules apart"         'echo "$OUT" | grep -q "0 answered" && echo "$OUT" | grep -q "1 by your rules"'
+
+# One bad rule refuses the whole file: a policy half in force is worse than none.
+printf '{"v":1,"rules":[{"id":"r-aaa111","decision":"allow","shape":"bash:git status","cwd":"%s"},{"id":"r-ccc333","decision":"allow","shape":"bash:ls"}]}' \
+  "$HOME/proj" > "$HOME/.agentbar/rules.json"
+OUT="$("$CLI" rules)"
+check "one bad rule voids the file"         'echo "$OUT" | grep -q "No rules are in force" && ! echo "$OUT" | grep -q "bash:git status"'
+printf 'not json' > "$HOME/.agentbar/rules.json"
+check "junk voids the file too"             '"$CLI" rules | grep -q "not valid JSON"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

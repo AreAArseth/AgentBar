@@ -48,8 +48,26 @@ guarantees worth knowing when auditing:
   that request: the hook structurally compares the answer's rule against the
   received `permission_suggestions` and downgrades anything else to a one-shot
   allow (`Scripts/hooks/claude/permission.js`).
-- Every failure path (app missing, killed hook, timeout, malformed files)
-  degrades to the agent's normal interactive prompt — never to an approval.
+- **Rules (1.28.0 and later) are the only thing that answers without a click**, and
+  every property below is load-bearing. A rule is created only by the user, in
+  Settings ▸ Approvals or by editing `~/.agentbar/rules.json`; it is never derived
+  from a `ruleSuggestion`, because that is produced by the agent being guarded. A
+  rule that **denies** may be broad. A rule that **approves** must name one
+  directory, and matching its `shape` is not enough on its own — `RuleEngine.refusal`
+  re-reads the live command and falls through to the human on a chained, piped,
+  redirected or substituted line (the shape of a chain is the shape of its head, so
+  this one is not optional), on `sudo` and friends, on destructive or
+  history-rewriting subcommands, on anything reaching off the machine, on a path
+  outside the rule's directory, and on any path that configures permission itself —
+  `~/.agentbar`, an agent's settings directory, `.git/hooks`, `.git/config`. No
+  setting disables that table, and anything the engine cannot parse is a refusal.
+  Every firing appends a `decisions.jsonl` row carrying `via:"rule"` and the rule's
+  id; one invalid rule voids the whole file and Diagnostics reports it, because a
+  rule that quietly stopped applying looks identical to AgentBar behaving normally.
+  See `Sources/AgentBar/RuleEngine.swift`.
+- Every failure path (app missing, killed hook, timeout, malformed files, a rules
+  file that will not parse) degrades to the agent's normal interactive prompt —
+  never to an approval.
 - Keystroke approval for non-Claude agents requires the user to grant the
   Accessibility permission and a per-prompt click on an explicitly labeled item.
 
