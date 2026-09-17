@@ -154,6 +154,15 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-usage"),
         to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
 }
 
+// The settings sheet as a picture, every section at once. See
+// SettingsWindow.renderForVerification.
+if let i = CommandLine.arguments.firstIndex(of: "--render-settings"),
+   CommandLine.arguments.indices.contains(i + 1) {
+    _ = NSApplication.shared
+    exit(SettingsWindow.shared.renderForVerification(
+        to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
+}
+
 // Whether Claude's quota can be read at all, in one line, without the menu and
 // without the app running: the same call the timer makes, the same status
 // sentence Settings shows. It has to be the *bundle's* binary to mean anything —

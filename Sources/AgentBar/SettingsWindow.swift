@@ -212,6 +212,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         // opposite: this is the switch that caused it, and a switch that does
         // nothing and says nothing cannot be told from a broken one.
         quotaStatus = caption("")
+        // Every other caption in this window wraps because its text carries its own
+        // line breaks. This one is written at runtime and cannot, so it needs the
+        // width said out loud — without it the label takes its natural single-line
+        // width, the window grows to fit the longest sentence, and the shortcut
+        // grids (trailing-placed inside a stack that is suddenly 1900 pt wide) get
+        // dragged off the right edge. One missing line, three broken sections.
+        quotaStatus.preferredMaxLayoutWidth = Self.minWidth - 40
+        quotaStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         quotaCheck = NSButton(title: "Check now", target: self,
                               action: #selector(checkQuotaNow))
         quotaCheck.bezelStyle = .rounded
@@ -322,6 +330,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// The tallest the window may get: the screen it is on, less the room a title
     /// bar and a Dock want. Past this the content scrolls instead of the window
     /// growing out of sight.
+    /// And no wider than the screen it is on. Width used to be whatever the
+    /// longest line of text asked for, which is fine while every line is written
+    /// by hand and a disaster the first time one isn't.
+    private func maxContentWidth(for window: NSWindow) -> CGFloat {
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame.width ?? 1_200
+        return max(Self.minWidth, min(visible - 80, 720))
+    }
+
     private func maxContentHeight(for window: NSWindow) -> CGFloat {
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
         return max(320, visible - 60)
@@ -332,9 +348,16 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var stack: NSStackView?
     private func refit() {
         guard let window, let stack else { return }
+        // The label wraps at whatever the window actually is, not at the width it
+        // was built with, so a wide window uses the room and a narrow one wraps.
+        quotaStatus?.preferredMaxLayoutWidth = max(Self.minWidth, window.frame.width) - 40
+        stack.layoutSubtreeIfNeeded()
         let wanted = stack.fittingSize
-        window.setContentSize(NSSize(width: wanted.width,
+        window.setContentSize(NSSize(width: min(wanted.width, maxContentWidth(for: window)),
                                      height: min(wanted.height, maxContentHeight(for: window))))
+        // A resize that only moves constraints can leave the old pixels behind in
+        // the scrolled document — which is what an empty section really was.
+        window.contentView?.needsDisplay = true
         // The window was centred at its old height and grows downward from its title
         // bar, so a few diagnostic rows push its bottom under the Dock. Nudge it back
         // into view rather than re-centring, which would yank it while it is read.
@@ -631,6 +654,38 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 /// A button that shows the current combo and, when clicked, records the next
 /// keystroke as the new one. Esc cancels; a combo needs ⌘, ⌥ or ⌃ so a plain
 /// letter typed anywhere can never become a global hotkey.
+// MARK: - Offline verification
+
+extension SettingsWindow {
+    /// Renders the whole settings sheet to a PNG, all sections at once, without
+    /// opening it.
+    ///
+    /// The precedent is `UsageMeterView.renderForVerification`, and the reason is
+    /// the same: this window is the one surface that cannot be looked at while it
+    /// is being changed — it opens over the work, a screenshot of it needs a human
+    /// with a mouse, and it is long enough that the broken part is usually
+    /// scrolled out of sight. A single unwrapped label once stretched it to 1900 pt
+    /// and pushed two sections off the right edge; nothing in the build said a
+    /// word, and a picture would have.
+    func renderForVerification(to url: URL) -> Bool {
+        if window == nil { build() }
+        reload()
+        guard let stack else { return false }
+        // Lay out at the width the window actually opens at, so wrapping is the
+        // wrapping people see rather than whatever the widest line asks for.
+        stack.frame = NSRect(x: 0, y: 0, width: Self.minWidth, height: 0)
+        stack.layoutSubtreeIfNeeded()
+        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
+        stack.layoutSubtreeIfNeeded()
+        guard let rep = stack.bitmapImageRepForCachingDisplay(in: stack.bounds) else {
+            return false
+        }
+        stack.cacheDisplay(in: stack.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: url)) != nil
+    }
+}
+
 final class ShortcutRecorder: NSButton {
     private let defaultsKey: String
     private let fallback: KeyCombo

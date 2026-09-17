@@ -569,25 +569,24 @@ final class ClaudeQuota {
         case .off:
             return "Off. Claude's row counts tokens read from this Mac instead."
         case .asking:
-            return "Asking Anthropic… if macOS puts up a Keychain prompt, that is this."
+            return "Asking Anthropic… a Keychain prompt, if one appears, is this."
         case .ok(let at, let account):
             let who = account.map { " · \($0)" } ?? ""
             return "Read at \(UsageCenter.when(at, now: now))\(who)."
         case .noCredential:
-            return "No Claude Code login on this Mac. Sign in with the CLI and try again."
+            return "No Claude Code login on this Mac. Sign in with the CLI, or use a token."
         case .loggedOut:
-            return "The stored Claude Code login is empty — which is what a Mac looks like "
-                + "when its sessions run under their own CLAUDE_CONFIG_DIR. Either sign in "
-                + "with the default config, or hand over a token from `claude setup-token`."
+            return "The stored Claude Code login is empty — as it is on any Mac whose "
+                + "sessions run under their own CLAUDE_CONFIG_DIR. Use a token instead."
         case .refused(let code):
-            return "macOS did not hand over the Claude Code login from the Keychain (\(code)). "
-                + "Answer its prompt with Always Allow — “Check now” raises it again."
+            return "macOS would not hand over the Keychain login (\(code)). Answer its "
+                + "prompt with Always Allow; “Check now” raises it again."
         case .expiredToken(let when):
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US")
             f.dateFormat = "d MMM HH:mm"
-            return "The stored login expired at \(f.string(from: when)). Claude Code renews "
-                + "it the next time it runs; AgentBar never does that itself."
+            return "The stored login expired at \(f.string(from: when)); Claude Code renews "
+                + "it the next time it runs."
         case .declined(let code, let message):
             let said = message.map { " It said: \($0)" } ?? ""
             return "Anthropic declined the token (\(code)). Sign in with Claude Code again, "
@@ -597,7 +596,7 @@ final class ClaudeQuota {
         case .unreachable:
             return "Couldn't reach api.anthropic.com."
         case .unexpected(let code):
-            return "api.anthropic.com answered \(code). Nothing to show until that changes."
+            return "api.anthropic.com answered \(code); nothing to show until that changes."
         }
     }
 
