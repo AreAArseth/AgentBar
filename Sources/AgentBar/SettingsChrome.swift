@@ -45,6 +45,18 @@ enum SettingsChrome {
     static let minWindowHeight: CGFloat = 320
     static let maxWindowHeight: CGFloat = 640
 
+    /// A card is a *tint* on the page, not a slab laid over it: black at four and
+    /// a half percent on a white page, white at eight on a dark one. The first cut
+    /// used one grey for both, which on white came out as the concrete-coloured
+    /// block this replaces.
+    static var cardFill: NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor.white.withAlphaComponent(0.08)
+                : NSColor.black.withAlphaComponent(0.045)
+        }
+    }
+
     // MARK: - Cards
 
     /// A group of rows on one rounded panel, hairlines between them. The panel is
@@ -63,7 +75,7 @@ enum SettingsChrome {
 
         // A filled group rather than an outlined box, and a fill that re-resolves
         // itself when the appearance changes — see `SettingsSurface`.
-        let panel = SettingsSurface(fill: { NSColor.quaternaryLabelColor.withAlphaComponent(0.11) })
+        let panel = SettingsSurface(fill: { cardFill })
         panel.layer?.cornerRadius = cardRadius
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(stack)
@@ -251,7 +263,7 @@ enum SettingsChrome {
     /// runs the full width cuts the card in two and the rows stop reading as one
     /// group.
     private static func hairline() -> NSView {
-        let line = SettingsSurface(fill: { NSColor.separatorColor.withAlphaComponent(0.7) })
+        let line = SettingsSurface(fill: { NSColor.separatorColor.withAlphaComponent(0.55) })
         line.translatesAutoresizingMaskIntoConstraints = false
 
         let holder = NSView()
@@ -300,31 +312,51 @@ final class SettingsSurface: NSView {
     }
 }
 
-/// One entry in the sidebar: a tinted glyph, a name, and a selection that fills
+/// One entry in the sidebar: a tinted tile, a name, and a selection that fills
 /// the column.
 ///
-/// It fills the column because that is what a source list does — a highlight that
-/// stops at the end of the word reads as a tag somebody stuck on the text, and
-/// that is exactly how it was read.
-final class SidebarItem: NSButton {
+/// Laid out by hand rather than as an `NSButton` with an image and a title,
+/// because a button gives no say over the gap between the two — the first cut
+/// padded it with spaces in the string, and the icon and the word ended up
+/// touching. A tile, ten points, a label: the same measurements the system's own
+/// settings list uses, and none of them a guess.
+final class SidebarItem: NSControl {
     let page: SettingsWindow.Page
+    private let tile = NSImageView()
+    private let label = NSTextField(labelWithString: "")
     private var selected = false
+
+    static let height: CGFloat = 34
+    private static let tileSide: CGFloat = 20
+    private static let leftInset: CGFloat = 8
+    private static let gap: CGFloat = 10
 
     init(page: SettingsWindow.Page, target: AnyObject, action: Selector) {
         self.page = page
         super.init(frame: .zero)
         self.target = target
         self.action = action
-        isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 7
-        imagePosition = .imageLeading
-        imageHugsTitle = true
-        alignment = .left
-        image = Self.chip(symbol: page.symbol, tint: page.tint)
-        imageScaling = .scaleNone
+        layer?.cornerRadius = 8
+
+        tile.image = Self.tile(symbol: page.symbol, tint: page.tint)
+        tile.translatesAutoresizingMaskIntoConstraints = false
+        label.stringValue = page.title
+        label.font = .systemFont(ofSize: 13)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tile)
+        addSubview(label)
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 32).isActive = true
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.leftInset),
+            tile.centerYAnchor.constraint(equalTo: centerYAnchor),
+            tile.widthAnchor.constraint(equalToConstant: Self.tileSide),
+            tile.heightAnchor.constraint(equalToConstant: Self.tileSide),
+            label.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: Self.gap),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+        ])
         apply()
     }
 
@@ -335,6 +367,10 @@ final class SidebarItem: NSButton {
         set { selected = newValue; apply() }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        sendAction(action, to: target)
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         apply()   // the accent colour is the user's, and it is a dynamic colour
@@ -343,17 +379,15 @@ final class SidebarItem: NSButton {
     private func apply() {
         layer?.backgroundColor = selected
             ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor
-        attributedTitle = NSAttributedString(string: " " + page.title, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: selected ? NSColor.white : NSColor.labelColor,
-        ])
+        label.textColor = selected ? .white : .labelColor
+        label.font = .systemFont(ofSize: 13, weight: selected ? .medium : .regular)
     }
 
     /// A rounded tile with the glyph knocked out of it, the way the system's own
     /// settings list marks each pane. Drawn once per item: a tinted image cannot
     /// come from a symbol configuration alone.
-    private static func chip(symbol: String, tint: NSColor) -> NSImage {
-        let side: CGFloat = 20
+    private static func tile(symbol: String, tint: NSColor) -> NSImage {
+        let side = tileSide
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
         tint.setFill()
@@ -361,17 +395,16 @@ final class SidebarItem: NSButton {
                      xRadius: 5, yRadius: 5).fill()
         if let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium)) {
-            let tinted = NSImage(size: glyph.size)
-            tinted.lockFocus()
+            let knockout = NSImage(size: glyph.size)
+            knockout.lockFocus()
             NSColor.white.set()
             NSRect(origin: .zero, size: glyph.size).fill(using: .sourceOver)
             glyph.draw(at: .zero, from: NSRect(origin: .zero, size: glyph.size),
                        operation: .destinationIn, fraction: 1)
-            tinted.unlockFocus()
-            let box = NSRect(x: (side - glyph.size.width) / 2,
-                             y: (side - glyph.size.height) / 2,
-                             width: glyph.size.width, height: glyph.size.height)
-            tinted.draw(in: box)
+            knockout.unlockFocus()
+            knockout.draw(in: NSRect(x: (side - glyph.size.width) / 2,
+                                     y: (side - glyph.size.height) / 2,
+                                     width: glyph.size.width, height: glyph.size.height))
         }
         image.unlockFocus()
         return image

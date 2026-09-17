@@ -3,6 +3,19 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.26.1 - 2026-09-17
+
+### Fixed
+
+- The settings sidebar, measured against the system's own rather than eyeballed:
+  the tile and the word were touching, because an `NSButton` gives no say over
+  the gap between its image and its title and the first cut padded it with spaces
+  in the string. Each entry is laid out by hand now — a 20 pt tile, ten points, the
+  label — and the rows have the height and spacing a source list has.
+- Cards were a concrete-coloured slab: one flat grey used for both appearances,
+  which on a white page is far too dark. A card is a tint on the page now — black
+  at four and a half percent on white, white at eight on dark.
+
 ## 1.26.0 - 2026-09-17
 
 ### Changed

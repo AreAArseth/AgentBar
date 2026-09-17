@@ -147,7 +147,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let list = NSStackView(views: sidebarItems)
         list.orientation = .vertical
         list.alignment = .leading
-        list.spacing = 2
+        list.spacing = 4
         list.translatesAutoresizingMaskIntoConstraints = false
         for item in sidebarItems {
             item.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true
@@ -199,9 +199,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             sidebar.topAnchor.constraint(equalTo: root.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: SettingsChrome.sidebarWidth),
-            // Below the traffic lights, which sit over the sidebar in a window
-            // with no title bar of its own.
-            list.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 46),
+            // Clear of the traffic lights and no further: the gap was wide enough
+            // to read as a search field somebody forgot to put in.
+            list.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 38),
             list.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
             list.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
 
@@ -214,7 +214,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             pageTitle.leadingAnchor.constraint(equalTo: content.leadingAnchor,
                                                constant: SettingsChrome.Space.page),
 
-            scroll.topAnchor.constraint(equalTo: pageTitle.bottomAnchor, constant: 12),
+            scroll.topAnchor.constraint(equalTo: pageTitle.bottomAnchor,
+                                       constant: SettingsChrome.Space.page),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -478,7 +479,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             return view.fittingSize.height
         }.max() ?? 0
         // The title, the gap under it, and the page's own bottom margin.
-        let chrome = SettingsChrome.Space.gap * 3 + SettingsChrome.Space.page
+        let chrome = SettingsChrome.Space.page * 2
         let height = min(max(tallest + chrome, SettingsChrome.minWindowHeight),
                          SettingsChrome.maxWindowHeight)
         window.setContentSize(NSSize(width: window.frame.width, height: height))
