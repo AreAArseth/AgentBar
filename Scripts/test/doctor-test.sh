@@ -21,8 +21,14 @@ TESTROOT="$(mktemp -d)"
 cleanup() { chmod -R u+w "$TESTROOT" 2>/dev/null; /bin/rm -rf "$TESTROOT"; }
 trap cleanup EXIT
 
+# A counter, not $RANDOM: two draws out of 32768 collide about once in three
+# hundred runs, and a "fresh" home that is really a previous one still holds its
+# files — which fails exactly the checks that assert a directory is empty, on a
+# machine nobody is watching. (Caught in CI: "codex non-complete event ignored".)
+HOME_SEQ=0
 fresh_home() {
-  export HOME="$TESTROOT/home.$$.$RANDOM"
+  HOME_SEQ=$((HOME_SEQ + 1))
+  export HOME="$TESTROOT/home.$$.$HOME_SEQ"
   mkdir -p "$HOME/.agentbar/state.d" "$HOME/.agentbar/requests.d" "$HOME/.agentbar/answers.d"
 }
 

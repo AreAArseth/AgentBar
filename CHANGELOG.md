@@ -42,6 +42,14 @@ All notable changes to AgentBar are documented here. This project follows
   features now own chords and anything that starts by clearing the table would
   silently drop the other one's.
 
+### Fixed
+
+- **A one-in-three-hundred flake in the test suites.** Every suite named its
+  throwaway home `home.$$.$RANDOM`, and two draws out of 32768 collide often
+  enough: a "fresh" home that is really a previous one still holds its files, and
+  the checks that assert a directory is empty fail on a machine nobody is watching.
+  Caught in CI on Linux — *"codex non-complete event ignored"* — and now a counter.
+
 ## 1.21.0 - 2026-09-17
 
 ### Fixed

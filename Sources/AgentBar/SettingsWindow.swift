@@ -115,20 +115,23 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                     // One recorder at a time, and while recording the current combo
                     // must reach the recorder, not the Carbon hotkey — suspend,
                     // then re-register on the way out.
-                    for other in [self.allowRecorder, self.denyRecorder, self.launchRecorder]
-                    where other !== recorder {
-                        other?.cancelCapture()
-                    }
+                    let others: [ShortcutRecorder?] = [self.allowRecorder, self.denyRecorder,
+                                                       self.launchRecorder]
+                    for other in others where other !== recorder { other?.cancelCapture() }
                     HotKeyCenter.shared.suspend()
                 } else {
                     self.onChange?()
                 }
             }
             recorder.rejectCombo = { [weak self, weak recorder] combo in
-                // No two of them may share one chord.
+                // No two of them may share one chord. The type is spelled out
+                // because implicitly-unwrapped optionals in a literal infer as
+                // [AnyObject] on some toolchains and the member lookup then fails
+                // only on the machine you are not building on.
                 guard let self else { return false }
-                return [self.allowRecorder, self.denyRecorder, self.launchRecorder]
-                    .contains { $0 !== recorder && $0?.combo == combo }
+                let all: [ShortcutRecorder?] = [self.allowRecorder, self.denyRecorder,
+                                                self.launchRecorder]
+                return all.contains { $0 !== recorder && $0?.combo == combo }
             }
             recorder.onRecord = { [weak self] in self?.onChange?() }
         }
