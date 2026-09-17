@@ -294,6 +294,54 @@ final class UsageCenter {
         return f.string(from: d)
     }
 
+    // MARK: - Which of them the island's one line is for
+
+    /// The usage provider an agent's sessions spend from. Several ids can share
+    /// one — Claude Code and Cowork are the same account and the same window —
+    /// and most agents have no provider here at all, which is its own answer.
+    static func provider(forAgent id: String) -> String? {
+        if id.hasPrefix("claude") || id.hasPrefix("cowork") { return "Claude" }
+        if id.hasPrefix("codex") { return "Codex" }
+        if id.hasPrefix("copilot") { return "Copilot" }
+        return nil
+    }
+
+    /// At or past this, a window stays on the island whatever else is happening.
+    /// The same number the meter turns amber at: running low is the one quota
+    /// fact worth showing unasked, and it should look and behave like one thing.
+    static let lowWaterMark: Double = 80
+
+    /// What the island's single line shows, given what is running.
+    ///
+    /// The line is a status surface, not a dashboard. Codex's window is no less
+    /// true while Codex is asleep, but it is not *news* — and the line is one
+    /// line, shared with the ⋯ button. So: the providers you are actually
+    /// running, in the order they are running, and the rest one click away in
+    /// the menu, which is where the full block has always lived.
+    ///
+    /// Two things keep that from lying:
+    ///
+    /// - A provider at `lowWaterMark` or more stays whether or not it is
+    ///   running. The moment worth hearing about is the one where you are about
+    ///   to start something you have no room for.
+    /// - When nothing is running, the last thing that did stays. Otherwise the
+    ///   line blinks out the instant a session ends and back in when the next
+    ///   begins, and a status surface that flickers is worse than a busy one.
+    static func relevant(_ readings: [Reading], active: Set<String>,
+                         lastUsed: String? = nil) -> [Reading] {
+        let ordered = readings.enumerated().sorted { a, b in
+            let (x, y) = (active.contains(a.element.provider), active.contains(b.element.provider))
+            return x == y ? a.offset < b.offset : x
+        }.map(\.element)
+        let keep = ordered.filter { r in
+            active.contains(r.provider)
+                || r.windows.contains { !$0.expired() && $0.usedPercent >= lowWaterMark }
+        }
+        if !keep.isEmpty { return keep }
+        if let lastUsed, let r = readings.first(where: { $0.provider == lastUsed }) { return [r] }
+        return Array(readings.prefix(1))
+    }
+
     /// Everything a redraw would depend on. `text` alone missed a meter moving
     /// while its sentence stayed the same.
     static func signature(_ r: Reading) -> String {
@@ -405,9 +453,16 @@ final class UsageCenter {
         let total = usageByStamp.filter { $0.0 >= anchor }.map(\.1).reduce(0, +)
         guard total > 0 else { return nil }
         let resets = anchor.addingTimeInterval(Self.blockLength)
+        // The switch is on and there is still no percentage: say why, once, in
+        // the menu block where the meter would have been. Not on the island —
+        // that line is for numbers — and not as part of `text`, which the island
+        // does show.
+        let why = ClaudeQuota.enabled
+            ? ClaudeQuota.shortReason(for: ClaudeQuota.shared.status) : nil
         return Reading(provider: "Claude",
                        text: "~\(Self.compact(total)) tok this 5h block · resets \(Self.clock(resets))",
-                       detail: nil)
+                       detail: why.map { "Percentages: \($0)." },
+                       note: why)
     }
 
     /// (timestamp, tokens) for the assistant messages in the bytes a transcript

@@ -21,6 +21,11 @@ guarantees worth knowing when auditing:
   raises its own consent dialog the first time), sends it to Anthropic and nowhere
   else, keeps it only for the duration of the request, never logs it, and never
   refreshes it — an expired token simply means no reading until the CLI renews it.
+  It reads exactly one field, `claudeAiOauth.accessToken`, and never searches that
+  record for a token by name: **the same Keychain record holds an `accessToken` for
+  every MCP server you have authorised**, and 1.19.0–1.23.0 could pick one of those
+  and send it to Anthropic. Fixed in 1.24.0; if you had the switch on in those
+  versions, rotating any MCP OAuth login you had authorised is the cautious move.
   See `Sources/AgentBar/ClaudeQuota.swift`.
 - "Always allow" can only persist a rule that Claude Code itself suggested for
   that request: the hook structurally compares the answer's rule against the

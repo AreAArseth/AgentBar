@@ -271,6 +271,85 @@ import Testing
         #expect(UsageCenter.aiu(42_000_000_000) == "42")
     }
 
+    // MARK: - Which providers the island's one line is for
+
+    private func reading(_ provider: String, used: Double?,
+                         resets: TimeInterval = 3_600) -> UsageCenter.Reading {
+        guard let used else { return UsageCenter.Reading(provider: provider, text: "no ceiling") }
+        return UsageCenter.Reading(
+            provider: provider, text: "",
+            windows: [UsageWindow(name: "5h", usedPercent: used,
+                                  resetsAt: Date().addingTimeInterval(resets))])
+    }
+
+    /// The line is one line, shared with the ⋯ button: it carries what is
+    /// running, and the menu carries the rest.
+    @Test func theIslandLineShowsWhatIsRunning() {
+        let all = [reading("Codex", used: 26), reading("Claude", used: 40)]
+        let shown = UsageCenter.relevant(all, active: ["Claude"])
+        #expect(shown.map(\.provider) == ["Claude"])
+    }
+
+    /// Running first, but the rest of the order left alone — a shortlist that
+    /// reshuffles itself between two Codex sessions is a moving target.
+    @Test func whatIsRunningComesFirst() {
+        let all = [reading("Codex", used: 90), reading("Claude", used: 40),
+                   reading("Copilot", used: nil)]
+        let shown = UsageCenter.relevant(all, active: ["Claude", "Copilot"])
+        #expect(shown.map(\.provider) == ["Claude", "Copilot", "Codex"])
+    }
+
+    /// The one thing that must never be hidden by tidiness: a window nearly
+    /// spent. Whether you are using it now is exactly the decision it informs.
+    @Test func aProviderNearlyOutStaysOnTheLine() {
+        let all = [reading("Codex", used: 84), reading("Claude", used: 12)]
+        #expect(UsageCenter.relevant(all, active: ["Claude"]).map(\.provider)
+                == ["Claude", "Codex"])
+        // …but only while the number still stands for something.
+        let stale = [UsageCenter.Reading(
+            provider: "Codex", text: "",
+            windows: [UsageWindow(name: "5h", usedPercent: 99,
+                                  resetsAt: Date().addingTimeInterval(-60))])]
+        #expect(UsageCenter.relevant(stale + [reading("Claude", used: 12)],
+                                     active: ["Claude"]).map(\.provider) == ["Claude"])
+    }
+
+    /// Nothing running: the line keeps the last thing that was, rather than
+    /// blinking out between sessions.
+    @Test func withNothingRunningTheLastProviderStays() {
+        let all = [reading("Codex", used: 26), reading("Claude", used: 40)]
+        #expect(UsageCenter.relevant(all, active: [], lastUsed: "Claude").map(\.provider)
+                == ["Claude"])
+        // And with no history either, something rather than nothing.
+        #expect(UsageCenter.relevant(all, active: []).map(\.provider) == ["Codex"])
+        #expect(UsageCenter.relevant([], active: []).isEmpty)
+    }
+
+    @Test func agentsMapOntoTheAccountTheySpendFrom() {
+        #expect(UsageCenter.provider(forAgent: "claude") == "Claude")
+        #expect(UsageCenter.provider(forAgent: "cowork") == "Claude")
+        #expect(UsageCenter.provider(forAgent: "codex") == "Codex")
+        #expect(UsageCenter.provider(forAgent: "copilot") == "Copilot")
+        #expect(UsageCenter.provider(forAgent: "gemini") == nil)
+    }
+
+    /// A sentence gets the width; a value keeps its column. A note under a
+    /// provider is a sentence, and so is a provider whose whole truth is a
+    /// phrase — held in the numbers column, "~654k tok this 5h block · resets
+    /// 12:00" arrived as "~654k tok this 5h block…".
+    @Test func sentencesGetTheWidthAndValuesKeepTheirColumn() throws {
+        let rows = UsageMeterView.rows(for: [
+            UsageCenter.Reading(provider: "Claude", text: "~12k tok this 5h block",
+                                note: "waiting on Keychain permission"),
+            reading("Codex", used: 26),
+        ])
+        #expect(rows.count == 3)
+        #expect(rows[0].spans)                       // a provider with no ceiling
+        #expect(rows[1].spans)                       // its note
+        #expect(rows[1].trailing == "waiting on Keychain permission")
+        #expect(rows[2].spans == false)              // a window with a meter
+    }
+
     // MARK: - Claude's quota (parsing only — nothing here reaches the network)
 
     private static let payload = """
@@ -311,13 +390,55 @@ import Testing
         #expect(ClaudeQuota.parse(Data("nonsense".utf8)) == nil)
     }
 
-    /// The credential's shape has changed before; the token is found by name at
-    /// any depth rather than through a hard-coded path.
-    @Test func theTokenIsFoundWhereverItSits() {
-        #expect(ClaudeQuota.accessToken(in: ["claudeAiOauth": ["accessToken": "sk-x"]]) == "sk-x")
+    /// One Keychain record, many logins. Claude Code keeps its own OAuth token
+    /// beside an `accessToken` for **every MCP server the user has authorised**,
+    /// so a search by key name returns whichever one the dictionary yields first
+    /// — and this token is put in an `Authorization` header to Anthropic. Sending
+    /// somebody else's OAuth token to a company it has nothing to do with is not
+    /// a formatting mistake, so the field is named and never searched for.
+    @Test func onlyClaudesOwnTokenIsEverRead() {
+        let real: [String: Any] = [
+            "claudeAiOauth": ["accessToken": "sk-ant-oat01-real", "expiresAt": 0],
+            "mcpOAuth": [
+                "figma|abc": ["accessToken": "figd_thirdparty", "clientSecret": "shh"],
+                "supabase|def": ["accessToken": "sbp_thirdparty"],
+            ],
+        ]
+        #expect(ClaudeQuota.accessToken(in: real) == "sk-ant-oat01-real")
+
+        // Signed out of Claude, still holding other people's tokens: nothing
+        // leaves this machine. Run it enough times that dictionary order cannot
+        // hide a regression.
+        let loggedOut: [String: Any] = [
+            "claudeAiOauth": ["accessToken": "", "expiresAt": 0],
+            "mcpOAuth": [
+                "figma|abc": ["accessToken": "figd_thirdparty"],
+                "supabase|def": ["accessToken": "sbp_thirdparty"],
+                "sentry|ghi": ["accessToken": "sntrys_thirdparty"],
+            ],
+        ]
+        for _ in 0..<50 { #expect(ClaudeQuota.accessToken(in: loggedOut) == nil) }
+        #expect(ClaudeQuota.loggedOut(loggedOut))
+        #expect(!ClaudeQuota.loggedOut(real))
+
+        // The file form's own spellings still work; an unknown shape reads as
+        // nothing rather than as a guess.
         #expect(ClaudeQuota.accessToken(in: ["access_token": "sk-y"]) == "sk-y")
         #expect(ClaudeQuota.accessToken(in: ["accessToken": ""]) == nil)
         #expect(ClaudeQuota.accessToken(in: ["somethingElse": 1]) == nil)
+    }
+
+    /// Same discipline for the expiry: one read out of an MCP server's section
+    /// describes that server's token, and answered a question nobody asked —
+    /// including, on this machine, "expired in July" about a token issued in
+    /// September.
+    @Test func theExpiryIsClaudesOwnOrNothing() {
+        let mixed: [String: Any] = [
+            "claudeAiOauth": ["accessToken": "sk-ant-oat01-real", "expiresAt": 0],
+            "mcpOAuth": ["figma|abc": ["expiresAt": 1_000_000]],
+        ]
+        for _ in 0..<50 { #expect(!ClaudeQuota.expired(mixed, now: Self.noon)) }
+        #expect(ClaudeQuota.expiry(in: mixed) == nil)   // zero means no expiry, not 1970
     }
 
     /// An expired token is not an error worth surfacing: the CLI renews it on its
@@ -336,6 +457,58 @@ import Testing
         let ua = ClaudeQuota.userAgent(appVersion: "1.19.0")
         #expect(ua.hasPrefix("claude-code/"))
         #expect(ua.contains("AgentBar/1.19.0"))
+    }
+
+    // MARK: - Saying why there is no number
+
+    /// "There is no login here" and "macOS would not give me the one that is
+    /// here" send a person to two different places, so they are two states.
+    @Test func aRefusalIsNotAMissingLogin() {
+        func outcome(_ code: OSStatus) -> String {
+            switch ClaudeQuota.lookup(forKeychain: code) {
+            case .found:            return "found"
+            case .missing:          return "missing"
+            case .refused(let got): return "refused:\(got)"   // the number tells them apart
+            }
+        }
+        #expect(outcome(errSecItemNotFound) == "missing")
+        for code in [errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed] {
+            #expect(outcome(code) == "refused:\(code)")
+        }
+    }
+
+    /// Everywhere else a failure is silent. Beside the switch that caused it,
+    /// silence is indistinguishable from a broken switch.
+    @Test func everyFailureHasASentenceAndACause() {
+        let cases: [ClaudeQuota.Status] = [
+            .off, .asking, .noCredential, .loggedOut, .refused(errSecAuthFailed),
+            .expiredToken(at: Self.noon), .declined(code: 401, message: nil),
+            .rateLimited(until: Self.noon), .unreachable, .unexpected(503),
+        ]
+        for status in cases {
+            let sentence = ClaudeQuota.sentence(for: status, now: Self.noon)
+            #expect(sentence.count > 20)
+            #expect(sentence.hasSuffix("."))
+        }
+        #expect(ClaudeQuota.sentence(for: .refused(errSecAuthFailed)).contains("Keychain"))
+        #expect(ClaudeQuota.sentence(for: .ok(at: Self.noon, account: "someone"),
+                                     now: Self.noon).contains("someone"))
+    }
+
+    /// A reading on screen and a switch that is off both mean there is nothing
+    /// to explain; the menu row stays a number.
+    @Test func theMenuNoteAppearsOnlyWhenSomethingIsWrong() {
+        #expect(ClaudeQuota.shortReason(for: .off) == nil)
+        #expect(ClaudeQuota.shortReason(for: .ok(at: Self.noon, account: nil)) == nil)
+        #expect(ClaudeQuota.shortReason(for: .refused(errSecAuthFailed))
+                == "waiting on Keychain permission")
+        // Short enough for a menu row: the long form lives in Settings.
+        for status: ClaudeQuota.Status in [.asking, .noCredential, .loggedOut,
+                                           .expiredToken(at: Self.noon),
+                                           .declined(code: 401, message: nil),
+                                           .rateLimited(until: Self.noon), .unreachable] {
+            #expect((ClaudeQuota.shortReason(for: status) ?? "").count <= 34)
+        }
     }
 
     // MARK: - Copilot's own ledger

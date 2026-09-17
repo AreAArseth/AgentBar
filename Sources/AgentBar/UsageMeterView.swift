@@ -34,6 +34,14 @@ final class UsageMeterView: NSView {
         let window: String       // "5h" / "weekly" / "" for a plain row
         let used: Double?        // nil = no meter
         let trailing: String
+        /// This row is a sentence, not a value: a note under a provider, or a
+        /// provider whose whole truth is a phrase because it publishes no
+        /// ceiling. It starts at the margin and takes the width, because held in
+        /// the numbers column it both reads as a number it isn't and runs out of
+        /// room to be read at all — "~654k tok this 5h block · resets 12:00"
+        /// arrived as "~654k tok this 5h block…", losing the half that answers
+        /// the question.
+        var spans = false
     }
 
     private static let rowHeight: CGFloat = 17
@@ -65,8 +73,18 @@ final class UsageMeterView: NSView {
     static func rows(for readings: [UsageCenter.Reading]) -> [Row] {
         var out: [Row] = []
         for r in readings {
+            defer {
+                // Outside the branch on purpose: a provider with no windows is
+                // the one most likely to have something to explain, and an
+                // early return once swallowed exactly that note.
+                if let note = r.note {
+                    out.append(Row(provider: "", window: "", used: nil, trailing: note,
+                                   spans: true))
+                }
+            }
             if r.windows.isEmpty {
-                out.append(Row(provider: r.provider, window: "", used: nil, trailing: r.text))
+                out.append(Row(provider: r.provider, window: "", used: nil, trailing: r.text,
+                               spans: true))
                 continue
             }
             for (i, w) in r.windows.enumerated() {
@@ -77,9 +95,6 @@ final class UsageMeterView: NSView {
                                window: w.name,
                                used: w.expired() ? nil : w.usedPercent,
                                trailing: UsageCenter.short(w)))
-            }
-            if let note = r.note {
-                out.append(Row(provider: "", window: "", used: nil, trailing: note))
             }
         }
         return out
@@ -105,7 +120,12 @@ final class UsageMeterView: NSView {
         }
     }
 
-    init?(readings: [UsageCenter.Reading], style: Style = .menu) {
+    /// `tooltipReadings` is what the hover says when the island is showing a
+    /// shortlist: the line holds what is running, and the tooltip still holds
+    /// everything, so nothing disappears without a way back to it.
+    init?(readings: [UsageCenter.Reading], style: Style = .menu,
+          tooltipReadings: [UsageCenter.Reading]? = nil) {
+        let described = tooltipReadings ?? readings
         let rows = style == .menu ? Self.rows(for: readings) : Self.compactRows(for: readings)
         guard !rows.isEmpty else { return nil }
         self.rows = rows
@@ -126,9 +146,9 @@ final class UsageMeterView: NSView {
         // On the island the whole line is one tooltip: the full sentence for every
         // provider, including the window the line had no room for.
         toolTip = style == .menu
-            ? readings.compactMap { r in r.detail.map { "\(r.provider)\n\($0)" } }
+            ? described.compactMap { r in r.detail.map { "\(r.provider)\n\($0)" } }
                 .joined(separator: "\n\n")
-            : readings.map { r in
+            : described.map { r in
                 ([r.provider + " " + r.text] + (r.detail.map { [$0] } ?? [])).joined(separator: "\n")
             }.joined(separator: "\n")
     }
@@ -195,6 +215,28 @@ final class UsageMeterView: NSView {
         // the bar reads as part of the sentence and not as a separate object.
         let textY = y + 2
         var x = Self.leading
+
+        if row.spans {
+            if !row.provider.isEmpty {
+                let name = row.provider as NSString
+                name.draw(at: NSPoint(x: x, y: textY),
+                          withAttributes: [.font: Self.label,
+                                           .foregroundColor: NSColor.secondaryLabelColor])
+                x += name.size(withAttributes: [.font: Self.label]).width + 10
+            }
+            (row.trailing as NSString).draw(
+                in: NSRect(x: x, y: textY, width: max(0, bounds.width - x - Self.trailingPad),
+                           height: Self.rowHeight),
+                withAttributes: [
+                    .font: row.provider.isEmpty ? Self.small : Self.digits,
+                    // A note is quieter than the thing it is about; a provider's
+                    // own sentence is the answer and reads like one.
+                    .foregroundColor: row.provider.isEmpty
+                        ? NSColor.tertiaryLabelColor : NSColor.secondaryLabelColor,
+                    .paragraphStyle: Self.truncating,
+                ])
+            return
+        }
 
         if !row.provider.isEmpty {
             (row.provider as NSString).draw(
@@ -292,17 +334,35 @@ extension UsageMeterView {
                                       resetsAt: now.addingTimeInterval(-60))]),
             UsageCenter.Reading(provider: "Copilot", text: "2.4 AIU today"),
         ]
+        // The state this feature is mostly in before somebody answers a Keychain
+        // prompt: a provider with a sentence, no ceiling, and a reason. Its own
+        // panel because a note under a provider that has no windows was, until a
+        // test said otherwise, dropped on the floor.
+        let unavailable: [UsageCenter.Reading] = [
+            readings[0],
+            UsageCenter.Reading(provider: "Claude",
+                                text: "~654k tok this 5h block · resets 12:00",
+                                note: "waiting on Keychain permission"),
+        ]
         guard let menu = UsageMeterView(readings: readings),
-              let island = UsageMeterView(readings: readings, style: .islandFooter)
+              let waiting = UsageMeterView(readings: unavailable),
+              // What the island shows while only Claude is running: the shortlist,
+              // not the block. See `UsageCenter.relevant`.
+              let island = UsageMeterView(readings: UsageCenter.relevant(readings,
+                                                                         active: ["Claude"]),
+                                          style: .islandFooter, tooltipReadings: readings)
         else { return false }
         menu.frame = NSRect(x: 0, y: 0, width: 340, height: menu.frame.height)
+        waiting.frame = NSRect(x: 0, y: 0, width: 340, height: waiting.frame.height)
         island.frame = NSRect(x: 0, y: 0, width: 400, height: island.frame.height)
 
-        // Both styles in one image, the island's line on its own black card the way
+        // Every style in one image, the island's line on its own black card the way
         // it is actually seen — a light-on-light screenshot of a dark surface has
         // told nobody anything.
         let gap: CGFloat = 12
-        let size = NSSize(width: 400, height: menu.frame.height + island.frame.height + gap * 2)
+        let size = NSSize(width: 400,
+                          height: menu.frame.height + waiting.frame.height
+                              + island.frame.height + gap * 4)
         let image = NSImage(size: size)
         image.lockFocus()
         NSColor.white.setFill()
@@ -313,9 +373,13 @@ extension UsageMeterView {
         // `cacheDisplay` on a view with no window fills opaque white, which drew
         // the island's white-on-black line as white on white and looked, from the
         // outside, exactly like text that was never drawn at all.
-        for (view, origin, back) in [(menu, NSPoint(x: 0, y: island.frame.height + gap * 2),
-                                      NSColor.white),
-                                     (island, NSPoint(x: 10, y: gap / 2), NSColor.black)] {
+        let islandTop = island.frame.height + gap
+        let panels: [(UsageMeterView, NSPoint, NSColor)] = [
+            (menu, NSPoint(x: 0, y: islandTop + gap * 2 + waiting.frame.height), .white),
+            (waiting, NSPoint(x: 0, y: islandTop + gap), .white),
+            (island, NSPoint(x: 10, y: gap / 2), .black),
+        ]
+        for (view, origin, back) in panels {
             view.wantsLayer = true
             view.layer?.backgroundColor = back.cgColor
             guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }

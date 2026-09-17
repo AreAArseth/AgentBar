@@ -92,6 +92,10 @@ defaults write com.michalstrnadel.agentbar presentationMode -string island  # or
 defaults delete com.michalstrnadel.agentbar showWelcomeOnLaunch             # first-run window back
 defaults write com.michalstrnadel.agentbar islandExpandDebug -bool true     # hold the island open (layout work)
 defaults write com.michalstrnadel.agentbar settingsOnLaunchDebug -bool true # open Settings on launch (layout work)
+/Applications/AgentBar.app/Contents/MacOS/AgentBar --quota-status                 # can Claude's quota be read here, and
+                                                                           # if not, why — macOS decides Keychain access
+                                                                           # on the signature, so run the *bundle's*
+                                                                           # binary, not .build/debug/AgentBar
 defaults write com.michalstrnadel.agentbar launcherOnLaunchDebug -bool true # open the launcher on launch — it closes
                                                                            # the instant it loses focus, which is what
                                                                            # happens when you go and look at it

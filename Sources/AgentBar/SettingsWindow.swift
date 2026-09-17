@@ -28,6 +28,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var hideIslandBox: NSButton!
     private var diagnostics: DiagnosticsView!
     private var claudeQuotaBox: NSButton!
+    private var quotaStatus: NSTextField!
+    private var quotaCheck: NSButton!
     private var rememberBox: NSButton!
     private var notifyApprovalsBox: NSButton!
     private var notifyFailuresBox: NSButton!
@@ -46,6 +48,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     func show() {
         if window == nil { build() }
         cancelCaptures() // a stale recorder must not swallow keys after re-show
+        // Only while this window is open: the quota's status has exactly one
+        // reader, and a closure held past that would redraw a window nobody is
+        // looking at.
+        ClaudeQuota.shared.onStatus = { [weak self] in self?.syncQuota() }
         reload()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -200,6 +206,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             + "this Mac — this is the only way to show them. It uses the login Claude Code\n"
             + "already stored, asks every five minutes, and is the one network call\n"
             + "AgentBar makes besides checking for updates. Codex and Copilot need none.")
+        // Everywhere else a failed reading is silent, because an error message
+        // where a number belongs is worse than an empty space. Here it is the
+        // opposite: this is the switch that caused it, and a switch that does
+        // nothing and says nothing cannot be told from a broken one.
+        quotaStatus = caption("")
+        quotaCheck = NSButton(title: "Check now", target: self,
+                              action: #selector(checkQuotaNow))
+        quotaCheck.bezelStyle = .rounded
+        quotaCheck.controlSize = .small
+        quotaCheck.font = .systemFont(ofSize: 11)
+        quotaCheck.toolTip = "Asks straight away instead of waiting for the next five-minute "
+            + "turn — and raises the macOS Keychain prompt, if that is what it is waiting for."
+
 
         // ---- Approvals ----
         rememberBox = NSButton(checkboxWithTitle: "Remember what I decided",
@@ -226,7 +245,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             sectionLabel("Shortcuts"), enableBox, enableCaption, grid,
             launchBox, launchCaption, launchGrid, seps[2],
             sectionLabel("Island"), hideIslandBox, islandCaption, seps[3],
-            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, seps[4],
+            sectionLabel("Usage"), claudeQuotaBox, quotaCaption, quotaStatus, quotaCheck, seps[4],
             sectionLabel("Approvals"), rememberBox, rememberCaption, seps[5],
             sectionLabel("Diagnostics"), diagnosticsCaption, diagnostics,
         ])
@@ -324,6 +343,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         volumeSlider.doubleValue = SoundCenter.volume
         hideIslandBox.state = UserDefaults.standard.bool(forKey: "hideIslandWhenEmpty") ? .on : .off
         claudeQuotaBox.state = ClaudeQuota.enabled ? .on : .off
+        syncQuota()
         rememberBox.state = DecisionLedger.enabled ? .on : .off
         notifyApprovalsBox.state = Notifier.Prefs.approvals ? .on : .off
         notifyFailuresBox.state = Notifier.Prefs.failures ? .on : .off
@@ -337,20 +357,43 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         syncSoundControls()
     }
 
-    /// Switching it on asks for the number now rather than in five minutes — a
-    /// switch that appears to do nothing for the first tick reads as broken. macOS
-    /// raises its own Keychain prompt on that first attempt; a refusal there simply
-    /// means no reading, and the local token line stays.
     @objc private func toggleLauncher() {
         LauncherPanel.shortcutEnabled = launchBox.state == .on
         syncRecorderState()
         onChange?()
     }
 
+    /// Switching it on asks for the number now rather than in five minutes — a
+    /// switch that appears to do nothing for the first tick reads as broken. macOS
+    /// raises its own Keychain prompt on that first attempt; a refusal there simply
+    /// means no reading, the local token line stays, and the line under the switch
+    /// says which of those happened.
     @objc private func toggleClaudeQuota() {
         ClaudeQuota.enabled = claudeQuotaBox.state == .on
+        if ClaudeQuota.enabled {
+            ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+        }
         UsageCenter.shared.refresh()
+        syncQuota()
         onChange?()
+    }
+
+    @objc private func checkQuotaNow() {
+        ClaudeQuota.shared.checkNow { UsageCenter.shared.refresh() }
+        syncQuota()
+    }
+
+    /// The status line and the button that re-runs it. Called on every reload and
+    /// from `ClaudeQuota`'s own callback, so the sentence is never older than the
+    /// attempt it describes.
+    private func syncQuota() {
+        quotaCheck.isEnabled = ClaudeQuota.enabled
+        let sentence = ClaudeQuota.sentence(for: ClaudeQuota.shared.status)
+        guard quotaStatus.stringValue != sentence else { return }
+        quotaStatus.stringValue = sentence
+        // A longer sentence wraps to a second line, and the window is sized to
+        // its contents.
+        refit()
     }
 
     /// Switching it off stops new rows; it does not delete the old ones, because
@@ -490,6 +533,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         cancelCaptures()
+        ClaudeQuota.shared.onStatus = nil
     }
 
     /// Clicking away mid-recording: a background window can't see key events, so a

@@ -51,7 +51,9 @@ That's the whole loop. More install options below; troubleshooting at the bottom
 AgentBar is local-only — no telemetry, and it makes exactly two network calls, one of
 which is off until you switch it on: the daily update check against GitHub Releases, and
 — only if you tick **Settings ▸ Usage** — a request to Anthropic for Claude's own quota,
-using the login Claude Code already stored. Everything else, including every token count
+using the login Claude Code already stored. That switch reports what came back, in a
+sentence under itself, including every way it can fail; **Check now** asks again on the
+spot. Everything else, including every token count
 and every other provider's quota, is read from files already on your disk.
 The install touches exactly these, all reversible (see [Uninstall](#uninstall)):
 

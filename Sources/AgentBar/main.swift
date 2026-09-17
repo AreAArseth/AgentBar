@@ -154,6 +154,41 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-usage"),
         to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
 }
 
+// Whether Claude's quota can be read at all, in one line, without the menu and
+// without the app running: the same call the timer makes, the same status
+// sentence Settings shows. It has to be the *bundle's* binary to mean anything —
+// macOS decides Keychain access on the code signature, so
+// `/Applications/AgentBar.app/Contents/MacOS/AgentBar --quota-status` answers for
+// the installed app and a bare `.build/debug/AgentBar` answers only for itself.
+// Prints no token, ever; there is nothing here that could.
+if CommandLine.arguments.contains("--quota-status") {
+    let was = ClaudeQuota.enabled
+    ClaudeQuota.enabled = true
+    let done = DispatchSemaphore(value: 0)
+    ClaudeQuota.shared.checkNow { }
+    // The fetch is asynchronous and this process has nothing else to do; poll the
+    // status until it stops saying "asking", or give up out loud.
+    DispatchQueue.global().async {
+        for _ in 0..<40 {
+            if case .asking = ClaudeQuota.shared.status { Thread.sleep(forTimeInterval: 0.5) }
+            else { break }
+        }
+        done.signal()
+    }
+    done.wait()
+    let status = ClaudeQuota.shared.status
+    print(ClaudeQuota.sentence(for: status))
+    for line in ClaudeQuota.candidates() { print("  " + line) }
+    if let snap = ClaudeQuota.shared.latest() {
+        for w in snap.windows {
+            print("  \(w.name): \(Int(w.usedPercent.rounded()))% used, \(UsageCenter.short(w))")
+        }
+    }
+    ClaudeQuota.enabled = was
+    if case .ok = status { exit(0) }
+    exit(1)
+}
+
 // Two copies running at once — a dev build next to the /Applications install —
 // fight over the same island: each draws its own panel in the same spot and
 // whichever window is stacked on top wins, so fixes appear and disappear at

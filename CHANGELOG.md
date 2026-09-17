@@ -3,6 +3,63 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.24.0 - 2026-09-17
+
+### Fixed
+
+- **The Claude quota read could send another service's OAuth token to Anthropic.**
+  To find its bearer token it searched Claude Code's Keychain record for any field
+  called `accessToken`, at any depth. That record does not hold one login — it holds
+  Claude's *and* an entry for every MCP server you have ever authorised, each with an
+  `accessToken` of its own. A Swift dictionary has no order, so which one came back
+  was luck, and it went out in the `Authorization` header of a request to
+  `api.anthropic.com`.
+
+  It now reads `claudeAiOauth.accessToken` and nothing else: the field is named, never
+  searched for, and an unrecognised record means no reading rather than a guess. The
+  regression test asserts fifty times over that a record with three third-party tokens
+  and no Claude one yields nothing.
+
+  Present in 1.19.0–1.23.0, and only while **Settings ▸ Usage** was ticked, which is
+  off by default. If you had it on, rotating the MCP logins you had authorised is the
+  cautious move.
+
+- **The same search decided whether the token had expired**, so a neighbour's
+  timestamp could rule Claude's login out — and a `0`, which is how "no expiry" is
+  written, was read as 1970 and meant *permanently expired*. Between the two, the
+  feature could sit switched on and never make a single call. Expiry is now Claude's
+  own field, a zero is no expiry, and a value in seconds is not read as milliseconds.
+
+### Added
+
+- **The switch says what happened.** Everywhere else a failed reading is silent —
+  an error message where a number belongs is worse than an empty space — but beside
+  the switch that caused it, silence is indistinguishable from a broken switch. So
+  **Settings ▸ Usage** carries a sentence naming the cause: no login stored, a login
+  that is empty, a Keychain refusal (with the code), an expiry, Anthropic's own
+  message for a 401, a rate limit and when it lifts, or when the last good reading
+  came in and for which account. **Check now** asks again on the spot, which is also
+  the only way to raise the macOS Keychain prompt deliberately rather than waiting up
+  to five minutes for one that may be behind another window.
+- The menu's usage block repeats the short form under Claude's row, so the answer to
+  "why is there no bar here" is where the bar isn't.
+- `--quota-status` on the app's binary prints that sentence from the command line,
+  for the same question asked while the app isn't running.
+
+### Changed
+
+- **The island's line carries what you are running.** It is one line, shared with the
+  ⋯ button, and a quota you are not spending is true but not news: the providers with
+  a live session come first and the rest stay in the menu, which is where the full
+  block has always lived. Two exceptions keep that honest — a provider at 80 % or more
+  stays whether or not it is running, because that is exactly the moment worth
+  hearing about unasked, and when nothing is running the last thing that was stays,
+  so the line doesn't blink out between sessions. Hovering it still names every
+  provider.
+- A row that is a sentence rather than a value now starts at the margin and takes the
+  width. Held in the numbers column, "~654k tok this 5h block · resets 12:00" arrived
+  as "~654k tok this 5h block…", losing the half that answers the question.
+
 ## 1.23.0 - 2026-09-17
 
 ### Changed

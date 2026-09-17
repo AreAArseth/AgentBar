@@ -561,9 +561,14 @@ final class IslandController: NSObject {
         // The same line the footer always spent on quota, drawn instead of
         // written: a meter reads at a glance and a sentence does not, and at this
         // size they cost the same height. The full numbers stay one tooltip and
-        // one ⋯ away.
-        if let meters = UsageMeterView(readings: UsageCenter.shared.readings,
-                                       style: .islandFooter) {
+        // one ⋯ away — which is also what makes it fair to show only the
+        // providers actually in use here. See `UsageCenter.relevant`.
+        let all = UsageCenter.shared.readings
+        let active = Set(sessions.compactMap { UsageCenter.provider(forAgent: $0.agentID) })
+        let shown = UsageCenter.relevant(all, active: active,
+                                         lastUsed: active.isEmpty ? lastUsedProvider() : nil)
+        if let meters = UsageMeterView(readings: shown, style: .islandFooter,
+                                       tooltipReadings: all) {
             meters.translatesAutoresizingMaskIntoConstraints = false
             meters.heightAnchor.constraint(equalToConstant: meters.frame.height).isActive = true
             // It must never squeeze the ⋯ button out; it truncates instead.
@@ -580,6 +585,17 @@ final class IslandController: NSObject {
         row.widthAnchor.constraint(equalToConstant:
             Self.expandedWidth - IslandContentView.hPad * 2).isActive = true
         return row
+    }
+
+    /// The provider of the last session that ended, so the quota line has
+    /// something to keep showing when nothing is running. Only asked for when
+    /// nothing is — the history is memoised, but the scan is not free.
+    private func lastUsedProvider() -> String? {
+        HistoryStore.cached()
+            .sorted { $0.endedAt > $1.endedAt }
+            .lazy
+            .compactMap { UsageCenter.provider(forAgent: $0.agent) }
+            .first
     }
 
     // MARK: - Interaction

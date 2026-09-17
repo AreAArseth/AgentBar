@@ -23,9 +23,18 @@ import Security
 /// - **AgentBar never refreshes it.** That is Claude Code's job; two processes
 ///   racing on one refresh token is how people get logged out. An expired token
 ///   means no reading until the CLI renews it on its own next run.
-/// - **Every failure is silent.** A refused Keychain prompt, no credential, a
-///   401, a 429, no network — all end the same way: no reading, nothing on
-///   screen, and the local token line stays where it was.
+/// - **Every failure is silent where the number would have been.** A refused
+///   Keychain prompt, no credential, a 401, a 429, no network — all end the same
+///   way on the island and in the menu block: no reading, and the local token
+///   line stays where it was. A quota line that turns into an error message is an
+///   error message sitting where a number used to be.
+/// - **And never silent next to the switch.** Silence there is a different
+///   thing: a switch that does nothing and says nothing is indistinguishable from
+///   a broken one, and the first person to meet that was the one who turned it
+///   on. So every attempt leaves a `Status` behind, Settings says it in a
+///   sentence, and *Check now* asks again on demand — which is also the only way
+///   to raise the Keychain prompt deliberately rather than waiting five minutes
+///   for one that may be behind another window.
 final class ClaudeQuota {
     static let shared = ClaudeQuota()
 
@@ -48,6 +57,70 @@ final class ClaudeQuota {
         /// but one of them.
         let account: String?
         let at: Date
+    }
+
+    // MARK: - Why there is no number
+
+    /// What the last attempt came to. Every case names a cause somebody can act
+    /// on — or, in two of them, one nobody has to: an expired token is Claude
+    /// Code's to renew and a rate limit passes by itself.
+    ///
+    /// No case carries anything from the credential. The token is borrowed for
+    /// the length of one request and the reason it failed is all that outlives
+    /// it.
+    enum Status: Equatable {
+        case off
+        /// On, with nothing back yet — including the moment the Keychain prompt
+        /// is on screen waiting to be answered.
+        case asking
+        case ok(at: Date, account: String?)
+        /// Neither the Keychain nor any `~/.claude*` holds a login.
+        case noCredential
+        /// The record exists and Claude's section of it is empty: signed out.
+        /// A session running under its own `CLAUDE_CONFIG_DIR` keeps its login
+        /// elsewhere, so this is also what a machine looks like when the config
+        /// AgentBar can read is not the one being used.
+        case loggedOut
+        /// macOS was asked and did not hand it over: the prompt was refused,
+        /// dismissed, or never shown. Carries the `OSStatus` because the number
+        /// is the only thing that tells those apart.
+        case refused(OSStatus)
+        /// The stored login is past its expiry, and when it went. AgentBar never
+        /// refreshes it — two processes racing on one refresh token is how
+        /// people get logged out — so this clears when the CLI next runs. The
+        /// date is in the sentence because "expired" alone cannot tell a token
+        /// that lapsed this morning from a timestamp being read in the wrong
+        /// unit, and the second one is a bug in this file.
+        case expiredToken(at: Date)
+        /// A 401 or 403: the login exists and Anthropic would not take it.
+        /// Carries the code and, where the answer had one, the server's own
+        /// message — this endpoint is not a published API, and its own sentence
+        /// is worth more than any guess this file could make about it.
+        case declined(code: Int, message: String?)
+        case rateLimited(until: Date)
+        case unreachable
+        case unexpected(Int)
+    }
+
+    /// The last outcome. Written from the fetch's completion, read from the main
+    /// thread, so it sits behind the same lock as everything else here.
+    private var _status: Status = .off
+    var status: Status {
+        lock.lock(); defer { lock.unlock() }
+        return _status
+    }
+    /// Fired on the main queue whenever the status changes. One observer,
+    /// because there is one place this belongs: the window with the switch in
+    /// it.
+    var onStatus: (() -> Void)?
+
+    /// Always called with the lock held; the callback goes out after it, on the
+    /// main queue, so an observer can read `status` without deadlocking on the
+    /// thread that changed it.
+    private func set(_ new: Status) {
+        guard _status != new else { return }
+        _status = new
+        DispatchQueue.main.async { [weak self] in self?.onStatus?() }
     }
 
     // MARK: - State
@@ -81,13 +154,16 @@ final class ClaudeQuota {
     /// an arbitrary queue, and only when there is something new to draw.
     func refreshIfDue(now: Date = Date(), changed: @escaping () -> Void) {
         guard Self.enabled else {
-            lock.lock(); snapshot = nil; lock.unlock()
+            lock.lock(); snapshot = nil; set(.off); lock.unlock()
             return
         }
         lock.lock()
         guard !inFlight, now >= nextAllowed else { lock.unlock(); return }
         inFlight = true
         nextAllowed = now.addingTimeInterval(Self.interval)
+        // Only when there is nothing to show: a five-minute refresh must not
+        // blink a good reading back to "asking" and in again.
+        if snapshot == nil { set(.asking) }
         lock.unlock()
 
         fetch { [weak self] result in
@@ -100,15 +176,18 @@ final class ClaudeQuota {
                 self.backoffStep = 0
                 fresh = self.snapshot?.windows != snap.windows
                 self.snapshot = snap
+                self.set(.ok(at: snap.at, account: snap.account))
             case .rateLimited:
                 let wait = Self.backoffSteps[min(self.backoffStep, Self.backoffSteps.count - 1)]
                 self.backoffStep += 1
-                self.nextAllowed = Date().addingTimeInterval(wait)
-            case .failed:
+                let until = Date().addingTimeInterval(wait)
+                self.nextAllowed = until
+                self.set(.rateLimited(until: until))
+            case .failed(let why):
                 // Ordinary failure (offline, 401, a shape we don't recognise):
                 // wait out the normal interval and try again. Whatever is on
-                // screen ages out by itself through `maxAge`.
-                break
+                // screen ages out by itself through `maxAge`; the reason stays.
+                self.set(why)
             }
             self.lock.unlock()
             if fresh { changed() }
@@ -118,16 +197,37 @@ final class ClaudeQuota {
     private enum Outcome {
         case success(Snapshot)
         case rateLimited
-        case failed
+        case failed(Status)
+    }
+
+    /// Ask now, whatever the schedule said. This is the button in Settings, and
+    /// it exists for one reason beyond impatience: the Keychain prompt appears
+    /// when the call is made, and a person who has just switched this on should
+    /// be able to summon it rather than wait up to five minutes for it to arrive
+    /// behind whatever they are looking at.
+    func checkNow(changed: @escaping () -> Void) {
+        lock.lock()
+        nextAllowed = .distantPast
+        backoffStep = 0
+        lock.unlock()
+        refreshIfDue(changed: changed)
     }
 
     // MARK: - The call
 
     private func fetch(_ done: @escaping (Outcome) -> Void) {
-        guard let credential = Self.credential(),
-              let token = Self.accessToken(in: credential.json),
-              !Self.expired(credential.json)
-        else { done(.failed); return }
+        let credential: (json: [String: Any], account: String?)
+        switch Self.credential() {
+        case .found(let json, let account): credential = (json, account)
+        case .missing: done(.failed(.noCredential)); return
+        case .refused(let code): done(.failed(.refused(code))); return
+        }
+        guard let token = Self.accessToken(in: credential.json) else {
+            done(.failed(Self.loggedOut(credential.json) ? .loggedOut : .noCredential)); return
+        }
+        if let when = Self.expiry(in: credential.json), when <= Date() {
+            done(.failed(.expiredToken(at: when))); return
+        }
 
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.httpMethod = "GET"
@@ -145,14 +245,25 @@ final class ClaudeQuota {
         config.urlCache = nil
         let session = URLSession(configuration: config)
         let account = credential.account
-        session.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { data, response, error in
             defer { session.finishTasksAndInvalidate() }
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if code == 429 { done(.rateLimited); return }
-            guard code == 200, let data,
-                  let snap = Self.parse(data, account: account)
-            else { done(.failed); return }
-            done(.success(snap))
+            guard let http = response as? HTTPURLResponse else {
+                done(.failed(error == nil ? .unexpected(0) : .unreachable)); return
+            }
+            switch http.statusCode {
+            case 429: done(.rateLimited)
+            case 401, 403:
+                done(.failed(.declined(code: http.statusCode, message: Self.message(in: data))))
+            case 200:
+                guard let data, let snap = Self.parse(data, account: account) else {
+                    // A 200 whose body we cannot read is not a network problem
+                    // and not a login problem: it is the shape changing under
+                    // us, which this endpoint is allowed to do.
+                    done(.failed(.unexpected(200))); return
+                }
+                done(.success(snap))
+            case let code: done(.failed(.unexpected(code)))
+            }
         }.resume()
     }
 
@@ -192,6 +303,19 @@ final class ClaudeQuota {
     }
 
     // MARK: - Parsing (pure)
+
+    /// What the server said went wrong, short enough to sit in a caption. Only
+    /// the message — never a field we did not ask for, and never the request.
+    static func message(in data: Data?) -> String? {
+        guard let data, data.count < 8_192,
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let text = (o["error"] as? [String: Any])?["message"] as? String
+            ?? o["message"] as? String
+            ?? o["error"] as? String
+        guard let text, !text.isEmpty else { return nil }
+        return text.count > 120 ? String(text.prefix(120)) + "…" : text
+    }
 
     /// The endpoint answers with one object per window. `utilization` is a
     /// **percentage**, not a fraction — readers that assume otherwise render 1 %
@@ -241,65 +365,225 @@ final class ClaudeQuota {
     /// the person changes their mind.
     static let service = "Claude Code-credentials"
 
-    static func credential() -> (json: [String: Any], account: String?)? {
-        if let fromKeychain = keychainCredential() { return fromKeychain }
+    /// Not an optional: "there is no login here" and "macOS would not give me
+    /// the one that is here" are different facts, and the second one is the only
+    /// one a person can do something about.
+    enum Lookup {
+        case found(json: [String: Any], account: String?)
+        case missing
+        case refused(OSStatus)
+    }
+
+    static func credential() -> Lookup {
+        let keychain = keychainCredential()
+        if case .found = keychain { return keychain }
         let fm = FileManager.default
         for root in WeightReader.claudeConfigDirs(home: fm.homeDirectoryForCurrentUser) {
             let file = root.appendingPathComponent(".credentials.json")
             guard let data = try? Data(contentsOf: file),
                   let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
-            return (o, root.lastPathComponent)
+            return .found(json: o, account: root.lastPathComponent)
         }
-        return nil
+        // A refusal outranks "missing": the file fallback found nothing, but the
+        // Keychain does hold a login and is waiting on an answer.
+        return keychain
     }
 
-    private static func keychainCredential() -> (json: [String: Any], account: String?)? {
-        let query: [String: Any] = [
+    private static func keychainCredential(account: String? = nil) -> Lookup {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let found = item as? [String: Any],
+        let code = SecItemCopyMatching(query as CFDictionary, &item)
+        guard code == errSecSuccess else { return lookup(forKeychain: code) }
+        guard let found = item as? [String: Any],
               let data = found[kSecValueData as String] as? Data,
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return (o, found[kSecAttrAccount as String] as? String)
+        else { return .missing }
+        return .found(json: o, account: found[kSecAttrAccount as String] as? String)
     }
 
-    /// The credential's exact shape has changed before and will again, so this
-    /// looks for the field by name at any depth rather than hard-coding a path
-    /// through it.
+    /// Every non-success is a refusal except the one that means the item is not
+    /// there. Spelled out rather than folded into "no login": a person who has
+    /// Claude Code installed and is told there is no login would go looking in
+    /// the wrong place.
+    static func lookup(forKeychain code: OSStatus) -> Lookup {
+        code == errSecItemNotFound ? .missing : .refused(code)
+    }
+
+    /// Claude's own token, out of Claude's own field, and nothing else.
+    ///
+    /// This used to search for `accessToken` by name at any depth, on the theory
+    /// that the credential's shape has changed before and a search survives the
+    /// next change. It does not survive what is actually in that record: the same
+    /// Keychain entry holds an `accessToken` for **every MCP server the user has
+    /// authorised** — Figma, Supabase, whatever else — and a Swift dictionary has
+    /// no order, so what came back was whichever one the hash happened to yield.
+    /// AgentBar then sent it to `api.anthropic.com` as a bearer token.
+    ///
+    /// A credential belonging to a third party must never leave this machine in a
+    /// request addressed to somebody else. The only way to promise that is to
+    /// name the field, so it is named: `claudeAiOauth.accessToken`, with the two
+    /// top-level spellings the file form has used. An unknown future shape means
+    /// no reading — which is the failure this whole file is built to fail with.
     static func accessToken(in json: [String: Any]) -> String? {
-        for (key, value) in json {
-            if key == "accessToken" || key == "access_token",
-               let s = value as? String, !s.isEmpty { return s }
-            if let nested = value as? [String: Any], let found = accessToken(in: nested) {
-                return found
-            }
+        let claude = json["claudeAiOauth"] as? [String: Any]
+        for candidate in [claude?["accessToken"], json["accessToken"], json["access_token"]] {
+            if let s = candidate as? String, !s.isEmpty { return s }
         }
         return nil
+    }
+
+    /// True when the record has Claude's own section but nothing in it — signed
+    /// out, rather than a shape we don't know. Worth telling apart: they send a
+    /// person to two different places.
+    static func loggedOut(_ json: [String: Any]) -> Bool {
+        json["claudeAiOauth"] != nil && accessToken(in: json) == nil
+    }
+
+    /// One line per stored login: who it belongs to, when it was last written,
+    /// and when it says it lapses. Never the token — there is nothing here that
+    /// could print one. For `--quota-status`, because "invalid bearer token" is
+    /// a different problem depending on whether this Mac holds one login or
+    /// four.
+    static func candidates() -> [String] {
+        // Attributes only: asking for every item *and* its data comes back as a
+        // parameter error on macOS, which is how this first printed nothing at
+        // all. The data is fetched per login, below.
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var item: CFTypeRef?
+        let code = SecItemCopyMatching(query as CFDictionary, &item)
+        guard code == errSecSuccess, let items = item as? [[String: Any]]
+        else { return ["no stored login readable (\(code))"] }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "d MMM HH:mm"
+        return items.map { found in
+            let who = found[kSecAttrAccount as String] as? String ?? "?"
+            let written = (found[kSecAttrModificationDate as String] as? Date)
+                .map(f.string(from:)) ?? "?"
+            var lapses = "no expiry"
+            var kind = "no Claude token in it"
+            if case .found(let o, _) = keychainCredential(account: who) {
+                lapses = expiry(in: o).map(f.string(from:)) ?? "no expiry"
+                kind = accessToken(in: o).map(self.kind) ?? "no Claude token in it"
+            }
+            return "login \(who): \(kind), written \(written), expires \(lapses)"
+        }
+    }
+
+    /// What *kind* of credential is stored, from the scheme prefix alone — the
+    /// part that is printed on Anthropic's own documentation pages. An OAuth
+    /// token and an API key are both "a long string" and neither works in the
+    /// other's place: one goes in `Authorization: Bearer`, the other in
+    /// `x-api-key`, and "invalid bearer token" is what you get for confusing
+    /// them. Nothing past the scheme is ever read out.
+    static func kind(of token: String) -> String {
+        let parts = token.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count >= 3, parts[0] == "sk" else { return "token of an unknown shape" }
+        return parts.prefix(3).joined(separator: "-") + "-… token"
+    }
+
+    // MARK: - Saying it
+
+    /// The full sentence, for the caption under the switch. It names what
+    /// happened and, where there is one, what to do about it — a status line
+    /// that says "error" has only moved the question.
+    static func sentence(for status: Status, now: Date = Date()) -> String {
+        switch status {
+        case .off:
+            return "Off. Claude's row counts tokens read from this Mac instead."
+        case .asking:
+            return "Asking Anthropic… if macOS puts up a Keychain prompt, that is this."
+        case .ok(let at, let account):
+            let who = account.map { " · \($0)" } ?? ""
+            return "Read at \(UsageCenter.when(at, now: now))\(who)."
+        case .noCredential:
+            return "No Claude Code login on this Mac. Sign in with the CLI and try again."
+        case .loggedOut:
+            return "The stored Claude Code login is empty. A session running with its own "
+                + "CLAUDE_CONFIG_DIR keeps its login somewhere AgentBar cannot read; "
+                + "`claude auth login` in the default one fills this in."
+        case .refused(let code):
+            return "macOS did not hand over the Claude Code login from the Keychain (\(code)). "
+                + "Answer its prompt with Always Allow — “Check now” raises it again."
+        case .expiredToken(let when):
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US")
+            f.dateFormat = "d MMM HH:mm"
+            return "The stored login expired at \(f.string(from: when)). Claude Code renews "
+                + "it the next time it runs; AgentBar never does that itself."
+        case .declined(let code, let message):
+            let said = message.map { " It said: \($0)" } ?? ""
+            return "Anthropic declined the login (\(code)). Sign in with Claude Code "
+                + "again, or switch this off.\(said)"
+        case .rateLimited(let until):
+            return "Rate-limited. Trying again at \(UsageCenter.when(until, now: now))."
+        case .unreachable:
+            return "Couldn't reach api.anthropic.com."
+        case .unexpected(let code):
+            return "api.anthropic.com answered \(code). Nothing to show until that changes."
+        }
+    }
+
+    /// The same fact in the width a menu row has: one clause, no advice. Nil
+    /// where there is nothing to explain — the switch is off, or the number is
+    /// on screen.
+    static func shortReason(for status: Status) -> String? {
+        switch status {
+        case .off, .ok:        return nil
+        case .asking:          return "asking Anthropic…"
+        case .noCredential:    return "no Claude Code login found"
+        case .loggedOut:       return "the stored login is empty"
+        case .refused:         return "waiting on Keychain permission"
+        case .expiredToken:    return "login expired, the CLI renews it"
+        case .declined:        return "login declined — sign in again"
+        case .rateLimited:     return "rate-limited, trying again later"
+        case .unreachable:     return "can't reach api.anthropic.com"
+        case .unexpected(let code): return "api.anthropic.com answered \(code)"
+        }
     }
 
     /// Expiry is milliseconds since the epoch where it appears at all. An expired
     /// token is not an error worth surfacing: the CLI renews it the next time it
     /// runs, and asking with it would only spend a 401.
     static func expired(_ json: [String: Any], now: Date = Date()) -> Bool {
-        guard let ms = expiryMillis(in: json) else { return false }
-        return Date(timeIntervalSince1970: ms / 1000) <= now
+        guard let when = expiry(in: json) else { return false }
+        return when <= now
     }
 
+    /// When the stored login lapses, or nil where it says nothing.
+    ///
+    /// The field is milliseconds in every shape seen so far, but a seconds value
+    /// read as milliseconds lands in 1970 and makes every fresh login look
+    /// expired — a silent, total failure of this feature. So the unit is decided
+    /// by magnitude rather than assumed: anything that would fall before 2001
+    /// read as milliseconds is seconds.
+    static func expiry(in json: [String: Any]) -> Date? {
+        guard let n = expiryMillis(in: json), n.isFinite, n > 0 else { return nil }
+        let asMillis = Date(timeIntervalSince1970: n / 1000)
+        return asMillis.timeIntervalSince1970 > 978_307_200   // 2001-01-01
+            ? asMillis : Date(timeIntervalSince1970: n)
+    }
+
+    /// Named, not searched, for the same reason the token is: an `expiresAt`
+    /// picked out of an MCP server's section describes that server's token, and
+    /// answers a question nobody asked. A zero is "no expiry", not 1970.
     private static func expiryMillis(in json: [String: Any]) -> Double? {
-        for (key, value) in json {
-            if key == "expiresAt" || key == "expires_at",
-               let n = (value as? NSNumber)?.doubleValue { return n }
-            if let nested = value as? [String: Any], let found = expiryMillis(in: nested) {
-                return found
-            }
+        let claude = json["claudeAiOauth"] as? [String: Any]
+        for candidate in [claude?["expiresAt"], json["expiresAt"], json["expires_at"]] {
+            if let n = (candidate as? NSNumber)?.doubleValue, n.isFinite, n > 0 { return n }
         }
         return nil
     }
