@@ -931,6 +931,61 @@ check "claude: the row still names itself" 'grep -q "\"sessionId\":\"testsess\""
 printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
 wait "$hookpid"
 
+# --- 32. Payloads nobody sane would send ---------------------------------------
+# The blocking hook reads whatever its host hands it. Every case below must end
+# the same way: exit 0, nothing on stdout, and nothing written outside
+# ~/.agentbar. Writing nothing is the contract; crashing is not a way of writing
+# nothing, because a host that treats a crash as a refusal (agy does) would turn
+# a malformed payload into a denial nobody made.
+hostile() {   # hostile <name> <json>
+  fresh_home
+  printf 'not pwned\n' > "$TESTROOT/canary"
+  local code=0
+  AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=1 "$NODE" "$HOOK" \
+    <<<"$2" >"$HOME/out.json" 2>"$HOME/err.txt" || code=$?
+  check "hostile: $1 exits 0"        "[ $code -eq 0 ]"
+  check "hostile: $1 says nothing"   '[ ! -s "$HOME/out.json" ]'
+  # Everything it wrote is under ~/.agentbar. `safeId` drops the separators, and
+  # this is the check that says so about the result rather than about the regex.
+  check "hostile: $1 stays put" \
+    '[ "$(cat "$TESTROOT/canary")" = "not pwned" ] && [ ! -e /tmp/pwned ] &&
+     [ -z "$(find "$HOME" -type f -not -path "$HOME/.agentbar/*" -not -name out.json -not -name err.txt)" ]'
+}
+
+BIG=$("$NODE" -e 'process.stdout.write("A".repeat(300000))')
+hostile "a command longer than any screen" \
+  "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"h1\",\"prompt_id\":\"p1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$BIG\"}}"
+
+DEEP=$("$NODE" -e 'let s="{\"a\":".repeat(2000)+"1"+"}".repeat(2000);process.stdout.write(s)')
+hostile "a tool input nested 2000 deep" \
+  "{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"h2\",\"prompt_id\":\"p2\",\"tool_name\":\"Bash\",\"tool_input\":$DEEP}"
+
+# A session id that looks like a path. `safeId` drops the separators, which is
+# what stops it from being one — the dots survive and must not be enough.
+hostile "a session id shaped like a path" \
+  '{"hook_event_name":"PermissionRequest","session_id":"../../../../tmp/pwned","prompt_id":"p3","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+
+# A lone high surrogate: JSON.stringify escapes it happily and Swift refuses the
+# whole file, which would hide the session from every frontend.
+hostile "a lone surrogate in the command" \
+  '{"hook_event_name":"PermissionRequest","session_id":"h4","prompt_id":"p4","tool_name":"Bash","tool_input":{"command":"echo \ud800"}}'
+
+hostile "a tool input that is an array" \
+  '{"hook_event_name":"PermissionRequest","session_id":"h5","prompt_id":"p5","tool_name":"Bash","tool_input":[1,2,3]}'
+
+hostile "a tool name that is a number" \
+  '{"hook_event_name":"PermissionRequest","session_id":"h6","prompt_id":"p6","tool_name":7,"tool_input":{"command":"echo hi"}}'
+
+hostile "every field null" \
+  '{"hook_event_name":"PermissionRequest","session_id":null,"prompt_id":null,"tool_name":null,"tool_input":null,"cwd":null}'
+
+# The state row is what the app reads; after all of that it must still parse.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=1 "$NODE" "$HOOK" \
+  <<<'{"hook_event_name":"PermissionRequest","session_id":"h7","prompt_id":"p7","tool_name":"Bash","tool_input":{"command":"echo \ud800 done"}}' >/dev/null 2>&1
+check "hostile: the row it leaves still parses" \
+  '"$NODE" -e "JSON.parse(require(\"fs\").readFileSync(process.env.HOME + \"/.agentbar/state.d/h7.json\", \"utf8\"))"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
