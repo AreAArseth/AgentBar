@@ -13,6 +13,81 @@ import Testing
 
     /// The regression. A config that is already ours but names a node that no longer
     /// exists must be rewritten; the old code returned at the marker and left it.
+    // MARK: - The hooks block, which is the real Codex integration
+
+    /// Codex speaks Claude's hook dialect, so the whole integration is one block of
+    /// TOML pointing at the shared scripts. These assert the two promises the notify
+    /// line already keeps: everything outside survives byte for byte, and a second
+    /// copy is never appended.
+    @Test func codexHooksBlockCarriesEveryEventAndItsOwnTimeout() {
+        let plan = HookInstaller.codexHooksPlan(config: "model = \"o3\"\n",
+                                                node: "/opt/homebrew/bin/node", dir: "/h")
+        guard case .write(let next, let replaced) = plan else {
+            Issue.record("a fresh config must produce a write, got \(plan)"); return
+        }
+        #expect(!replaced)
+        #expect(next.hasPrefix("model = \"o3\"\n"))
+        for e in HookInstaller.codexEvents {
+            #expect(next.contains("[[hooks.\(e.event)]]"))
+        }
+        // The blocking one outlasts permission.js's own 600s wait, so the hook gives
+        // up first and falls through to Codex's prompt rather than being killed.
+        #expect(next.contains("command = \"\\\"/opt/homebrew/bin/node\\\" \\\"/h/codex/hook.js\\\" permission.js\"\ntimeout = 630"))
+        // Codex clamps SessionEnd to 3s; asking for more earns a warning every session.
+        #expect(next.contains("\"/h/codex/hook.js\\\" lifecycle.js end\"\ntimeout = 3"))
+        #expect(next.contains("statusMessage = \"Waiting for you in AgentBar\""))
+    }
+
+    @Test func codexHooksBlockIsIdempotent() {
+        guard case .write(let once, _) = HookInstaller.codexHooksPlan(
+            config: "model = \"o3\"\n", node: "/n", dir: "/h") else {
+            Issue.record("expected a write"); return
+        }
+        #expect(HookInstaller.codexHooksPlan(config: once, node: "/n", dir: "/h") == .unchanged)
+    }
+
+    /// A node that moved rewrites the block where it stands, rather than appending a
+    /// second one — the same repair the notify line gets, for the same reason.
+    @Test func codexHooksBlockIsReplacedInPlaceNotAppended() {
+        guard case .write(let old, _) = HookInstaller.codexHooksPlan(
+            config: "model = \"o3\"\n", node: "/old/node", dir: "/h") else {
+            Issue.record("expected a write"); return
+        }
+        let trailing = old + "\n[profiles.mine]\nmodel = \"o4\"\n"
+        guard case .write(let next, let replaced) = HookInstaller.codexHooksPlan(
+            config: trailing, node: "/new/node", dir: "/h") else {
+            Issue.record("expected a rewrite"); return
+        }
+        #expect(replaced)
+        #expect(!next.contains("/old/node"))
+        #expect(next.components(separatedBy: HookInstaller.codexBegin).count - 1 == 1)
+        // Everything the user put after our block is still there, untouched.
+        #expect(next.hasSuffix("[profiles.mine]\nmodel = \"o4\"\n"))
+        #expect(next.hasPrefix("model = \"o3\"\n"))
+    }
+
+    /// The trap this release had to fix first: the marker check used to match the path
+    /// anywhere in the file, so once the hooks block existed — which carries the same
+    /// path — a config with no `notify` key was read as "already wired" and notify was
+    /// never installed at all.
+    @Test func theHooksBlockDoesNotHideAMissingNotify() {
+        guard case .write(let withHooks, _) = HookInstaller.codexHooksPlan(
+            config: "model = \"o3\"\n", node: "/n", dir: "/h") else {
+            Issue.record("expected a write"); return
+        }
+        #expect(withHooks.contains("/.agentbar/hooks/codex/") == false)   // dir is /h here
+        let real = withHooks.replacingOccurrences(of: "/h/codex/", with: "/u/.agentbar/hooks/codex/")
+        let plan = HookInstaller.codexPlan(config: real, node: "/n",
+                                           script: "/u/.agentbar/hooks/codex/notify.js",
+                                           isExecutable: { _ in true })
+        guard case .write(let next, let repaired) = plan else {
+            Issue.record("notify must still be installed beside the hooks block, got \(plan)")
+            return
+        }
+        #expect(!repaired)
+        #expect(next.contains("notify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]"))
+    }
+
     @Test func codexRepairsAnInterpreterThatHasMoved() {
         let stale = "model = \"o3\"\nnotify = [\"/Users/x/.nvm/versions/node/v20.11.0/bin/node\", \"\(Self.script)\"]\n"
         let plan = HookInstaller.codexPlan(config: stale, node: "/opt/homebrew/bin/node",

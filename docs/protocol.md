@@ -12,7 +12,7 @@ locks. All timestamps (`ts`) are Unix seconds.
 ```
 ~/.agentbar/
   state.d/     one JSON per live session        (writer: hooks, or a frontend watcher; reader: frontends)
-  requests.d/  one JSON per pending approval    (writer: permission hook — Claude Code, Copilot CLI)
+  requests.d/  one JSON per pending approval    (writer: permission hook — Claude Code, Copilot CLI, Codex CLI)
   answers.d/   one JSON per user decision       (writer: frontends; reader: the hook)
   watcher.json frontend presence heartbeat      (writer: CLI watch/waybar)
   history.jsonl  one line per ended session     (writer: frontends only)
@@ -27,6 +27,11 @@ locks. All timestamps (`ts`) are Unix seconds.
 File name: `<sessionId>.json` where `sessionId` is sanitized `[A-Za-z0-9_.-]`,
 max 64 chars (fallback `"unknown"`). The file name is the session's identity;
 `sessionId` inside is informative.
+
+A writer MAY prefix that name (AgentBar's hooks do it for Codex, whose rows a
+second writer already named `codex-<thread-id>`), but the prefix is part of the
+identity: **every writer for one agent MUST agree on it**, prefix included, or one
+session becomes two rows. The cap counts the prefix.
 
 ```json
 {
@@ -90,8 +95,9 @@ Rules:
 Frontend pruning (each refresh):
 - delete when `pid > 0` and the process no longer exists (`kill(pid, 0)` → ESRCH);
 - delete when `ts > 0` and older than **24 h**;
-- on session start with no frontend present, hooks wipe the whole `state.d/`
-  (leftovers from a crash — start honest).
+- on session start with no frontend present, hooks sweep `state.d/` of rows whose
+  owning process is gone (leftovers from a crash — start honest). Only dead rows:
+  another agent's session outlives a frontend restart, and a wipe would hide it.
 
 ## requests.d / answers.d — remote approval
 
@@ -99,17 +105,20 @@ Written by the blocking permission hook. File name:
 `<sessionId>-<promptId>.json` (both sanitized). **The answer file MUST use exactly
 the same file name** — that is how the hook finds its own answer.
 
-Two hosts speak this today and one script serves both. Claude Code sends
+Three hosts speak this today and one script serves all of them. Claude Code sends
 `PermissionRequest` and reads the decision back wrapped in `hookSpecificOutput`;
 Copilot CLI sends `permissionRequest` — camelCase, raw tool ids, no `prompt_id`
 (the hook's own pid separates two requests in one turn) — and reads the decision
-bare as `{"behavior": …}`. What lands in `requests.d` is identical apart from
-`agent`, so frontends need to know nothing about either dialect.
+bare as `{"behavior": …}`. Codex CLI sends `PermissionRequest` in Claude's own
+spelling and reads Claude's own envelope, differing only in having no `prompt_id`
+(its `turn_id` takes that place) and no suggestion channel. What lands in
+`requests.d` is identical apart from `agent`, so frontends need to know nothing
+about any of the three dialects.
 
-`ruleSuggestion` is null for Copilot and always will be: its output contract has no
-channel for a standing rule, so "always" degrades to a one-shot allow, and a
-frontend MUST NOT offer an *Always* affordance for a request that carries no
-`ruleSuggestion`.
+`ruleSuggestion` is null for Copilot and Codex and always will be: neither output
+contract has a channel for a standing rule, so "always" degrades to a one-shot
+allow, and a frontend MUST NOT offer an *Always* affordance for a request that
+carries no `ruleSuggestion`.
 
 Request:
 ```json
@@ -342,12 +351,13 @@ decisions about the same command are two decisions, and counting them is the poi
   nobody was asked; folding them in overstates one number and understates the other.
 
 **What is deliberately absent.** Keystroke approvals — the ones AgentBar sends for
-agents with no request file (Codex, Antigravity), and a Claude plan approval, which
-is also a keystroke — write **no line**. A frontend presses a key at a terminal and
-never learns what the terminal did with it; recording that as "the user allowed"
-would be a claim no writer is in a position to make. So the ledger covers the
-agents that speak `requests.d`, and a reader must not treat its silence about Codex
-as "Codex was never approved".
+agents with no request file (Antigravity, and Codex sessions started before its
+hooks were accepted), and a Claude plan approval, which is also a keystroke — write
+**no line**. A frontend presses a key at a terminal and never learns what the
+terminal did with it; recording that as "the user allowed" would be a claim no
+writer is in a position to make. So the ledger covers the agents that speak
+`requests.d`, and a reader must not treat its silence about a keystroke-approved
+session as "nothing was ever approved there".
 
 Rows are the user's own record of their own decisions. Nothing is sent anywhere, a
 frontend MAY offer a switch to stop writing them (AgentBar: **Settings ▸

@@ -39,6 +39,14 @@ const agent = process.env.AGENTBAR_AGENT || "claude";
 let dialect = "claude";
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
+// A prefix on the row's name, for an agent whose rows another writer already
+// names. Codex's notify bridge has always written `codex-<thread-id>`, and
+// `Weight.codex` finds the rollout by stripping that prefix straight back off —
+// so the hooks have to agree with it, or the token weight quietly disappears and
+// one session turns into two rows. Empty for every other agent, which is why
+// nothing else changes shape.
+const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
+const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
 const writeAtomic = (file, obj) => {
   const tmp = file + "." + process.pid + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(obj));
@@ -255,7 +263,7 @@ function run() {
     if (isQuestion && questions.length === 0) {
       try {
         const q = (((p.tool_input || {}).questions || [])[0] || {});
-        const statePath = path.join(stateDir, safeId(p.session_id) + ".json");
+        const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
         fs.mkdirSync(stateDir, { recursive: true });
         let prev = {};
         try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
@@ -267,7 +275,11 @@ function run() {
       process.exit(0);
     }
 
-    const name = safeId(p.session_id) + "-" + safeId(p.prompt_id || String(process.pid));
+    // Codex has no `prompt_id`; its `turn_id` repeats across the tools of one
+    // turn exactly the way Claude's prompt id does, which is what the successor
+    // guard below is built on.
+    const name = rowId(p.session_id) + "-"
+      + safeId(p.prompt_id || p.turn_id || String(process.pid));
     const reqPath = path.join(reqDir, name + ".json");
     const ansPath = path.join(ansDir, name + ".json");
     const display = isQuestion ? "Question: " + oneLine(questions[0].question)
@@ -295,7 +307,7 @@ function run() {
 
     // The session row itself shows what's pending, even before the menu opens.
     try {
-      const statePath = path.join(stateDir, safeId(p.session_id) + ".json");
+      const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
       fs.mkdirSync(stateDir, { recursive: true });
       let prev = {};
       try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
@@ -320,7 +332,7 @@ function run() {
 
     writeAtomic(reqPath, {
       // safeId to match Session.id, which the app derives from the state file name.
-      sessionId: safeId(p.session_id), agent,
+      sessionId: rowId(p.session_id), agent,
       toolName: p.tool_name || "", display, toolInputPretty: pretty,
       ...(cwd ? { cwd } : {}),
       context: buildContext(p.tool_name, p.tool_input),
@@ -353,7 +365,7 @@ function run() {
     process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
     const deadline = Date.now() + TIMEOUT_MS;
-    const statePath = path.join(stateDir, safeId(p.session_id) + ".json");
+    const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
     // The wizard renders alongside a question wait — and the plan dialog
     // alongside a plan wait — so both can be answered in the terminal while
     // this hook still polls. The next event then moves the session off the

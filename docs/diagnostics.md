@@ -74,6 +74,7 @@ Repeated for each entry in the integration table, `<id>` being the agent id.
 | `agent.<id>.interpreter` | the node path *inside that config* still exists, emitted only when it does not |
 | `agent.<id>.lastSeen` | when this agent last reported, from `history.jsonl`. **No record is `ok`**, not a warning — history only starts when a frontend starts keeping it, so every agent is blank on a freshly updated machine and flagging that would bury the one row that matters under eight that don't. Wired and silent for 14 days *is* a warning: that is the shape of a broken integration every other check passes |
 | `claude.configDir` | the `~/.agentbar/claude-config-dir` hint agrees with the live `CLAUDE_CONFIG_DIR` |
+| `codex.hooks` | Codex has accepted its hooks. Codex runs none until a human says yes, and an unaccepted hook is skipped in silence — so the wired row, which the older `notify` key alone satisfies, cannot tell you. `warn` until the answer lands in `[hooks.state]` |
 | `copilot.exec` | Copilot's hook runs node directly. A `bash` wrapper makes the hook's parent a shell that exits at once — and that pid is what prunes dead rows, so every Copilot row would vanish on the next refresh |
 
 Where each agent lives, and what says it is ours:

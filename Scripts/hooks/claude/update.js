@@ -28,6 +28,15 @@ const TOOL_LABELS = {
 };
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
+
+// A prefix on the row's name, for an agent whose rows another writer already
+// names. Codex's notify bridge has always written `codex-<thread-id>`, and
+// `Weight.codex` finds the rollout by stripping that prefix straight back off —
+// so the hooks have to agree with it, or the token weight quietly disappears and
+// one session turns into two rows. Empty for every other agent, which is why
+// nothing else changes shape.
+const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
+const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
 // Never end a cut on a lone high surrogate: JSON.stringify escapes one happily,
 // but Swift's JSONSerialization rejects the whole file — and an unreadable state
 // file hides the session from every frontend for the rest of the turn.
@@ -130,7 +139,7 @@ function run() {
 
   // The session's own file is both the unit of state and the liveness marker; writing it on
   // any event also picks up sessions that predate the hook install (no SessionStart fired).
-  const sid = safeId(p.session_id);
+  const sid = rowId(p.session_id);
   const statePath = path.join(stateDir, sid + ".json");
 
   let prev = {};
@@ -163,7 +172,10 @@ function run() {
     agent: AGENT,
     state, label,
     project, cwd,
-    sessionId: p.session_id || "",
+    // The same value the file is named, prefix and sanitising included. The file
+    // name is the identity and this field is informative — but a row whose two
+    // spellings of one id disagree is a trap waiting for the next reader.
+    sessionId: sid,
     // "cli" | "claude-desktop" | … — which surface runs the session; used for row clicks.
     entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || prev.entrypoint || "",
     // Terminal app for CLI sessions (Apple_Terminal, iTerm.app, WarpTerminal, …).

@@ -285,6 +285,7 @@ enum Diagnostics {
                    at: 0)
         if anyWired { out.append(lastSeenCheck(i, base: base, now: now)) }
         if i.id == "copilot" { out += copilotExecCheck(home: home) }
+        if i.id == "codex" { out += codexTrustCheck(home: home) }
         return out
     }
 
@@ -324,6 +325,28 @@ enum Diagnostics {
                       status: shelled ? .fail : .ok,
                       detail: shelled ? "The hook is wrapped in a shell, so the hook's parent is a shell that exits at once — and that pid is what prunes dead rows. Every Copilot row would disappear on the next refresh." : nil,
                       fix: shelled ? "Delete ~/.copilot/hooks/agentbar.json and relaunch AgentBar." : nil)]
+    }
+
+    /// Codex runs no hook until the human has accepted it, and until then the whole
+    /// integration is silently inert — the one failure this feature can have that
+    /// looks exactly like nothing happening. So it gets a row of its own rather than
+    /// hiding inside `agent.codex.wired`, which the notify key alone satisfies.
+    ///
+    /// `.warn`, not `.fail`: nothing is broken, a person simply has not been asked
+    /// yet. Codex asks on its own at the start of the next session.
+    static func codexTrustCheck(home: URL) -> [Check] {
+        let url = home.appendingPathComponent(".codex/config.toml")
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              text.contains(HookInstaller.codexBegin) else { return [] }
+        // Codex writes this key when a hook is accepted; it is
+        // "<source path>:<event>:<group>:<index>", and the source is this file.
+        let trusted = text.contains("hooks.state.\"\(url.path):session_start:")
+        return [Check(id: "codex.hooks", title: "Codex has accepted its hooks",
+                      status: trusted ? .ok : .warn,
+                      detail: trusted ? nil
+                        : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
+                      fix: trusted ? nil
+                        : "Start a Codex session and accept the hooks it asks about.")]
     }
 
     private static func lastSeenCheck(_ i: Integration, base: URL, now: TimeInterval) -> Check {
@@ -427,7 +450,7 @@ enum Diagnostics {
         let trusted = AXIsProcessTrusted()
         out.append(Check(id: "app.accessibility", title: "Accessibility permission",
                          status: trusted ? .ok : .warn,
-                         detail: trusted ? nil : "Not granted. Everything else works; only keystroke approval for agents without a decision hook (Codex, Antigravity's desktop app) needs it.",
+                         detail: trusted ? nil : "Not granted. Everything else works; only keystroke approval for agents without a decision hook (Antigravity's desktop app, and Codex sessions older than its hooks) needs it.",
                          fix: trusted ? nil : "System Settings ▸ Privacy & Security ▸ Accessibility ▸ add AgentBar."))
 
         if IslandScreen.pinnedDisplayMissing {

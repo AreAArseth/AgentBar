@@ -1249,6 +1249,19 @@ function doctor(json) {
           shelled ? "The hook is wrapped in a shell, so the hook's parent is a shell that exits at once — and that pid is what prunes dead rows. Every Copilot row would disappear on the next refresh." : null,
           shelled ? "Delete ~/.copilot/hooks/agentbar.json and re-run `agentbar install-hooks`." : null);
     }
+    if (i.id === "codex") {
+      // Codex runs no hook until a human has accepted it, and until then the whole
+      // integration is inert in a way that looks exactly like nothing happening.
+      // Its own row, because `agent.codex.wired` is satisfied by the notify key alone.
+      const cfg = path.join(H, ".codex/config.toml");
+      const toml = read(cfg) || "";
+      if (toml.includes("# >>> agentbar >>>")) {
+        const trusted = toml.includes(`hooks.state."${cfg}:session_start:`);
+        add("codex.hooks", "Codex has accepted its hooks", trusted ? "ok" : "warn",
+            trusted ? null : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
+            trusted ? null : "Start a Codex session and accept the hooks it asks about.");
+      }
+    }
   }
 
   const stale = [];
@@ -1403,6 +1416,17 @@ function installHooks() {
       fs.writeFileSync(t, next);
       fs.renameSync(t, file);
     };
+    // AgentBar's own hooks block, cut out before any "is notify already ours?"
+    // question — it carries the same path on every line, and a blind match would
+    // read it as a wired notify and never install notify again.
+    const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
+    const CODEX_END = "# <<< agentbar <<<";
+    const withoutBlock = (t) => {
+      const b = t.indexOf(CODEX_BEGIN);
+      if (b < 0) return t;
+      const e = t.indexOf(CODEX_END, b);
+      return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
+    };
     const line = toml.match(/^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/m);
     if (line) {
       // Ours already — but "ours" is not "working". Every other config here is
@@ -1417,12 +1441,56 @@ function installHooks() {
     }
     // Our marker somewhere the line regex could not read (hand-edited formatting,
     // a comment): leave it alone rather than appending a second notify key.
-    else if (toml.includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
+    else if (withoutBlock(toml).includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
     else if (/^\s*notify\s*=/m.test(toml)) console.error(`skip: ${file} already has a notify hook — left untouched`);
     else {
       if (toml && !toml.endsWith("\n")) toml += "\n";
       writeToml(toml + ours + "\n");
+      toml += ours + "\n";
       report("codex   " + file, true);
+    }
+
+    // The hooks block — the real integration. Codex speaks Claude's dialect, so
+    // these point at the shared claude/ scripts through codex/hook.js, which is
+    // where AGENTBAR_AGENT and the row prefix get set (Codex handlers have no
+    // `env` field). Array-of-tables, not dotted keys, because Codex writes its own
+    // [hooks.state] when a human trusts a hook and a dotted `hooks.X` would make
+    // that a redefinition. Appended at the end, because a bare key written after a
+    // [[table]] header belongs to that table.
+    const shim = path.join(hooksDir, "codex", "hook.js");
+    const codexEvents = [
+      ["SessionStart", "lifecycle.js start", 5],
+      ["SessionEnd", "lifecycle.js end", 3],      // Codex clamps this one to 3s
+      ["UserPromptSubmit", "update.js prompt", 5],
+      ["PreToolUse", "update.js pre", 5],
+      ["PostToolUse", "update.js post", 5],
+      ["Stop", "update.js stop", 5],
+      // Above permission.js's own 600s wait, so the hook gives up first and falls
+      // through to Codex's prompt rather than being killed mid-wait.
+      ["PermissionRequest", "permission.js", 630],
+    ];
+    const blockLines = [CODEX_BEGIN];
+    for (const [event, tail, timeout] of codexEvents) {
+      blockLines.push(`[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"',
+                      `command = "\\"${node}\\" \\"${shim}\\" ${tail}"`, `timeout = ${timeout}`);
+      if (event === "PermissionRequest") blockLines.push('statusMessage = "Waiting for you in AgentBar"');
+      blockLines.push("");
+    }
+    blockLines.push(CODEX_END);
+    const block = blockLines.join("\n");
+
+    const b = toml.indexOf(CODEX_BEGIN);
+    const e = b < 0 ? -1 : toml.indexOf(CODEX_END, b);
+    if (b >= 0 && e >= 0) {
+      const current = toml.slice(b, e + CODEX_END.length);
+      if (current === block) report("codex hooks   " + file, false);
+      else { writeToml(toml.slice(0, b) + block + toml.slice(e + CODEX_END.length)); report("codex hooks   " + file, true); }
+    } else {
+      let next = toml;
+      if (next && !next.endsWith("\n")) next += "\n";
+      if (next) next += "\n";
+      writeToml(next + block + "\n");
+      report("codex hooks   " + file, true);
     }
   }
 

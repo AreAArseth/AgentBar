@@ -16,6 +16,15 @@ const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
 const event = process.argv[2];
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
+
+// A prefix on the row's name, for an agent whose rows another writer already
+// names. Codex's notify bridge has always written `codex-<thread-id>`, and
+// `Weight.codex` finds the rollout by stripping that prefix straight back off —
+// so the hooks have to agree with it, or the token weight quietly disappears and
+// one session turns into two rows. Empty for every other agent, which is why
+// nothing else changes shape.
+const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
+const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
 // The macOS app, or the CLI's watch/waybar heartbeat (any platform).
 // AGENTBAR_FORCE_APP=1|0 overrides for tests, same knob permission.js honors.
 const running = () => {
@@ -76,7 +85,7 @@ function run() {
     // moment the session began. Claude never sends the field.
     opensWorking = typeof j.initial_prompt === "string" && j.initial_prompt.trim() !== "";
   } catch {}
-  const statePath = path.join(stateDir, safeId(id) + ".json");
+  const statePath = path.join(stateDir, rowId(id) + ".json");
 
   if (event === "start") {
     const appUp = running();
@@ -131,7 +140,7 @@ function run() {
         label: keepsWork ? (prev.label || "") : "",
         project: cwd ? path.basename(cwd) : (prev.project || ""),
         cwd: cwd || prev.cwd || "",
-        sessionId: id || prev.sessionId || "",
+        sessionId: id ? rowId(id) : (prev.sessionId || ""),
         entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || prev.entrypoint || "",
         term_program: process.env.TERM_PROGRAM || prev.term_program || "",
         pid: process.ppid,

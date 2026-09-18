@@ -725,6 +725,73 @@ wait "$hookpid"
 check "claude: still wrapped in hookSpecificOutput" 'grep -q "hookSpecificOutput" "$HOME/out.json"'
 check "claude: still files under claude"   'grep -q "\"agent\":\"claude\"" "$HOME/.agentbar/state.d/testsess.json"'
 
+# --- 29. Codex CLI's PermissionRequest — the same hook, the same dialect --------
+# Codex copied Claude's hook contract: the same event names, the same snake_case
+# payload, the same hookSpecificOutput envelope. What it has no channel for is a
+# permission suggestion, so every "Always" has to degrade to a one-shot allow —
+# and its rows are named `codex-<id>`, because its notify bridge already named
+# them that and the token weight is found by stripping that prefix back off.
+CODEX_EVENT='{"hook_event_name":"PermissionRequest","session_id":"cdx1","turn_id":"trn1","cwd":"/repo","tool_name":"Bash","tool_input":{"command":"git push origin main"},"model":"gpt-6","permission_mode":"default","transcript_path":null}'
+CODEX_ENV=(AGENTBAR_AGENT=codex AGENTBAR_ID_PREFIX=codex-)
+
+fresh_home
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "codex: request is prefixed"     '[ "$REQ" = "codex-cdx1-trn1.json" ]'
+check "codex: row is prefixed too"     '[ -f "$HOME/.agentbar/state.d/codex-cdx1.json" ]'
+check "codex: filed under codex"       'grep -q "\"agent\":\"codex\"" "$HOME/.agentbar/requests.d/$REQ"'
+check "codex: carries the command"     'grep -q "Bash: git push origin main" "$HOME/.agentbar/requests.d/$REQ"'
+check "codex: carries its cwd"         'grep -q "\"cwd\":\"/repo\"" "$HOME/.agentbar/requests.d/$REQ"'
+# No suggestion channel upstream, so the frontend must not offer an Always.
+check "codex: no rule suggestion"      'grep -q "\"ruleSuggestion\":null" "$HOME/.agentbar/requests.d/$REQ"'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "codex: allow in claude envelope" 'grep -q "\"hookEventName\":\"PermissionRequest\"" "$HOME/out.json" && grep -q "\"behavior\":\"allow\"" "$HOME/out.json"'
+check "codex: request cleaned up"      '[ ! -e "$HOME/.agentbar/requests.d/$REQ" ]'
+
+fresh_home
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "codex: deny answered"           'grep -q "\"behavior\":\"deny\"" "$HOME/out.json"'
+
+# "Always" with nothing to pin it to is a one-shot allow, never an invented rule.
+fresh_home
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"always","rule":{"type":"rule","rule":"Bash(git push:*)"}}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "codex: always degrades to allow" 'grep -q "\"behavior\":\"allow\"" "$HOME/out.json" && ! grep -q "updatedPermissions" "$HOME/out.json"'
+
+# Every failure path is the same one: say nothing, and Codex asks at the terminal.
+fresh_home
+start=$(date +%s)
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=2 "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json"
+end=$(date +%s)
+check "codex: timeout says nothing"    '[ ! -s "$HOME/out.json" ]'
+check "codex: timeout within budget"   '[ $((end-start)) -le 4 ]'
+check "codex: timeout cleans request"  '[ -z "$(ls "$HOME/.agentbar/requests.d/" 2>/dev/null)" ]'
+
+fresh_home
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=0 "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json"
+check "codex: no frontend, no output"  '[ ! -s "$HOME/out.json" ]'
+check "codex: no frontend, no request" '[ -z "$(ls "$HOME/.agentbar/requests.d/" 2>/dev/null)" ]'
+
+# The prefix is opt-in: every other agent's rows keep the names they always had.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "claude: name still unprefixed"  '[ "$REQ" = "testsess-p1.json" ]'
+check "claude: row still unprefixed"   '[ -f "$HOME/.agentbar/state.d/testsess.json" ]'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "claude: still wrapped as before" 'grep -q "hookSpecificOutput" "$HOME/out.json"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

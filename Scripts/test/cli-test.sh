@@ -467,6 +467,34 @@ check "rules --json separates the two"      '"$CLI" rules --json | grep -q "\"wo
 printf '{"v":1,"rules":[{"id":"r-x","decision":"deny","shape":"bash:curl","mode":"yes"}]}' > "$HOME/.agentbar/rules.json"
 check "an unreadable mode voids the file"   '"$CLI" rules | grep -q "mode is not on, watch or off"'
 
+# --- the Codex hooks block: the real integration, beside the older notify key ----
+fresh_home
+mkdir -p "$HOME/.codex"
+printf 'model = "o3"\n\n[profiles.mine]\nmodel = "o4"\n' > "$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+CODEX_CFG="$HOME/.codex/config.toml"
+check "codex hooks block written"      'grep -q "^# >>> agentbar >>>" "$CODEX_CFG"'
+check "codex hooks cover every event"  'for e in SessionStart SessionEnd UserPromptSubmit PreToolUse PostToolUse Stop PermissionRequest; do grep -q "^\[\[hooks.$e\]\]" "$CODEX_CFG" || exit 1; done'
+# Above permission.js's own 600s wait, so the hook gives up first.
+check "codex approval outlasts hook"   '[ "$(grep -c "^timeout = 630$" "$CODEX_CFG")" = 1 ]'
+# Codex clamps SessionEnd to 3s; asking for more earns a warning every session.
+check "codex session end within cap"   '[ "$(grep -c "^timeout = 3$" "$CODEX_CFG")" = 1 ]'
+check "codex hooks run the shim"       'grep -q "/.agentbar/hooks/codex/hook.js" "$CODEX_CFG"'
+check "codex block written once"       '[ "$(grep -c "^# >>> agentbar >>>" "$CODEX_CFG")" = 1 ]'
+# The trap this had to fix first: the block carries the same path as the notify
+# key, so a blind marker match reads it as "notify is wired" and never installs it.
+check "hooks block keeps notify too"   '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 1 ]'
+check "codex keeps the user's keys"    'grep -q "^model = \"o3\"" "$CODEX_CFG" && grep -q "^\[profiles.mine\]" "$CODEX_CFG"'
+CODEX_SNAP2="$(cat "$CODEX_CFG")"
+"$CLI" install-hooks >/dev/null 2>&1
+check "codex hooks install idempotent" '[ "$CODEX_SNAP2" = "$(cat "$CODEX_CFG")" ]'
+
+# A config that has the block but lost its notify key must get notify back.
+grep -v "^notify = " "$CODEX_CFG" > "$HOME/.codex/c.tmp" && mv "$HOME/.codex/c.tmp" "$CODEX_CFG"
+check "notify removed for the test"    '! grep -q "^notify = " "$CODEX_CFG"'
+"$CLI" install-hooks >/dev/null 2>&1
+check "notify reinstalled beside block" 'grep -q "^notify = " "$CODEX_CFG" && grep -q "^# >>> agentbar >>>" "$CODEX_CFG"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

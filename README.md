@@ -124,8 +124,8 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   has been allowed five times and never refused, **✓ Always** is pointed at — pointed
   at, never pressed. Kept in `~/.agentbar/decisions.jsonl`, never sent anywhere,
   switchable off in **Settings ▸ Approvals**, and `agentbar forget` empties it.
-  Keystroke approvals (Codex, Antigravity) write **nothing**: a key pressed at a
-  terminal is not a decision anybody here witnessed.
+  Keystroke approvals (Antigravity, and Codex sessions older than its hooks) write
+  **nothing**: a key pressed at a terminal is not a decision anybody here witnessed.
 - **Rules you wrote** — the one thing AgentBar will answer without asking, and only
   ever a rule you typed yourself. When you have answered the same prompt the same way
   five times, the card offers to write it down; **Settings ▸ Rules** is where they
@@ -377,7 +377,7 @@ launchd agent has to be booted out separately, which is what the last line does.
 |---|---|---|---|---|
 | Claude Code (CLI + desktop) | full | yes | Clawd the crab | hooks: prompt, tool, permission, stop, lifecycle |
 | Claude Cowork (desktop) | working / approval / question / done — **older local mode only** | yes | Clawd the crab | watched, not hooked: Cowork gives each session a throwaway config dir, so there is nothing to install into. `CoworkWatcher` reads the audit log the app writes per session. **Newer desktop builds run Cowork inside a VM that writes no session files on the host — those sessions can't be shown until the app exposes something host-side** |
-| Codex CLI | turn-complete | yes | knot + braille dot-matrix | via Codex `notify` (auto-installed); no per-tool granularity upstream |
+| Codex CLI | full hooks | yes | knot + braille dot-matrix | hooks auto-installed; **Codex asks once before it runs them** |
 | Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed) |
 | Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed) |
 | GitHub Copilot CLI | working / done / failed / **approval** | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session — it reads hook config only at startup). **Remote Allow/Deny** via its `permissionRequest` hook; no "Always", which its output contract has no room for |
@@ -499,9 +499,17 @@ you ignore the request for 10 minutes, the prompt shows in the terminal exactly 
 before. (Known cosmetic issue: the terminal dialog can flash briefly even when
 approved from the menu — upstream [claude-code #12176](https://github.com/anthropics/claude-code/issues/12176).)
 
-Codex has no decision hook, so its rows offer *Approve in terminal (sends
-keystroke)* — AgentBar brings the session's own tab forward and presses the
-approval key. It waits for that tab to be confirmed by tty and sends nothing if it
+**Codex answers natively too**, since 1.28.0. It speaks Claude's hook dialect, so
+the same scripts serve it, and a Codex prompt arrives as a real card with real
+buttons — and in the ledger, and under the rules you wrote. Two things are its own.
+There is no **✓ Always**: Codex has no channel for a standing rule, so an "always"
+would quietly be a one-shot allow and the button is not offered. And **Codex asks
+you once before it will run a hook at all** — until you accept, the hooks do
+nothing and Diagnostics says so; AgentBar will not sign that acceptance for you.
+
+Agents with no decision hook still offer *Approve in terminal (sends keystroke)*,
+and so do Codex sessions that were running before the hooks were accepted —
+AgentBar brings the session's own tab forward and presses the approval key. It waits for that tab to be confirmed by tty and sends nothing if it
 can't be found, so a keystroke never lands in a tab it couldn't verify; on
 terminals with no tab targeting (Warp, Ghostty, kitty) it falls back to the app.
 Best-effort by design, and it needs the Accessibility permission (the menu item

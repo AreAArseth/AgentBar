@@ -112,6 +112,33 @@ import Testing
         #expect(check("agent.codex.wired")?.status == .ok)
     }
 
+    /// Codex runs no hook until a human accepts it, and until then the integration
+    /// is inert in the one way that looks exactly like nothing happening. The wired
+    /// row cannot say this: the notify key alone satisfies it.
+    @Test func codexHooksAwaitingAcceptanceAreAWarningNotAFailure() throws {
+        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
+                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n")
+        let row = check("codex.hooks")
+        #expect(row?.status == .warn)
+        #expect(row?.fix != nil)
+    }
+
+    @Test func codexHooksAcceptedPass() throws {
+        let cfg = home.appendingPathComponent(".codex/config.toml").path
+        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
+                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
+                  + "[hooks.state.\"\(cfg):session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n")
+        #expect(check("codex.hooks")?.status == .ok)
+        #expect(check("codex.hooks")?.fix == nil)
+    }
+
+    /// No block, no row: a Codex user who has never had the hooks written should not
+    /// be told about a trust prompt that is not coming.
+    @Test func codexWithoutTheBlockHasNoTrustRow() throws {
+        try write(".codex/config.toml", "model = \"o3\"\n")
+        #expect(check("codex.hooks") == nil)
+    }
+
     /// The shape AgentBar's own installer writes: `JSONSerialization` escapes forward
     /// slashes, so every macOS-written config says `\/.agentbar\/hooks\/...` on disk.
     /// Searching the raw text for the plain marker reports a perfectly wired machine

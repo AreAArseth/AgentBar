@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 // Codex CLI notify adapter -> ~/.agentbar/state.d/codex-<id>.json
 // Codex invokes the configured notify program with one JSON argument per event.
-// Upstream only emits completion-type events (agent-turn-complete), so a Codex session
-// appears after its first finished turn and rests; there is no live "working" signal.
+// It only emits completion-type events, so a session written from here appears
+// after its first finished turn and rests: there is no live "working" signal.
+//
+// Since 1.28.0 this is the FALLBACK, not the integration. Codex gained real hooks
+// (see ../codex/hook.js and ../claude/*), which report a session from its first
+// keystroke to its end — but Codex runs no hook until the human has accepted it in
+// Codex's own trust prompt, and this is the only thing that shows a Codex session in
+// that window. So it stands down once the hooks are wired AND trusted, and writes
+// the moment they are not. Both writers name the row `codex-<thread-id>`, so a
+// mistake here costs a duplicate row rather than a lost one.
+//
 // Install (HookInstaller does this automatically when ~/.codex exists):
 //   ~/.codex/config.toml:  notify = ["node", "<abs path to this file>"]
 
@@ -17,6 +26,24 @@ try { p = JSON.parse(process.argv[2] || "{}"); } catch {}
 
 const type = p.type || "";
 if (!type.includes("complete")) process.exit(0);
+
+// Have the real hooks taken over? Read Codex's own config rather than guessing from
+// the row: the row after a finished turn looks the same whoever wrote it. Both
+// conditions are required — a wired-but-untrusted hook never runs, and standing down
+// for one would leave the session invisible.
+const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+const configPath = path.join(codexHome, "config.toml");
+try {
+  const toml = fs.readFileSync(configPath, "utf8");
+  const wired = toml.includes("# >>> agentbar >>>") && toml.includes("/.agentbar/hooks/codex/hook.js");
+  // Codex writes this entry when the human accepts the hook; the key is
+  // "<source path>:<event>:<group>:<index>".
+  const trusted = toml.includes(`hooks.state."${configPath}:session_start:`);
+  if (wired && trusted) process.exit(0);
+} catch {
+  // No config, unreadable config: carry on writing. Falling silent on an unreadable
+  // file would hide every Codex session for a reason nobody could see.
+}
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
 // Never end a cut on a lone high surrogate: JSON.stringify escapes one happily,

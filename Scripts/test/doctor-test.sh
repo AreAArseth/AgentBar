@@ -127,6 +127,18 @@ check "json carries id and status"      '"$CLI" doctor --json | grep -q "\"id\":
 check "doctor leaves state.d alone"     '[ -z "$(ls -A "$HOME/.agentbar/state.d")" ]'
 check "doctor leaves no probe behind"   '[ -z "$(ls -A "$HOME/.agentbar/requests.d")" ]'
 
+# --- Codex runs no hook until a human accepts it ---------------------------------
+# An inert integration looks exactly like nothing happening, so it gets a row of
+# its own: `agent.codex.wired` is satisfied by the notify key alone.
+fresh_home
+mkdir -p "$HOME/.codex"
+check "no block, no trust row"          '[ "$(status_of codex.hooks)" = absent ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "codex hooks await acceptance"    '[ "$(status_of codex.hooks)" = warn ]'
+DCFG="$HOME/.codex/config.toml"
+printf '\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
+check "codex hooks accepted passes"     '[ "$(status_of codex.hooks)" = ok ]'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -261,6 +261,73 @@ printf '{"agent":"codex","state":"done","pid":999999,"started":true,"ts":1}' \
 check "codex sweep spares other agents"   '[ -e "$HOME/.agentbar/state.d/keepme.json" ]'
 check "codex sweep spares other process"  '[ -e "$HOME/.agentbar/state.d/codex-other.json" ]'
 
+# --- codex notify stands down once the real hooks are live ----------------------
+# Both writers name the row `codex-<thread-id>`, so the cost of getting this wrong
+# is two writers arguing over one file — and the window it must NOT stand down in
+# is the one before a human has accepted the hooks, when notify is all there is.
+CODEX_DONE='{"type":"agent-turn-complete","thread-id":"sd1","input_messages":["task"],"cwd":"/tmp/proj"}'
+BLOCK='# >>> agentbar >>> written by AgentBar; edit outside these two lines'
+
+fresh_home
+mkdir -p "$HOME/.codex"
+printf 'model = "o3"\n' > "$HOME/.codex/config.toml"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: writes with no hooks"     '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+fresh_home
+mkdir -p "$HOME/.codex"
+printf 'model = "o3"\n%s\ncommand = "/x/.agentbar/hooks/codex/hook.js"\n' "$BLOCK" > "$HOME/.codex/config.toml"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: writes while untrusted"   '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+fresh_home
+mkdir -p "$HOME/.codex"
+CFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n%s\ncommand = "/x/.agentbar/hooks/codex/hook.js"\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:x"\n' "$BLOCK" "$CFG" > "$CFG"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: stands down when trusted" '[ ! -e "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+# An unreadable config must not silence it: a Codex session disappearing for a
+# reason nobody can see is worse than a duplicate row.
+fresh_home
+mkdir -p "$HOME/.codex"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: writes with no config"    '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+# --- the codex shim: Claude's scripts, told who is asking ------------------------
+# Codex handlers carry no `env`, so the shim is where AGENTBAR_AGENT and the row
+# prefix are set — and it loads the script in its own process, because a spawned
+# child's parent would be the shim, which exits at once, and `pid` is what the
+# frontends prune dead rows by.
+fresh_home
+printf '{"session_id":"shim1","cwd":"/tmp/proj","prompt":"hello there","model":"gpt-6"}' \
+  | "$NODE" Scripts/hooks/codex/hook.js update.js prompt
+check "shim: row is prefixed"           '[ -f "$HOME/.agentbar/state.d/codex-shim1.json" ]'
+check "shim: filed under codex"         'grep -q "\"agent\":\"codex\"" "$HOME/.agentbar/state.d/codex-shim1.json"'
+check "shim: a live state, not done"    'grep -q "\"state\":\"thinking\"" "$HOME/.agentbar/state.d/codex-shim1.json"'
+check "shim: keeps prompt and model"    'grep -q "hello there" "$HOME/.agentbar/state.d/codex-shim1.json" && grep -q "\"model\":\"gpt-6\"" "$HOME/.agentbar/state.d/codex-shim1.json"'
+# The file name is the identity; a row spelling its own id two ways is a trap.
+check "shim: id agrees with file name"  'grep -q "\"sessionId\":\"codex-shim1\"" "$HOME/.agentbar/state.d/codex-shim1.json"'
+check "shim: pid is its own parent"     'grep -q "\"pid\":$$" "$HOME/.agentbar/state.d/codex-shim1.json"'
+
+# A script name it cannot vouch for runs nothing at all: for PermissionRequest,
+# silence is what falls through to Codex's own prompt.
+fresh_home
+printf '{"session_id":"shim2"}' | "$NODE" Scripts/hooks/codex/hook.js ../claude/update.js prompt
+check "shim: refuses a path"            '[ -z "$(ls "$HOME/.agentbar/state.d/" 2>/dev/null)" ]'
+fresh_home
+printf '{"session_id":"shim3"}' | "$NODE" Scripts/hooks/codex/hook.js
+check "shim: refuses an empty script"   '[ -z "$(ls "$HOME/.agentbar/state.d/" 2>/dev/null)" ]'
+
+# The session's end is the row's deletion, which Codex never had before.
+fresh_home
+printf '{"session_id":"shim4","cwd":"/tmp/proj"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/codex/hook.js lifecycle.js start
+check "shim: lifecycle seeds a row"     '[ -f "$HOME/.agentbar/state.d/codex-shim4.json" ]'
+printf '{"session_id":"shim4"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/codex/hook.js lifecycle.js end
+check "shim: lifecycle ends the row"    '[ ! -e "$HOME/.agentbar/state.d/codex-shim4.json" ]'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

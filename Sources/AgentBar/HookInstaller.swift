@@ -254,16 +254,93 @@ enum HookInstaller {
         let config = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
         let script = hooksDir.appendingPathComponent("codex/notify.js").path
 
-        switch codexPlan(config: config, node: node, script: script) {
+        // Two independent keys in one file, applied in order. `notify` is the older
+        // integration and stays: it is the only thing that reports a Codex session
+        // until the human accepts the hooks in Codex's own trust prompt.
+        var text = config
+        switch codexPlan(config: text, node: node, script: script) {
         case .foreignNotify:
             NSLog("AgentBar: ~/.codex/config.toml already has a notify hook, not touching it")
         case .unchanged:
-            note("codex")
+            break
         case .write(let next, let repaired):
-            try next.write(to: configURL, atomically: true, encoding: .utf8)
+            text = next
             if repaired { NSLog("AgentBar: repaired a dead node path in ~/.codex/config.toml") }
-            note("codex")
         }
+        if case .write(let next, _) = codexHooksPlan(config: text, node: node,
+                                                     dir: hooksDir.path) {
+            text = next
+        }
+        if text != config { try text.write(to: configURL, atomically: true, encoding: .utf8) }
+        note("codex")
+    }
+
+    /// The events Codex fires, and which shared script answers each.
+    ///
+    /// Codex speaks Claude's hook dialect, so these are the `claude/` scripts, reached
+    /// through `codex/hook.js` — Codex's handler has no `env` field and runs the command
+    /// without a shell, so the shim is where `AGENTBAR_AGENT` and the row prefix get set.
+    ///
+    /// Timeouts are per event and Codex clamps them: `SessionEnd`'s ceiling is 3s, so
+    /// asking for 5 there would earn a warning on every session. `PermissionRequest`
+    /// keeps its 630 — above `permission.js`'s own 600s wait, so the hook is the thing
+    /// that gives up first and exits silently into Codex's own prompt, rather than being
+    /// killed mid-wait. Verified against codex-cli 0.155.0; see Scripts/hooks/codex/README.md.
+    static let codexEvents: [(event: String, script: String, arg: String?, timeout: Int)] = [
+        ("SessionStart",     "lifecycle.js", "start",  5),
+        ("SessionEnd",       "lifecycle.js", "end",    3),
+        ("UserPromptSubmit", "update.js",    "prompt", 5),
+        ("PreToolUse",       "update.js",    "pre",    5),
+        ("PostToolUse",      "update.js",    "post",   5),
+        ("Stop",             "update.js",    "stop",   5),
+        ("PermissionRequest", "permission.js", nil,   630),
+    ]
+
+    static let codexBegin = "# >>> agentbar >>> written by AgentBar; edit outside these two lines"
+    static let codexEnd = "# <<< agentbar <<<"
+
+    /// The block AgentBar owns inside `~/.codex/config.toml`.
+    ///
+    /// Array-of-tables rather than dotted keys, because Codex writes its own
+    /// `[hooks.state]` section when a human trusts a hook, and a `hooks.X = […]`
+    /// dotted key would make that a redefinition TOML refuses. Appended at the end of
+    /// the file for the same family of reason: a bare `key = value` written after a
+    /// `[[table]]` header belongs to that table, so a block in the middle would
+    /// silently capture whatever the user adds next.
+    static func codexHooksBlock(node: String, dir: String) -> String {
+        var out = [codexBegin]
+        for e in codexEvents {
+            let arg = e.arg.map { " " + $0 } ?? ""
+            out += ["[[hooks.\(e.event)]]",
+                    "[[hooks.\(e.event).hooks]]",
+                    "type = \"command\"",
+                    "command = \"\\\"\(node)\\\" \\\"\(dir)/codex/hook.js\\\" \(e.script)\(arg)\"",
+                    "timeout = \(e.timeout)"]
+            if e.event == "PermissionRequest" {
+                out.append("statusMessage = \"Waiting for you in AgentBar\"")
+            }
+            out.append("")
+        }
+        out.append(codexEnd)
+        return out.joined(separator: "\n")
+    }
+
+    /// Replace our block where it already is, or append it at the end. Pure, so the
+    /// "unknown keys survive byte for byte" promise is a test rather than a hope.
+    static func codexHooksPlan(config: String, node: String, dir: String) -> CodexPlan {
+        let block = codexHooksBlock(node: node, dir: dir)
+        if let begin = config.range(of: codexBegin),
+           let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex) {
+            let current = String(config[begin.lowerBound..<end.upperBound])
+            if current == block { return .unchanged }
+            var next = config
+            next.replaceSubrange(begin.lowerBound..<end.upperBound, with: block)
+            return .write(next, repaired: true)
+        }
+        var next = config
+        if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
+        if !next.isEmpty { next += "\n" }
+        return .write(next + block + "\n", repaired: false)
     }
 
     /// What `installCodex` should do with the TOML it found.
@@ -297,15 +374,32 @@ enum HookInstaller {
             next.replaceSubrange(line, with: ours)
             return .write(next, repaired: true)
         }
-        // Our marker somewhere the line pattern could not read (hand-edited formatting,
-        // a comment): leave it alone rather than appending a second notify key.
-        if config.contains("/.agentbar/hooks/codex/") { return .unchanged }
+        // Our marker somewhere the line pattern could not read — a comment, hand-edited
+        // formatting, a `notify` spread over several lines: leave it alone rather than
+        // appending a second notify key.
+        //
+        // Our own hooks block is cut out first, and that is not a detail. It carries the
+        // same path on every line, so without the cut a config holding the block and no
+        // `notify` at all would read as "notify is already wired" and notify would never
+        // be installed again.
+        if withoutCodexBlock(config).contains("/.agentbar/hooks/codex/") { return .unchanged }
         if config.range(of: #"^\s*notify\s*="#, options: .regularExpression) != nil {
             return .foreignNotify
         }
         var next = config
         if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
         return .write(next + ours + "\n", repaired: false)
+    }
+
+    /// The config with AgentBar's own hooks block removed, for the questions that are
+    /// about what the *user* put in the file.
+    static func withoutCodexBlock(_ config: String) -> String {
+        guard let begin = config.range(of: codexBegin),
+              let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex)
+        else { return config }
+        var out = config
+        out.removeSubrange(begin.lowerBound..<end.upperBound)
+        return out
     }
 
     /// The first `"…"` in a TOML line — the interpreter in `notify = ["node", "script"]`.

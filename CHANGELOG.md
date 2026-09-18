@@ -68,6 +68,34 @@ All notable changes to AgentBar are documented here. This project follows
   looks exactly like AgentBar working normally, which is the one failure here that
   hides itself.
 
+- **Codex joins the queue — properly.** Codex CLI grew a hooks engine shaped like
+  Claude Code's: the same event names, the same payload, the same decision envelope.
+  So the same scripts serve it, the way they already serve Copilot CLI and Qwen Code,
+  and two things change at once.
+
+  **A Codex session is now live.** It appears the moment it starts rather than after
+  its first finished turn, and carries what it is doing, which tool, the prompt you
+  typed, the model, a recap when it stops, and an ending — all of it, for the first
+  time. Until now Codex had one event upstream, `agent-turn-complete`, and a row
+  that could only say *done*. A failed turn even looked like a clean green tick.
+
+  **And a Codex approval is a real decision.** It arrives as a card with buttons,
+  it goes into `decisions.jsonl`, and the rules you wrote apply to it — because
+  Codex sends Claude's own tool vocabulary (`Bash`, `{"command": …}`), a rule
+  written for `bash:git status` covers both agents without knowing there are two.
+  No **✓ Always**, though: Codex has no channel for a standing rule, so an "always"
+  would quietly be a one-shot allow and the button is not offered — the same
+  honesty Copilot gets.
+
+  **Codex asks you once before it will run any of this.** A hook it has not been
+  told to trust is skipped in silence, and AgentBar does not sign that acceptance
+  on your behalf — it could, the API is right there, and an installer that trusts
+  its own blocking hook is exactly what rule 3 exists to prevent. So Diagnostics
+  carries a row saying the hooks are written and waiting, and the old `notify`
+  bridge keeps reporting sessions until you answer. Everything measured against
+  codex-cli 0.155.0 and written down in `Scripts/hooks/codex/README.md`, including
+  the two paths that are not verified yet.
+
 - **Today says how much of the day you answered and how much a rule did**:
   *"18 answered · 3 by your rules · they waited 34m on you"*. Kept apart rather than
   added up — a rule answers in milliseconds and nobody was asked, so folding its
