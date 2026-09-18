@@ -93,8 +93,11 @@ All notable changes to AgentBar are documented here. This project follows
   its own blocking hook is exactly what rule 3 exists to prevent. So Diagnostics
   carries a row saying the hooks are written and waiting, and the old `notify`
   bridge keeps reporting sessions until you answer. Everything measured against
-  codex-cli 0.155.0 and written down in `Scripts/hooks/codex/README.md`, including
-  the two paths that are not verified yet.
+  codex-cli 0.155.0 and written down in `Scripts/hooks/codex/README.md` — including
+  the two that matter most, checked against a live session rather than read off a
+  schema: a **deny** reaches the agent with its reason intact, and **silence falls
+  through** to Codex's own prompt, which is what every failure path in the hook
+  depends on meaning.
 
 - **Diagnostics can now do the thing it tells you to do.** Every check has carried
   its fix in words since 1.21.0, and for three of them the words were "relaunch

@@ -121,15 +121,23 @@ An installer that signs its own blocking hook is precisely what rule 3 in
 is written and waiting, and the older `notify` bridge keeps reporting sessions until
 the answer comes.
 
-## What is not verified yet
+## Both halves of the decision, checked against a live session
 
-Two paths could not be exercised before the account hit its usage limit, and they
-are the ones that matter most, so they are named rather than assumed:
+Not inferred from the schema — run, on 18 Sep 2026, with the hook returning each
+answer in turn:
 
-- a `deny` decision arriving back at Codex and stopping the command;
-- **silence as fall-through** — a hook that writes nothing must leave Codex asking
-  at its own prompt. Every one of `permission.js`'s fourteen failure paths depends
-  on it.
+**A deny reaches the agent, message and all.** The hook answered
+`{"behavior":"deny","message":"refused by the AgentBar probe"}` and Codex reported
+back: *"Příkaz se nespustil: AgentBar probe ho odmítl (`refused by the AgentBar
+probe`)."* The command did not run and the reason survived verbatim.
 
-Until both are checked against a live session, treat the approval half of this
-integration as unproven.
+**Silence falls through to Codex's own prompt.** With the hook writing nothing,
+Codex raised `item/commandExecution/requestApproval` to whoever is driving it —
+a terminal session's human, the app-server's client — and on approval the command
+ran normally. This is the property the whole design rests on: every one of
+`permission.js`'s failure paths writes nothing, and writing nothing has to mean
+"nobody decided", never "denied" and never "allowed".
+
+A hook that blocks is honoured while it blocks, too: a 20-second wait was served
+three times in one turn before the decision was taken, with no complaint from
+Codex and no early kill.
