@@ -181,20 +181,14 @@ final class UsageMeterView: NSView {
             : NSSize(width: Self.compactWidth(of: rows), height: Self.rowHeight)
     }
 
-    /// Measured exactly the way `drawCompact` draws, because a width that
-    /// disagrees with the drawing is a clipped line or a gap, and both read as a
-    /// bug. Pure, over the rows alone, so it can be checked without a view.
+    /// What the line wants, measured as the layout that draws it — so a width
+    /// that disagrees with the drawing is not a thing that can happen. Pure,
+    /// over the rows alone, so it can be checked without a view.
     static func compactWidth(of rows: [Row]) -> CGFloat {
-        var x: CGFloat = 0
-        for row in rows {
-            x += (row.provider as NSString)
-                .size(withAttributes: [.font: compactLabel]).width + 6
-            if row.used != nil { x += compactMeter + 6 }
-            x += (row.trailing as NSString)
-                .size(withAttributes: [.font: compactDigits]).width + compactGap
-        }
-        // The gap goes *between* readings; the last one does not need one after it.
-        return max(0, x - compactGap)
+        // The gap goes *between* readings; the last one does not need one after
+        // it, so the line ends where its last piece ends.
+        compactLayout(of: rows, in: .greatestFiniteMagnitude)
+            .last.map { $0.x + $0.width } ?? 0
     }
 
     /// Rows are laid out top-down, in the order they are read. Without this they
@@ -219,37 +213,87 @@ final class UsageMeterView: NSView {
     private static let compactMeter: CGFloat = 34
     private static let compactGap: CGFloat = 14
 
+    /// One piece of the island's line: a provider's name, its bar, or its number.
+    enum Piece: Equatable {
+        case name(String)
+        case meter(Double)
+        case trailing(String)
+    }
+
+    /// Where every piece lands, given the width the layout actually handed the
+    /// line — which is not always the width the line asked for. The ⋯ button and
+    /// the panel's edge are both to the right of it, so each piece gets
+    /// `min(what it wants, what is left)` and the one that runs out ends in an
+    /// ellipsis.
+    ///
+    /// That clamp is the whole fix for a line that used to draw straight through
+    /// the button and out past the panel: text drawn `at:` a point ignores the
+    /// view it is in, and since macOS 14 so does AppKit — `clipsToBounds` is
+    /// false by default, so nothing downstream was going to stop it either.
+    ///
+    /// `drawCompact` draws this list and nothing else, and `compactWidth`
+    /// measures it, so the measurement and the drawing cannot disagree.
+    static func compactLayout(of rows: [Row], in limit: CGFloat)
+        -> [(x: CGFloat, width: CGFloat, piece: Piece)] {
+        var out: [(x: CGFloat, width: CGFloat, piece: Piece)] = []
+        var x: CGFloat = 0
+        // A piece with nothing left to be drawn into is left out rather than
+        // placed at zero width past the edge, so the list is exactly what is on
+        // screen and "does it fit" is a question about the list.
+        func place(_ piece: Piece, wanting want: CGFloat) {
+            let room = max(0, min(want, limit - x))
+            if room > 0 { out.append((x, room, piece)) }
+        }
+
+        for row in rows {
+            // Truncate rather than overflow — but never draw nothing. A line
+            // squeezed narrower than its first reading used to come out empty,
+            // which looks like a broken app rather than a narrow one.
+            guard x == 0 || x < limit - 40 else { break }
+
+            let name = (row.provider as NSString)
+                .size(withAttributes: [.font: compactLabel]).width
+            place(.name(row.provider), wanting: name)
+            x += name + 6
+
+            if let used = row.used {
+                place(.meter(used), wanting: compactMeter)
+                x += compactMeter + 6
+            }
+            let trailing = (row.trailing as NSString)
+                .size(withAttributes: [.font: compactDigits]).width
+            place(.trailing(row.trailing), wanting: trailing)
+            x += trailing + compactGap
+        }
+        return out
+    }
+
     /// `Codex ▔▔▔▔ 74%   Claude ▔▔ 43%` — one line, the height the sentence it
     /// replaces already had. White rather than label colours: this one is drawn on
     /// the island's black card, where `labelColor` is whatever the menu bar's
     /// appearance says and not what is under it.
     private func drawCompact() {
-        var x: CGFloat = 0
-        let baseline: CGFloat = 2
-        for row in rows {
-            // Truncate rather than overflow — but never draw nothing. A line
-            // squeezed narrower than its first reading used to come out empty,
-            // which looks like a broken app rather than a narrow one.
-            guard x == 0 || x < bounds.width - 40 else { break }
-            let name = row.provider as NSString
-            name.draw(at: NSPoint(x: x, y: baseline), withAttributes: [
-                .font: Self.compactLabel,
-                .foregroundColor: NSColor.white.withAlphaComponent(0.72),
-            ])
-            x += name.size(withAttributes: [.font: Self.compactLabel]).width + 6
-
-            if let used = row.used {
-                let meter = NSRect(x: x, y: (bounds.height - Self.meterHeight) / 2,
-                                   width: Self.compactMeter, height: Self.meterHeight)
-                drawMeter(in: meter, used: used, onDark: true)
-                x += Self.compactMeter + 6
+        let top: CGFloat = 2
+        for (x, width, piece) in Self.compactLayout(of: rows, in: bounds.width) {
+            let box = NSRect(x: x, y: top, width: width, height: Self.rowHeight)
+            switch piece {
+            case .name(let text):
+                (text as NSString).draw(in: box, withAttributes: [
+                    .font: Self.compactLabel,
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+                    .paragraphStyle: Self.truncating,
+                ])
+            case .meter(let used):
+                drawMeter(in: NSRect(x: x, y: (bounds.height - Self.meterHeight) / 2,
+                                     width: width, height: Self.meterHeight),
+                          used: used, onDark: true)
+            case .trailing(let text):
+                (text as NSString).draw(in: box, withAttributes: [
+                    .font: Self.compactDigits,
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.55),
+                    .paragraphStyle: Self.truncating,
+                ])
             }
-            let trailing = row.trailing as NSString
-            trailing.draw(at: NSPoint(x: x, y: baseline), withAttributes: [
-                .font: Self.compactDigits,
-                .foregroundColor: NSColor.white.withAlphaComponent(0.55),
-            ])
-            x += trailing.size(withAttributes: [.font: Self.compactDigits]).width + Self.compactGap
         }
     }
 
@@ -320,6 +364,9 @@ final class UsageMeterView: NSView {
     /// nineteen twentieths is saying the only thing a colour can usefully say
     /// here.
     private func drawMeter(in rect: NSRect, used: Double, onDark: Bool) {
+        // A bar squeezed to nothing draws nothing, rather than the one rounded
+        // cap the minimum width below would otherwise put past the right edge.
+        guard rect.width > 0 else { return }
         let ink = onDark ? NSColor.white : NSColor.labelColor
         let radius = rect.height / 2
         ink.withAlphaComponent(onDark ? 0.16 : 0.12).setFill()
@@ -329,7 +376,7 @@ final class UsageMeterView: NSView {
         guard fraction > 0 else { return }
         // Never thinner than the cap it is drawn with: 1 % has to look like a
         // sliver rather than like nothing at all.
-        let width = max(rect.height, rect.width * CGFloat(fraction))
+        let width = min(rect.width, max(rect.height, rect.width * CGFloat(fraction)))
         let fill: NSColor
         switch used {
         case 95...:  fill = NSColor.systemRed
@@ -396,34 +443,43 @@ extension UsageMeterView {
               // not the block. See `UsageCenter.relevant`.
               let island = UsageMeterView(readings: UsageCenter.relevant(readings,
                                                                          active: ["Claude"]),
-                                          style: .islandFooter, tooltipReadings: readings)
+                                          style: .islandFooter, tooltipReadings: readings),
+              // The same line given less room than it wants — the state it is
+              // actually in whenever a provider's whole truth is a sentence. It
+              // used to keep drawing anyway, through the ⋯ button and out past
+              // the panel's edge, and a screenshot is the only place that was
+              // ever going to be visible.
+              let squeezed = UsageMeterView(readings: unavailable, style: .islandFooter)
         else { return false }
         menu.frame = NSRect(x: 0, y: 0, width: 340, height: menu.frame.height)
         waiting.frame = NSRect(x: 0, y: 0, width: 340, height: waiting.frame.height)
         island.frame = NSRect(x: 0, y: 0, width: 400, height: island.frame.height)
+        squeezed.frame = NSRect(x: 0, y: 0, width: 380, height: squeezed.frame.height)
 
         // Every style in one image, the island's line on its own black card the way
         // it is actually seen — a light-on-light screenshot of a dark surface has
         // told nobody anything.
         let gap: CGFloat = 12
         let size = NSSize(width: 400,
-                          height: menu.frame.height + waiting.frame.height
-                              + island.frame.height + gap * 4)
+                          height: menu.frame.height + waiting.frame.height + island.frame.height
+                              + squeezed.frame.height + gap * 5)
         let image = NSImage(size: size)
         image.lockFocus()
         NSColor.white.setFill()
         NSRect(origin: .zero, size: size).fill()
         NSColor.black.setFill()
-        NSRect(x: 0, y: 0, width: size.width, height: island.frame.height + gap).fill()
+        NSRect(x: 0, y: 0, width: size.width,
+               height: island.frame.height + squeezed.frame.height + gap * 2).fill()
         // Each view is cached with the background it is actually seen on:
         // `cacheDisplay` on a view with no window fills opaque white, which drew
         // the island's white-on-black line as white on white and looked, from the
         // outside, exactly like text that was never drawn at all.
-        let islandTop = island.frame.height + gap
+        let islandTop = island.frame.height + squeezed.frame.height + gap * 2
         let panels: [(UsageMeterView, NSPoint, NSColor)] = [
             (menu, NSPoint(x: 0, y: islandTop + gap * 2 + waiting.frame.height), .white),
             (waiting, NSPoint(x: 0, y: islandTop + gap), .white),
-            (island, NSPoint(x: 10, y: gap / 2), .black),
+            (island, NSPoint(x: 10, y: squeezed.frame.height + gap), .black),
+            (squeezed, NSPoint(x: 10, y: gap / 2), .black),
         ]
         for (view, origin, back) in panels {
             view.wantsLayer = true

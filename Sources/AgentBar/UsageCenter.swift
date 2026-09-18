@@ -458,9 +458,11 @@ final class UsageCenter {
         guard total > 0 else { return nil }
         let resets = anchor.addingTimeInterval(Self.blockLength)
         // The switch is on and there is still no percentage: say why, once, in
-        // the menu block where the meter would have been. Not on the island —
-        // that line is for numbers — and not as part of `text`, which the island
-        // does show.
+        // the menu block where the meter would have been — and, since 21d172a,
+        // on the island too, where a missing bar with no explanation was read as
+        // a broken app. It stays out of `text` so the two surfaces can each
+        // decide: `UsageMeterView.compactRows` appends it, and the island's line
+        // truncates it when there is no room.
         let why = ClaudeQuota.enabled
             ? ClaudeQuota.shortReason(for: ClaudeWeb.connected ? ClaudeWebQuota.shared.status
                                                                : ClaudeQuota.shared.status)

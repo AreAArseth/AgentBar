@@ -625,6 +625,51 @@ import Testing
         #expect(UsageMeterView.compactWidth(of: []) == 0)
     }
 
+    /// …and then stays inside the width it is *given*, which is a different
+    /// number. The footer's stack hands the line whatever is left beside the ⋯
+    /// button, and since macOS 14 nothing clips a view's drawing to its own
+    /// bounds — so a Codex meter beside Claude's whole sentence drew straight
+    /// through the button and out past the panel's rounded edge.
+    @Test func theIslandLineStaysInsideTheWidthItIsGiven() {
+        typealias Row = UsageMeterView.Row
+        let rows = [
+            Row(provider: "Codex", window: "", used: 42, trailing: "58% left"),
+            Row(provider: "Claude", window: "", used: nil,
+                trailing: "~605k tok this 5h block · resets 19:00 · the stored login is empty"),
+        ]
+        let given: CGFloat = 380
+        #expect(UsageMeterView.compactWidth(of: rows) > given)   // the line that overflowed
+
+        let placed = UsageMeterView.compactLayout(of: rows, in: given)
+        #expect(!placed.isEmpty)
+        for piece in placed {
+            #expect(piece.width >= 0)
+            #expect(piece.x + piece.width <= given)
+        }
+        // The sentence is cut short at the edge rather than dropped: it is the
+        // one reading whose whole point is the words.
+        #expect(placed.last.map { $0.x + $0.width } == given)
+        guard case .trailing(let last)? = placed.last?.piece else {
+            Issue.record("the sentence should be the last thing on the line"); return
+        }
+        #expect(last.contains("605k"))
+
+        // Narrower than the first name: what is left lands inside, and the
+        // pieces there is no room for are left out rather than drawn at zero
+        // width past the edge — a meter's rounded cap has a minimum width.
+        let cramped = UsageMeterView.compactLayout(of: rows, in: 30)
+        #expect(cramped.count < placed.count)
+        for piece in cramped {
+            #expect(piece.width > 0)
+            #expect(piece.x + piece.width <= 30)
+        }
+
+        // Asked for all the room it wants, nothing is trimmed at all.
+        let wide = UsageMeterView.compactLayout(of: rows, in: 10_000)
+        #expect(wide.count == placed.count)
+        #expect(wide.last.map { $0.x + $0.width } == UsageMeterView.compactWidth(of: rows))
+    }
+
     // MARK: - The signed-in web session
 
     /// WebKit initialises itself the first time anything touches it, and traps

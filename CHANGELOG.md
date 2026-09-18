@@ -97,6 +97,16 @@ All notable changes to AgentBar are documented here. This project follows
   "Allowed 23× here", and now that the same count is what a rule is offered from,
   a silent gap there is worse than a wrong number.
 
+- **The island's quota line ran off the side of the island.** It is handed
+  whatever width is left beside the ⋯ button, and it was drawing at full length
+  regardless — through the button and out past the panel's rounded edge — so a
+  provider whose whole truth is a sentence (Claude, while it has no percentage)
+  pushed the numbers off the screen. Text drawn at a point ignores the view it is
+  in, and since macOS 14 so does AppKit: nothing clips a view's drawing to its own
+  bounds any more. The line now places every piece inside the width it was given,
+  and the reading that runs out of room ends in an ellipsis; the whole of it is
+  still one hover away.
+
 ## 1.27.2 - 2026-09-17
 
 ### Fixed
