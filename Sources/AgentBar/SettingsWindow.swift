@@ -1,9 +1,9 @@
 import Carbon.HIToolbox
 import Cocoa
 
-/// AgentBar's Settings: a sidebar of six pages — General, Notifications,
-/// Shortcuts, Usage, Approvals and Diagnostics — each a short column of grouped
-/// rows.
+/// AgentBar's Settings: a sidebar of seven pages — General, Notifications,
+/// Shortcuts, Usage, Approvals, Rules and Diagnostics — each a short column of
+/// grouped rows.
 ///
 /// It used to be one scroll with every section stacked down it, which has two
 /// faults that compound: everything is visible at once, so nothing is findable,

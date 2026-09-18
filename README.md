@@ -378,20 +378,25 @@ launchd agent has to be booted out separately, which is what the last line does.
 | Claude Code (CLI + desktop) | full | yes | Clawd the crab | hooks: prompt, tool, permission, stop, lifecycle |
 | Claude Cowork (desktop) | working / approval / question / done — **older local mode only** | yes | Clawd the crab | watched, not hooked: Cowork gives each session a throwaway config dir, so there is nothing to install into. `CoworkWatcher` reads the audit log the app writes per session. **Newer desktop builds run Cowork inside a VM that writes no session files on the host — those sessions can't be shown until the app exposes something host-side** |
 | Codex CLI | full hooks | yes | knot + braille dot-matrix | hooks auto-installed; **Codex asks once before it runs them** |
-| Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed) |
-| Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed) |
+| Cursor CLI | working / done | yes | pointer | hooks in `~/.cursor/hooks.json` (auto-wired if Cursor is installed). No remote approval: its hooks can **refuse** a tool call but not approve one — see [what each agent will let somebody else decide](docs/permission-surfaces.md) |
+| Gemini CLI | working / done | yes | spark | hooks in `~/.gemini/settings.json` (auto-wired if Gemini is installed). No remote approval, for the same reason as Cursor: `BeforeTool` takes `block`, `deny` or `ask`, and has no `allow` |
 | GitHub Copilot CLI | working / done / failed / **approval** | yes | pixel head + dot-matrix | Claude-shaped hooks in `~/.copilot/hooks/agentbar.json` (auto-wired if Copilot is installed; needs CLI 1.0.67+ and a fresh session — it reads hook config only at startup). **Remote Allow/Deny** via its `permissionRequest` hook; no "Always", which its output contract has no room for |
 | Qwen Code | working / done / failed | yes | Q ring | Claude-style hooks in `~/.qwen/settings.json` (auto-wired if Qwen is installed); remote approval waits until its decision contract is verified |
 | OpenCode | working / approval / done / failed | yes | prompt chevron | plugin in `~/.config/opencode/plugins/` (auto-installed if OpenCode is installed); observe-only |
 | Google Antigravity | working / done | yes | pixel rainbow arch + dot-matrix | hooks in `~/.gemini/antigravity{,-cli}/hooks.json` (auto-wired); desktop 2.3.x only honors per-workspace `.agents/hooks.json`, and only `PostToolUse` fires — quiet sessions decay to done |
 | Devin (cloud) | working / blocked / finished / suspended | yes | D letterform | no local process at all — rows come from the [cloud poller](Scripts/cloud/), clicking opens the exact thread in Devin Desktop (or the web) |
 
-Hook readiness: Claude Code, Codex (`notify`), Cursor (`hooks.json`), Gemini
+Hook readiness: Claude Code, Codex (`config.toml`), Cursor (`hooks.json`), Gemini
 (`settings.json`), Antigravity (`hooks.json`), Qwen Code (`settings.json`),
 Copilot CLI (`hooks/agentbar.json`), and OpenCode (plugin) hooks all install
 automatically at launch (idempotently — every launch re-checks, nothing is
 duplicated) for the tools you have. Copilot reads its hook config once at
 startup, so a session already open won't report until you restart it.
+
+Which of them you can actually answer *for* is a shorter list than which of them
+report, and the difference is the vendor's, not AgentBar's:
+[what each agent will let somebody else decide](docs/permission-surfaces.md)
+records it per agent, measured, with the version each answer was measured against.
 
 ## Cloud agents
 

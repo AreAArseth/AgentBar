@@ -137,6 +137,16 @@ All notable changes to AgentBar are documented here. This project follows
   landed in 1.27.0. It is short, and that is the claim: no third-party Swift
   packages, no npm dependencies in the hooks. Now anybody can check it rather than
   take it.
+- **Which agents will let somebody else decide, measured** —
+  [`docs/permission-surfaces.md`](docs/permission-surfaces.md). Being *called*
+  before a tool runs is not the same as being able to approve it, and three
+  vendors sit on each side of that line. Claude Code, Codex and Copilot take an
+  allow; **Cursor and Gemini take only a refusal** — Cursor validates `allow` and
+  then compares against `"deny"` and nothing else, Gemini's `BeforeTool` has
+  `block`, `deny` and `ask` and no `allow` at all. That is why neither gets a card:
+  you would press Allow, the agent would discard it, and it would ask you again in
+  its own terminal. Every row names the version it was measured against and whether
+  it was read or run.
 
 - **Today says how much of the day you answered and how much a rule did**:
   *"18 answered · 3 by your rules · they waited 34m on you"*. Kept apart rather than

@@ -248,7 +248,7 @@ enum HookInstaller {
         note("claude")
     }
 
-    // MARK: - Codex (~/.codex/config.toml, notify hook)
+    // MARK: - Codex (~/.codex/config.toml: the hooks block, and the notify bridge)
 
     private static func installCodex() throws {
         guard let node = nodePath else { NSLog("AgentBar: node not found, Codex hooks skipped"); return }
