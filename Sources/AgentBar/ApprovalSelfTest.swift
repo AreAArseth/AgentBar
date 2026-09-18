@@ -73,16 +73,15 @@ enum ApprovalSelfTest {
         task.standardError = FileHandle.nullDevice
 
         DispatchQueue.global(qos: .userInitiated).async {
+            let started = Date()
             do { try task.run() } catch { return finish(.failed(error.localizedDescription)) }
             stdin.fileHandleForWriting.write(payload)
             try? stdin.fileHandleForWriting.close()
             let out = stdout.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
             guard !out.isEmpty else {
-                // Silence is the contract working. Which of the two it was depends on
-                // whether the wait ran out, and the hook does not say — so the honest
-                // answer is the one that does not claim to know.
-                return finish(timedOutLikely(task) ? .timedOut : .fellThrough)
+                // Silence is the contract working, and there are two of them.
+                return finish(silence(after: Date().timeIntervalSince(started), timeout: timeout))
             }
             guard let json = try? JSONSerialization.jsonObject(with: out) as? [String: Any],
                   let specific = json["hookSpecificOutput"] as? [String: Any],
@@ -93,11 +92,18 @@ enum ApprovalSelfTest {
         }
     }
 
-    /// A hook that was answered exits within a poll interval of the answer; one that
-    /// timed out exits at its deadline. Both exit 0 and print nothing, so this is a
-    /// guess — and it is only used to pick between two wordings, never to claim a
-    /// decision was made.
-    private static func timedOutLikely(_ task: Process) -> Bool { task.terminationStatus == 0 }
+    /// Which of the two silences this was.
+    ///
+    /// The exit code cannot tell them apart — every fall-through path in
+    /// `permission.js` exits 0 and prints nothing, which is the whole point of the
+    /// contract — so asking it produced one answer for both cases and the other
+    /// wording was unreachable. The clock can tell them apart: a hook that reached
+    /// its deadline waited the entire time it was given, and one that never got as
+    /// far as a card came back long before. Two seconds of slack for a process that
+    /// still has to start, read stdin and exit.
+    static func silence(after elapsed: TimeInterval, timeout: TimeInterval) -> Outcome {
+        elapsed >= timeout - 2 ? .timedOut : .fellThrough
+    }
 
     /// What an agent would send for a harmless command. `AGENTBAR_AGENT` is left
     /// alone: the request has to look like a real one for the card to render, and

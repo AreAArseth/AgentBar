@@ -301,4 +301,31 @@ import Testing
         #expect(!fm.fileExists(atPath: stale.path))
     }
 
+    // MARK: - The approval self-test
+
+    /// The self-test reports one of two silences, and it used to pick between them
+    /// by asking the hook's exit code — which is 0 down every fall-through path,
+    /// because that is exactly what the contract requires. So one wording was
+    /// always right and the other was unreachable. The clock is what actually
+    /// separates them.
+    @Test func aHookThatWaitedItsWholeDeadlineTimedOut() {
+        #expect(ApprovalSelfTest.silence(after: 90, timeout: 90) == .timedOut)
+        #expect(ApprovalSelfTest.silence(after: 88.5, timeout: 90) == .timedOut)
+    }
+
+    @Test func aHookThatCameBackEarlyNeverReachedACard() {
+        #expect(ApprovalSelfTest.silence(after: 0.2, timeout: 90) == .fellThrough)
+        #expect(ApprovalSelfTest.silence(after: 30, timeout: 90) == .fellThrough)
+    }
+
+    /// Both readings are true statements about the wiring rather than about a
+    /// decision: neither may ever read as one.
+    @Test func neitherSilenceClaimsADecisionWasMade() {
+        for outcome in [ApprovalSelfTest.silence(after: 90, timeout: 90),
+                        ApprovalSelfTest.silence(after: 1, timeout: 90)] {
+            #expect(!outcome.line.contains("allow"))
+            #expect(!outcome.line.contains("deny"))
+        }
+    }
+
 }
