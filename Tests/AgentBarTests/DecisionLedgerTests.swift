@@ -300,4 +300,21 @@ private extension String {
         #expect(DecisionLedger.quoted("") == "\"\"")
     }
 
+    /// `decisions.jsonl` is a file on somebody's disk that another tool can append
+    /// to and a person can edit, and `1e19` is an ordinary JSON number that `Int(_:)`
+    /// traps on rather than rounds. A wait longer than a year is not a wait, so the
+    /// row is read as having none instead of taking the export down with it.
+    @Test func aWaitNobodyCouldHaveWaitedIsReadAsNoWait() throws {
+        let line = #"{"v":1,"ts":1789646400,"decision":"allow","shape":"bash:git status","waited":1e19}"#
+        let row = try #require(DecisionLedger.Record(jsonLine: line))
+        #expect(row.waited == 0)
+        #expect(DecisionLedger.csv([row]).hasSuffix(",\"0\"\n"))
+    }
+
+    @Test func anOrdinaryWaitIsKept() throws {
+        let line = #"{"v":1,"ts":1789646400,"decision":"allow","shape":"bash:git status","waited":42}"#
+        let row = try #require(DecisionLedger.Record(jsonLine: line))
+        #expect(row.waited == 42)
+    }
+
 }

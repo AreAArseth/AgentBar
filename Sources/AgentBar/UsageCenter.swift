@@ -211,8 +211,21 @@ final class UsageCenter {
         else { return nil }
         return UsageWindow(name: windowName(o, fallback: fallback),
                            usedPercent: min(max(percent, 0), 100),
-                           resetsAt: (o["resets_at"] as? Double)
-                               .map { Date(timeIntervalSince1970: $0) })
+                           resetsAt: (o["resets_at"] as? Double).flatMap(resetTime))
+    }
+
+    /// A reset time out of somebody else's file, or nil when the number is not one.
+    ///
+    /// `1e19` is an ordinary JSON number — finite, parseable, and past `Int.max`, so
+    /// `Int(_:)` on it is not a wrong answer but a **runtime trap**. This is the one
+    /// number in a rollout that travels from the file into a `Date` and back out
+    /// through `Int` in the redraw signature, which runs on every refresh, so a
+    /// single silly timestamp took the whole app down rather than the one row.
+    /// The ceiling is the year 2100: a window that resets after that is not a
+    /// window resetting, and no reset time is the honest reading of it.
+    static func resetTime(_ seconds: Double) -> Date? {
+        guard seconds.isFinite, seconds > 0, seconds < 4_102_444_800 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     private static func windowName(_ window: [String: Any], fallback: String) -> String {

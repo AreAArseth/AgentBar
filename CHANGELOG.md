@@ -187,6 +187,15 @@ All notable changes to AgentBar are documented here. This project follows
   and the reading that runs out of room ends in an ellipsis; the whole of it is
   still one hover away.
 
+- **One silly number in a Codex rollout could take the whole app down.** A window's
+  reset time is read straight out of a file AgentBar does not write, and `1e19` is
+  an ordinary JSON number — finite, parseable, and past `Int.max`, so converting it
+  is not a wrong answer but a crash. It travelled from the file into a date and back
+  out through the redraw signature, which runs on every usage refresh. A reset after
+  the year 2100 is not a reset, and is now read as no reset time at all. The same
+  reading applies to a wait in the decision ledger, which is a file you are invited
+  to keep and other tools can append to.
+
 ## 1.27.2 - 2026-09-17
 
 ### Fixed

@@ -117,7 +117,13 @@ final class DecisionLedger {
             cwd = o["cwd"] as? String ?? ""
             tool = o["tool"] as? String ?? ""
             display = o["display"] as? String ?? ""
-            waited = (o["waited"] as? NSNumber)?.doubleValue ?? 0
+            // Clamped, not taken: this file is on somebody's disk, another tool can
+            // append to it and a person can edit it, and `1e19` is an ordinary JSON
+            // number that `Int(_:)` traps on rather than rounds — which the export
+            // does to every row. A wait longer than a year is not a wait, so a row
+            // carrying one is read as having none instead of taking the export down.
+            let claimed = (o["waited"] as? NSNumber)?.doubleValue ?? 0
+            waited = claimed.isFinite && claimed > 0 && claimed <= 31_536_000 ? claimed : 0
             via = o["via"] as? String ?? ""
             rule = o["rule"] as? String ?? ""
             would = o["would"] as? String ?? ""

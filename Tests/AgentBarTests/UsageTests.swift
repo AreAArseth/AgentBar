@@ -806,4 +806,37 @@ import Testing
         #expect(dirs == [".claude", ".claude-work"])
         #expect(WeightReader.claudeRoots(home: home).count == 1)
     }
+
+    // MARK: - Numbers that came from somebody else's file
+
+    /// `1e19` is an ordinary JSON number: finite, parseable, and past `Int.max`, so
+    /// `Int(_:)` on it is not a wrong answer but a runtime trap. The reset time is
+    /// the one number in a rollout that goes straight from the file into a `Date`
+    /// and back out through `Int` in the redraw signature, which runs on every
+    /// refresh — so a single silly timestamp took the app down rather than the row.
+    /// A reset in the year 2286 is not a reset; the honest reading is no reset time.
+    @Test func aResetTimeNobodyCouldMeetIsNotAResetTime() throws {
+        let tail = rollout([
+            tokenCount(limitID: "codex",
+                       primary: #"{"used_percent":40,"window_minutes":300,"resets_at":1e19}"#),
+        ])
+        let usage = try #require(UsageCenter.codexUsage(tail: tail, now: Self.noon))
+        #expect(usage.windows.count == 1)
+        #expect(usage.windows[0].usedPercent == 40)
+        #expect(usage.windows[0].resetsAt == nil)
+        // The signature is where the trap was, so it is the thing that must survive.
+        _ = UsageCenter.signature(UsageCenter.Reading(provider: "codex", text: "",
+                                                      windows: usage.windows))
+    }
+
+    /// The ordinary one still arrives, so the guard above is a ceiling and not a
+    /// wholesale refusal to read reset times.
+    @Test func anOrdinaryResetTimeStillArrives() throws {
+        let tail = rollout([
+            tokenCount(limitID: "codex",
+                       primary: window(40, minutes: 300, resets: Self.noon.addingTimeInterval(1800))),
+        ])
+        let usage = try #require(UsageCenter.codexUsage(tail: tail, now: Self.noon))
+        #expect(usage.windows[0].resetsAt == Self.noon.addingTimeInterval(1800))
+    }
 }
