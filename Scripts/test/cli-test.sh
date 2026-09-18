@@ -516,6 +516,22 @@ fresh_home
 CSV="$("$CLI" approvals --export)"
 check "export with nothing is headers" '[ "$(echo "$CSV" | wc -l | tr -d " ")" = 1 ] && echo "$CSV" | grep -q "^when,"'
 
+# --- usage: a reset time nobody could meet ---------------------------------------
+# The number comes out of a rollout AgentBar does not write. The app drops one past
+# the year 2100 because converting it is a crash there; here it would only print
+# "resets Invalid Date", and the two halves answer the same way on purpose.
+fresh_home
+export CODEX_HOME="$HOME/.codex"
+export COPILOT_HOME="$HOME/.copilot-empty"
+mkdir -p "$CODEX_HOME/sessions/2026/09/17"
+STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"timestamp":"%s","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":40.0,"window_minutes":300,"resets_at":1e19},"secondary":null,"credits":null}}}\n' "$STAMP" \
+  > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+OUT="$("$CLI" usage)"
+check "usage still reads the window"        'echo "$OUT" | grep -q "60% left"'
+check "usage drops an impossible reset"     '! echo "$OUT" | grep -q "resets"'
+check "usage never prints Invalid Date"     '! echo "$OUT" | grep -q "Invalid Date"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
