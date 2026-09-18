@@ -496,7 +496,35 @@ function durationShort(seconds) {
   return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
 }
 
+// The ledger as a spreadsheet, for handing to somebody who was not there.
+// A field beginning =, +, - or @ is prefixed with an apostrophe: the export carries
+// commands an agent wanted to run, and handing those to a spreadsheet as formulas
+// to evaluate is not something this is going to do.
+function csvField(v) {
+  let f = String(v === undefined || v === null ? "" : v);
+  if (/^[=+\-@\t\r]/.test(f)) f = "'" + f;
+  return '"' + f.replace(/"/g, '""') + '"';
+}
+
+function printApprovalsCsv(argv) {
+  const i = argv.indexOf("--days");
+  const asked = i >= 0 ? parseInt(argv[i + 1], 10) : 1;
+  const days = Number.isFinite(asked) && asked > 0 ? asked : 1;
+  const midnight = new Date(nowMs()); midnight.setHours(0, 0, 0, 0);
+  const since = midnight.getTime() / 1000 - (days - 1) * 86400;
+  const rows = readDecisions().filter((r) => r.ts >= since).sort((a, b) => a.ts - b.ts);
+  const out = [["when", "agent", "directory", "tool", "shape", "what", "decision",
+                "would have", "answered by", "rule", "waited (s)"].join(",")];
+  for (const r of rows) {
+    out.push([new Date((r.ts || 0) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+              r.agent, r.cwd, r.tool, r.shape, r.display, r.decision, r.would,
+              r.via, r.rule, Math.round(r.waited || 0)].map(csvField).join(","));
+  }
+  process.stdout.write(out.join("\n") + "\n");
+}
+
 function printApprovals(argv, json) {
+  if (argv.includes("--export")) return printApprovalsCsv(argv);
   const i = argv.indexOf("--days");
   const asked = i >= 0 ? parseInt(argv[i + 1], 10) : 1;
   const days = Number.isFinite(asked) && asked > 0 ? asked : 1;
@@ -1689,6 +1717,7 @@ switch (cmd) {
   agentbar history [--days N]     what finished today (or over N days) [--json]
   agentbar usage [--json]         what's left of each provider's quota
   agentbar approvals [--days N]   prompts you keep answering + how long they waited [--json]
+                                  --export writes the decisions themselves as CSV
   agentbar rules                  the rules you wrote and what each one has done [--json]
   agentbar forget                 empty the decision ledger
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions

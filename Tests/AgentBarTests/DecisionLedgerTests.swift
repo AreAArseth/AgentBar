@@ -260,4 +260,44 @@ private extension String {
         try handle.seekToEnd()
         try handle.write(contentsOf: Data((self + "\n").utf8))
     }
+    // MARK: - Handing the record to somebody else
+
+    /// A record you cannot show anybody is only half a record, so it comes out as a
+    /// spreadsheet. Oldest first, because that is the order it happened in.
+    @Test func theExportIsOneRowPerDecisionOldestFirst() {
+        var a = DecisionLedger.Record()
+        a.ts = 1_789_646_500; a.agent = "codex"; a.cwd = "/repo"; a.tool = "Bash"
+        a.shape = "bash:git status"; a.display = "Bash: git status"
+        a.decision = "allow"; a.via = "app"; a.waited = 12
+        var b = DecisionLedger.Record()
+        b.ts = 1_789_646_400; b.agent = "claude"; b.decision = "watch"
+        b.would = "allow"; b.via = "rule"; b.rule = "r-1"
+
+        let lines = DecisionLedger.csv([a, b]).split(separator: "\n", omittingEmptySubsequences: false)
+        #expect(lines[0].hasPrefix("when,agent,directory"))
+        #expect(lines[1].contains("\"claude\""))   // the older row first
+        #expect(lines[2].contains("\"codex\""))
+        #expect(lines[2].contains("\"bash:git status\""))
+        #expect(lines[2].contains("\"12\""))
+        // A watching rule's row is in the export and says what it would have done:
+        // a week of that is exactly the evidence somebody would be asked for.
+        #expect(lines[1].contains("\"watch\""))
+        #expect(lines[1].contains("\"r-1\""))
+    }
+
+    /// The export carries commands an agent wanted to run. A spreadsheet reads a
+    /// leading `=`, `+`, `-` or `@` as a formula to evaluate, so it is defused —
+    /// handing somebody a file that runs their own agent's command on open is not
+    /// a thing an audit trail does.
+    @Test func theExportSurvivesBeingOpenedInASpreadsheet() {
+        #expect(DecisionLedger.quoted("=cmd|'/bin/sh'!A1") == "\"'=cmd|'/bin/sh'!A1\"")
+        #expect(DecisionLedger.quoted("+1") == "\"'+1\"")
+        #expect(DecisionLedger.quoted("@x") == "\"'@x\"")
+        // …and only at the start: a command that merely contains one is untouched.
+        #expect(DecisionLedger.quoted("git log --oneline") == "\"git log --oneline\"")
+        // Quotes, commas and newlines are ordinary CSV business.
+        #expect(DecisionLedger.quoted("say \"hi\", now") == "\"say \"\"hi\"\", now\"")
+        #expect(DecisionLedger.quoted("") == "\"\"")
+    }
+
 }

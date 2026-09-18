@@ -792,6 +792,120 @@ printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
 wait "$hookpid"
 check "claude: still wrapped as before" 'grep -q "hookSpecificOutput" "$HOME/out.json"'
 
+# --- the fall-through contract, clause by clause ---------------------------------
+# SECURITY.md publishes these as F1..F18: every way this hook can fail must write
+# nothing to stdout, because writing nothing is what sends the question back to the
+# agent's own terminal. Several are asserted elsewhere in this file already; they
+# are gathered here under their numbers so that a clause nobody checks is visible
+# as a gap rather than hidden in a scenario. F15-F18 are the rules engine's, in
+# RuleEngineTests and RulesStoreTests.
+contract() { # $1 clause, $2 condition
+  check "$1 falls through" "$2"
+}
+
+fresh_home
+AGENTBAR_FORCE_APP=0 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json"
+contract "F1 no frontend"          '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=30 "$NODE" "$HOOK" >"$HOME/out.json" < <(sleep 3)
+contract "F2 stdin never closes"   '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 "$NODE" "$HOOK" </dev/null >"$HOME/out.json"
+contract "F3 empty stdin"          '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 "$NODE" "$HOOK" <<<'not json at all' >"$HOME/out.json"
+contract "F4 stdin is not JSON"    '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 "$NODE" "$HOOK" <<<'[1,2,3]' >"$HOME/out.json"
+contract "F5 payload is an array"  '[ ! -s "$HOME/out.json" ]'
+
+# F6: anything that throws. ~/.agentbar as a FILE makes the very first mkdir fail,
+# which is the same catch that guards a poll tick.
+fresh_home
+rmdir "$HOME/.agentbar/answers.d" "$HOME/.agentbar" 2>/dev/null
+printf 'not a directory' > "$HOME/.agentbar"
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=5 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" 2>/dev/null
+contract "F6 setup throws"         '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf 'junk not json' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+contract "F7 junk answer"          '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"defer"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+contract "F8 defer"                '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"allow","hookPid":999999}' > "$HOME/.agentbar/answers.d/$REQ"
+sleep 1
+contract "F9 another hook's answer" 'kill -0 "$hookpid" 2>/dev/null && [ ! -s "$HOME/out.json" ]'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+python3 - "$HOME/.agentbar/requests.d/$REQ" <<'PY'
+import json, sys
+f = sys.argv[1]
+d = json.load(open(f))
+d["hookPid"] = 999999          # a successor claimed it
+json.dump(d, open(f, "w"))
+PY
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+contract "F10 request is not ours" '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+# The frontend goes away: the hook notices on its ~2s sweep and gives the prompt back.
+touch "$HOME/.agentbar/watcher.json"
+AGENTBAR_FORCE_APP=0 kill -0 $hookpid 2>/dev/null
+wait "$hookpid" 2>/dev/null || true
+contract "F11 frontend quit"       '[ ! -s "$HOME/out.json" ]'
+
+fresh_home
+start=$(date +%s)
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=2 "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json"
+end=$(date +%s)
+contract "F12 timeout"             '[ ! -s "$HOME/out.json" ]'
+check "F12 gives up on time"       '[ $((end-start)) -le 4 ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+kill -TERM "$hookpid"
+wait "$hookpid" 2>/dev/null
+contract "F13 SIGTERM"             '[ ! -s "$HOME/out.json" ]'
+check "F13 takes its request with it" '[ ! -e "$HOME/.agentbar/requests.d/$REQ" ]'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$QO_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"answer","answers":[["NotAnOption"]]}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+contract "F14 an answer nobody offered" '[ ! -s "$HOME/out.json" ]'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

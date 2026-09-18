@@ -103,6 +103,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         + "The summary waits until you have been away from the keyboard for two minutes."
     private var notifyCaption: NSTextField!
     private var rulesBox: NSSwitch!
+    private var exportButton: NSButton!
     private var rulesPageButton: NSButton!
     private var rulesView: RulesView!
     private var notifySettingsButton: NSButton!
@@ -348,6 +349,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         rememberBox = SettingsChrome.toggle(target: self, action: #selector(toggleRemember))
         rulesBox = SettingsChrome.toggle(target: self, action: #selector(toggleRules))
+        exportButton = SettingsChrome.smallButton("Export…", target: self,
+                                                  action: #selector(exportDecisions))
         rulesPageButton = SettingsChrome.smallButton("Open Rules", target: self,
                                                      action: #selector(showRulesPage))
         rulesView = RulesView()
@@ -447,6 +450,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                                        "What AgentBar may answer on your behalf lives on its "
                                        + "own page.",
                                        control: rulesPageButton),
+                    SettingsChrome.row("Export the record",
+                                       "Every decision, with its time, the directory, what was "
+                                       + "asked and who answered — as a spreadsheet you can "
+                                       + "hand to somebody who was not there.",
+                                       control: exportButton),
                 ]),
                 SettingsChrome.header("Kept in ~/.agentbar/decisions.jsonl, on this Mac and "
                                       + "sent nowhere; `agentbar forget` empties it. It is "
@@ -701,6 +709,29 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// The master switch. Off means no rule fires and none is deleted — the list
     /// stays exactly as it was, which is the difference between "pause" and the
     /// thing people are afraid a switch will do.
+    /// Writes the ledger out as CSV. A save panel rather than a fixed path: this is
+    /// the user's own record, and where it goes is their decision like everything
+    /// else about it.
+    @objc private func exportDecisions() {
+        let rows = DecisionLedger.read()
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "agentbar-approvals.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.message = rows.isEmpty
+            ? "Nothing has been decided yet — this writes the column headings only."
+            : "\(rows.count) decision\(rows.count == 1 ? "" : "s") from ~/.agentbar/decisions.jsonl."
+        guard let window else { return }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try DecisionLedger.csv(rows).write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                guard let window = self?.window else { return }
+                NSAlert(error: error).beginSheetModal(for: window)
+            }
+        }
+    }
+
     @objc private func showRulesPage() { select(.rules) }
 
     @objc private func toggleRules() {

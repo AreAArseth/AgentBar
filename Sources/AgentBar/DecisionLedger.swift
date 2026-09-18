@@ -153,6 +153,44 @@ final class DecisionLedger {
 
     func flush() { writer.sync {} }
 
+    // MARK: - Handing the record to somebody else
+
+    /// The ledger as a spreadsheet.
+    ///
+    /// The point of keeping a record is being able to show it to someone — a
+    /// reviewer, an auditor, yourself in three months — and `decisions.jsonl` is
+    /// not that, however honest it is. One row per decision, oldest first, with the
+    /// timestamp written out as a date rather than a number nobody can read.
+    ///
+    /// Watching rows are included and say so in `decision`: a week of what a rule
+    /// *would* have done is exactly the evidence somebody would be asked for.
+    static func csv(_ rows: [Record]) -> String {
+        let header = ["when", "agent", "directory", "tool", "shape", "what",
+                      "decision", "would have", "answered by", "rule", "waited (s)"]
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime]
+        var out = [header.joined(separator: ",")]
+        for r in rows.sorted(by: { $0.ts < $1.ts }) {
+            out.append([
+                stamp.string(from: Date(timeIntervalSince1970: r.ts)),
+                r.agent, r.cwd, r.tool, r.shape, r.display,
+                r.decision, r.would, r.via, r.rule,
+                String(Int(r.waited.rounded())),
+            ].map(quoted).joined(separator: ","))
+        }
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    /// A CSV field that survives a comma, a quote, a newline — and a leading `=`,
+    /// `+`, `-` or `@`, which a spreadsheet would otherwise read as a formula. The
+    /// export carries commands somebody's agent wanted to run; handing that to
+    /// Excel as something to evaluate is not a thing this file is going to do.
+    static func quoted(_ field: String) -> String {
+        var f = field
+        if let first = f.first, "=+-@\t\r".contains(first) { f = "'" + f }
+        return "\"" + f.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
     // MARK: - The shape a repeat is counted by
 
     /// The key two prompts are "the same prompt" under.

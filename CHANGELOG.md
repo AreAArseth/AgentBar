@@ -96,6 +96,26 @@ All notable changes to AgentBar are documented here. This project follows
   codex-cli 0.155.0 and written down in `Scripts/hooks/codex/README.md`, including
   the two paths that are not verified yet.
 
+- **Export the record.** *Settings ▸ Approvals ▸ Export…* and
+  `agentbar approvals --export` write every decision out as a spreadsheet: when,
+  which agent, which directory, what was asked, who answered, which rule, and how
+  long the agent waited. A record you cannot show anybody is half a record. A
+  watching rule's rows are in it and say what they *would* have done, because a
+  week of that is exactly what somebody would be asked for. A field that starts
+  with `=`, `+`, `-` or `@` is defused on the way out — the export carries commands
+  an agent wanted to run, and a spreadsheet would read one as a formula to evaluate.
+- **The fall-through guarantee is published as a contract.** *Every failure
+  degrades to the agent's own prompt, never to an approval* used to be one sentence
+  in `SECURITY.md`. It is now eighteen numbered clauses — no frontend, unparseable
+  stdin, a junk answer, another hook's answer, a timeout, a SIGTERM, a rules file
+  that will not parse, a mode that cannot be read — and each one is a test that
+  runs on every release, named by its number so a clause nobody checks reads as a
+  gap instead of hiding inside a scenario.
+- **An SBOM rides every build**, beside CodeQL and the signed provenance that
+  landed in 1.27.0. It is short, and that is the claim: no third-party Swift
+  packages, no npm dependencies in the hooks. Now anybody can check it rather than
+  take it.
+
 - **Today says how much of the day you answered and how much a rule did**:
   *"18 answered · 3 by your rules · they waited 34m on you"*. Kept apart rather than
   added up — a rule answers in milliseconds and nobody was asked, so folding its

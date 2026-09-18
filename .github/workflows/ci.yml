@@ -87,6 +87,23 @@ jobs:
       # and resource forks; a plain zip of a .app does not.
       - name: Package the bundle for release
         run: ditto -c -k --sequesterRsrc --keepParent build/AgentBar.app AgentBar.app.zip
+      # An SBOM for a project whose whole pitch is "look at what it does" — the
+      # third leg beside CodeQL and provenance. It is short on purpose and that is
+      # the point: AgentBar has no third-party Swift packages and the hooks have no
+      # npm dependencies, so anybody can check the claim instead of taking it.
+      - name: Generate an SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: AgentBar.spdx.json
+          output-file: AgentBar.spdx.json
+      - name: Attest the SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: AgentBar.app.zip
+          sbom-path: AgentBar.spdx.json
       # Says, verifiably, that this exact zip came out of this workflow at this
       # commit. `gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar`
       # checks it, and it answers a question this project cannot answer any other

@@ -495,6 +495,27 @@ check "notify removed for the test"    '! grep -q "^notify = " "$CODEX_CFG"'
 "$CLI" install-hooks >/dev/null 2>&1
 check "notify reinstalled beside block" 'grep -q "^notify = " "$CODEX_CFG" && grep -q "^# >>> agentbar >>>" "$CODEX_CFG"'
 
+# --- the record, as something you can hand to somebody ---------------------------
+fresh_home
+printf '%s\n%s\n' \
+  '{"ts":1789646400,"agent":"claude","cwd":"/repo","tool":"Bash","shape":"bash:git status","display":"Bash: git status","decision":"allow","via":"app","waited":12}' \
+  '{"ts":1789646500,"agent":"codex","cwd":"/repo","tool":"Bash","shape":"bash:rm","display":"=cmd|/bin/sh","decision":"deny","via":"rule","rule":"r-1","waited":0}' \
+  > "$HOME/.agentbar/decisions.jsonl"
+CSV="$("$CLI" approvals --export --days 9999)"
+check "export has a header row"        'echo "$CSV" | head -1 | grep -q "^when,agent,directory"'
+check "export is one row per decision" '[ "$(echo "$CSV" | wc -l | tr -d " ")" = 3 ]'
+check "export is oldest first"         'echo "$CSV" | sed -n 2p | grep -q claude'
+check "export carries the wait"        'echo "$CSV" | sed -n 2p | grep -q "\"12\""'
+check "export names the rule"          'echo "$CSV" | sed -n 3p | grep -q "\"r-1\""'
+# The export carries commands an agent wanted to run; a spreadsheet must not be
+# handed one as a formula to evaluate.
+check "export defuses a formula"       'echo "$CSV" | sed -n 3p | grep -q "\"'"'"'=cmd"'
+check "export writes a date, not a number" 'echo "$CSV" | sed -n 2p | grep -q "2026-"'
+
+fresh_home
+CSV="$("$CLI" approvals --export)"
+check "export with nothing is headers" '[ "$(echo "$CSV" | wc -l | tr -d " ")" = 1 ] && echo "$CSV" | grep -q "^when,"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

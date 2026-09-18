@@ -69,9 +69,42 @@ guarantees worth knowing when auditing:
   counted by nothing as one); one invalid rule voids the whole file and Diagnostics reports it, because a
   rule that quietly stopped applying looks identical to AgentBar behaving normally.
   See `Sources/AgentBar/RuleEngine.swift`.
-- Every failure path (app missing, killed hook, timeout, malformed files, a rules
-  file that will not parse) degrades to the agent's normal interactive prompt —
-  never to an approval.
+- **Every failure degrades to the agent's own prompt, never to an approval.** This
+  is the one guarantee the rest of the product is built on, so it is written out
+  below as a numbered contract rather than a sentence, and each clause is a test
+  that runs on every release.
+
+### The fall-through contract
+
+`permission.js` writes a decision to stdout, and **writing nothing means "no
+decision"** — the host falls back to asking at its own terminal. Every clause below
+is a path that must write nothing, and each is a test that runs on every release:
+F1–F14 in `Scripts/test/permission-hook-test.sh`, which names them by number and
+runs in CI on macOS and Linux; F15–F18 in `RuleEngineTests` and `RulesStoreTests`.
+
+| # | When | Why it cannot be an approval |
+|---|---|---|
+| F1 | No frontend is running | Nobody could have looked at it |
+| F2 | stdin never closes within 1 s | The hook has no request to show |
+| F3 | stdin is empty | as F2 |
+| F4 | stdin is not valid JSON | as F2 |
+| F5 | The payload is not an object | as F2 |
+| F6 | Anything throws — setting up, or in a poll tick | The wait ended without an answer being read |
+| F7 | The answer file is unreadable or junk | An answer nobody can parse is not an answer |
+| F8 | The answer says `defer`, or a verb we do not know | Deferring is explicitly not deciding |
+| F9 | The answer carries another hook's `hookPid` | It answers a request this hook is not showing |
+| F10 | The request file stopped being ours | A successor hook owns it now |
+| F11 | The frontend quit mid-wait | Nobody is there to have answered |
+| F12 | The wait times out (600 s, `AGENTBAR_APPROVAL_TIMEOUT`) | Silence is not consent |
+| F13 | SIGTERM or SIGINT | The host is taking the prompt back |
+| F14 | A question's answer is malformed, or answers something that was not asked | as F7 |
+| F15 | No rule matches | Nothing is written to `answers.d` at all |
+| F16 | The rules file is malformed, or its version is newer than this build | The whole file is void, never partly applied |
+| F17 | A rule's `mode` cannot be read | Void — never read as "answering" |
+| F18 | The live command trips the refusal table | Falls through, and no setting turns that table off |
+
+The asymmetry in F16 and F17 is deliberate: an unreadable policy file must fail
+towards asking, never towards allowing.
 - Keystroke approval for non-Claude agents requires the user to grant the
   Accessibility permission and a per-prompt click on an explicitly labeled item.
 
