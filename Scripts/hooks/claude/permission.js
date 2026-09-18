@@ -269,7 +269,10 @@ function run() {
         try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
         writeAtomic(statePath, { ...prev, agent, state: "question",
           label: "❓ " + oneLine(q.question || "Waiting for your answer"),
-          sessionId: p.session_id || "", pid: process.ppid, started: true,
+          // rowId, like the file this is being written into and like every other
+          // writer of this row: a raw id here means the field and the file name
+          // disagree for any agent that carries a prefix.
+          sessionId: rowId(p.session_id), pid: process.ppid, started: true,
           ts: Math.floor(Date.now() / 1000) });
       } catch {}
       process.exit(0);
@@ -314,7 +317,7 @@ function run() {
       writeAtomic(statePath, { ...prev, agent,
         state: isQuestion ? "question" : "permission",
         label: isQuestion ? "❓ " + oneLine(questions[0].question) : display,
-        sessionId: p.session_id || "", pid: process.ppid, started: true,
+        sessionId: rowId(p.session_id), pid: process.ppid, started: true,
         ts: Math.floor(Date.now() / 1000) });
     } catch {}
 

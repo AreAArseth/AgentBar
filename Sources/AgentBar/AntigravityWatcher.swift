@@ -119,9 +119,13 @@ final class AntigravityWatcher {
         if let h = hosts[id] { return h }
         guard !resolving.contains(id) else { return nil }
         resolving.insert(id)
-        DispatchQueue.global(qos: .utility).async {
+        // Weak on the OUTER closure, which is the one that outlives the call: an
+        // inner `[weak self]` under a closure that already captured self strongly
+        // is a promise the outer capture has already broken, and the compiler says
+        // so. A watcher that went away while lsof ran wants the update dropped.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let found = Self.findHost(conversation: id)
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
                 self?.resolving.remove(id)
                 if let found { self?.hosts[id] = found }
             }

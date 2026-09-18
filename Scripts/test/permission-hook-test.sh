@@ -906,6 +906,31 @@ printf '{"behavior":"answer","answers":[["NotAnOption"]]}' > "$HOME/.agentbar/an
 wait "$hookpid"
 contract "F14 an answer nobody offered" '[ ! -s "$HOME/out.json" ]'
 
+# --- 31. A row's id and the name of the file it lives in are the same thing ----
+# The app takes a session's id from the state file's NAME; the Linux CLI matches a
+# request against the `sessionId` written INSIDE it. This hook wrote the raw id
+# into a row whose file name carried the prefix, so for any agent that has one the
+# two disagreed — invisible while every prefix was empty, and a session that reads
+# as two the moment one is not. Every other writer of this row already used the
+# prefixed form.
+fresh_home
+env "${CODEX_ENV[@]}" AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$CODEX_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "codex: the row names itself"    'grep -q "\"sessionId\":\"codex-cdx1\"" "$HOME/.agentbar/state.d/codex-cdx1.json"'
+check "codex: and the request agrees"  'grep -q "\"sessionId\":\"codex-cdx1\"" "$HOME/.agentbar/requests.d/$REQ"'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
+# An agent with no prefix is byte-unchanged: the id is the id.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "claude: the row still names itself" 'grep -q "\"sessionId\":\"testsess\"" "$HOME/.agentbar/state.d/testsess.json"'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
