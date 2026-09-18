@@ -11,6 +11,10 @@ enum HookInstaller {
     /// Resolved once per launch: the fallback probes the user's login shell, which can
     /// cost hundreds of ms on nvm/fnm setups — never pay that four times.
     private static let nodePath: String? = findNode()
+    /// The interpreter and the scripts, for anything that needs to *run* a hook
+    /// rather than install one — `ApprovalSelfTest` is the only caller.
+    static var resolvedNode: String? { nodePath }
+    static var installedHooks: URL { hooksDir }
 
     /// Agent ids whose hooks this launch actually wired — the tools the user has,
     /// minus any whose config we refused to touch. The welcome window reports it, so

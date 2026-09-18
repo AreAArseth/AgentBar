@@ -262,4 +262,43 @@ import Testing
         // mistaken for the interpreter.
         #expect(Diagnostics.nodePaths(in: #"{"a":"/x/node/y.js"}"#).isEmpty)
     }
+    // MARK: - The fixes the app can carry out itself
+
+    /// A fix in words is an instruction; a fix with a button is a fix. Only where it
+    /// is genuinely AgentBar's to make, though — a `chmod` on a path in somebody's
+    /// home stays a sentence.
+    @Test func onlyTheFixesAgentBarCanMakeCarryOne() throws {
+        try write(".codex/config.toml", "model = \"o3\"\n")
+        #expect(check("agent.codex.wired")?.repair == .reinstallHooks)
+        #expect(check("hooks.copied")?.repair == nil)   // the dirs exist in this fixture
+        // A passing check never offers one: there is nothing to do.
+        #expect(check("dirs.state.d")?.status == .ok)
+        #expect(check("dirs.state.d")?.repair == nil)
+    }
+
+    @Test func makingTheDirectoriesMakesThem() throws {
+        let base = home.appendingPathComponent(".agentbar-fresh", isDirectory: true)
+        #expect(Diagnostics.apply(.makeDirectories, base: base))
+        for name in ["state.d", "requests.d", "answers.d"] {
+            #expect(FileManager.default.fileExists(atPath: base.appendingPathComponent(name).path))
+        }
+    }
+
+    /// Sweeping uses the same windows the pruning rules do, so the button removes
+    /// exactly what a running AgentBar would have removed anyway — and nothing else.
+    @Test func sweepingTakesTheStaleAndLeavesTheLive() throws {
+        let base = home.appendingPathComponent(".agentbar", isDirectory: true)
+        let fm = FileManager.default
+        let fresh = base.appendingPathComponent("requests.d/fresh.json")
+        let stale = base.appendingPathComponent("requests.d/stale.json")
+        try Data().write(to: fresh)
+        try Data().write(to: stale)
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)],
+                             ofItemAtPath: stale.path)
+
+        #expect(Diagnostics.apply(.sweepOrphans, base: base))
+        #expect(fm.fileExists(atPath: fresh.path))
+        #expect(!fm.fileExists(atPath: stale.path))
+    }
+
 }

@@ -30,6 +30,71 @@ enum Diagnostics {
         var detail: String?
         /// What to do about it. Only set when there is something to do.
         var fix: String?
+        /// …and, when the app can do that itself, the thing it would do.
+        ///
+        /// Only where the fix is genuinely AgentBar's to make. A `chmod` on a
+        /// directory the user made unwritable is theirs, and a button that silently
+        /// changed permissions on a path in their home would be a worse product than
+        /// a sentence telling them the command.
+        var repair: Repair?
+    }
+
+    /// What a **Fix it** button actually does. Deliberately a short list: three
+    /// things AgentBar already does on its own at launch, offered on demand instead
+    /// of asking somebody to quit and reopen the app to get them.
+    enum Repair: String, Equatable {
+        /// Re-run the installer: wiring, the node path that moved, the script copies.
+        case reinstallHooks
+        /// Create the `~/.agentbar` directories the hooks write into.
+        case makeDirectories
+        /// Delete the files past their pruning window.
+        case sweepOrphans
+
+        var title: String {
+            switch self {
+            case .reinstallHooks:  return "Re-install hooks"
+            case .makeDirectories: return "Create them"
+            case .sweepOrphans:    return "Clear them"
+            }
+        }
+    }
+
+    /// Performs a repair and says whether anything threw. Synchronous and slow
+    /// enough to matter (`reinstallHooks` probes the login shell for node), so
+    /// callers run it off the main thread.
+    @discardableResult
+    static func apply(_ repair: Repair,
+                      base: URL = FileManager.default.homeDirectoryForCurrentUser
+                          .appendingPathComponent(".agentbar", isDirectory: true)) -> Bool {
+        let fm = FileManager.default
+        switch repair {
+        case .reinstallHooks:
+            HookInstaller.installIfNeeded()
+            return true
+        case .makeDirectories:
+            var ok = true
+            for name in ["state.d", "requests.d", "answers.d"] {
+                do {
+                    try fm.createDirectory(at: base.appendingPathComponent(name, isDirectory: true),
+                                           withIntermediateDirectories: true)
+                } catch { ok = false }
+            }
+            return ok
+        case .sweepOrphans:
+            // The same windows the pruning rules use, so this button removes exactly
+            // what a running AgentBar would have removed anyway — never more.
+            let now = Date().timeIntervalSince1970
+            for (name, maxAge) in [("state.d", 86_400.0), ("requests.d", 660.0), ("answers.d", 60.0)] {
+                let dir = base.appendingPathComponent(name, isDirectory: true)
+                let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+                for url in files {
+                    let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                        .contentModificationDate?.timeIntervalSince1970 ?? now
+                    if now - mtime > maxAge { try? fm.removeItem(at: url) }
+                }
+            }
+            return true
+        }
     }
 
     /// One wired integration, as seen from the outside.
@@ -188,7 +253,8 @@ enum Diagnostics {
             guard exists else {
                 out.append(Check(id: "dirs.\(name)", title: "~/.agentbar/\(name)", status: .fail,
                                  detail: "Missing.",
-                                 fix: "Relaunch AgentBar — it creates these on start. If it comes back, check the permissions on ~/.agentbar."))
+                                 fix: "Relaunch AgentBar — it creates these on start. If it comes back, check the permissions on ~/.agentbar.",
+                                 repair: .makeDirectories))
                 continue
             }
             // Actually write: a directory can exist and still be unusable, and this is
@@ -212,7 +278,8 @@ enum Diagnostics {
             id: "hooks.copied", title: "Hook scripts installed",
             status: missing.isEmpty ? .ok : .fail,
             detail: missing.isEmpty ? nil : "Missing: \(missing.joined(separator: ", ")).",
-            fix: missing.isEmpty ? nil : "Relaunch AgentBar — it re-copies the scripts from the app bundle on every launch.")]
+            fix: missing.isEmpty ? nil : "Relaunch AgentBar — it re-copies the scripts from the app bundle on every launch.",
+            repair: missing.isEmpty ? nil : .reinstallHooks)]
 
         // Only for agents that are actually here: the installer pins a script when it
         // wires that agent, so a machine without Cursor keeps the bundled shebang and
@@ -281,7 +348,8 @@ enum Diagnostics {
         out.insert(Check(id: "agent.\(i.id).wired", title: "\(i.name) hooks",
                          status: anyWired ? .ok : .fail,
                          detail: anyWired ? nil : "Installed, but AgentBar is not wired into it.",
-                         fix: anyWired ? nil : "Relaunch AgentBar; if it stays unwired, ~/\(i.configs[0]) may be unreadable."),
+                         fix: anyWired ? nil : "Relaunch AgentBar; if it stays unwired, ~/\(i.configs[0]) may be unreadable.",
+                         repair: anyWired ? nil : .reinstallHooks),
                    at: 0)
         if anyWired { out.append(lastSeenCheck(i, base: base, now: now)) }
         if i.id == "copilot" { out += copilotExecCheck(home: home) }
@@ -296,7 +364,8 @@ enum Diagnostics {
         return [Check(id: "agent.\(i.id).interpreter", title: "\(i.name)'s node still exists",
                       status: .fail,
                       detail: "~/\(rel) points at \(dead[0]), which is gone. The hooks never run, so they never complain.",
-                      fix: "Relaunch AgentBar — it repairs the path now. If it comes back after every node upgrade, link a stable alias into /usr/local/bin.")]
+                      fix: "Relaunch AgentBar — it repairs the path now. If it comes back after every node upgrade, link a stable alias into /usr/local/bin.",
+                      repair: .reinstallHooks)]
     }
 
     /// `JSONSerialization` escapes forward slashes, so a config AgentBar itself wrote
@@ -432,7 +501,8 @@ enum Diagnostics {
         }
         return [Check(id: "orphans", title: "No leftovers in ~/.agentbar", status: stale.isEmpty ? .ok : .warn,
                       detail: stale.isEmpty ? nil : "Past their pruning window: \(stale.joined(separator: ", ")).",
-                      fix: stale.isEmpty ? nil : "Harmless — frontends skip them. They clear on the next pass with AgentBar running.")]
+                      fix: stale.isEmpty ? nil : "Harmless — frontends skip them. They clear on the next pass with AgentBar running.",
+                      repair: stale.isEmpty ? nil : .sweepOrphans)]
     }
 
     // MARK: - This Mac

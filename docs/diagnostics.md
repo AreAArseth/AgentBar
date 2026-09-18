@@ -74,6 +74,16 @@ Repeated for each entry in the integration table, `<id>` being the agent id.
 | `agent.<id>.interpreter` | the node path *inside that config* still exists, emitted only when it does not |
 | `agent.<id>.lastSeen` | when this agent last reported, from `history.jsonl`. **No record is `ok`**, not a warning — history only starts when a frontend starts keeping it, so every agent is blank on a freshly updated machine and flagging that would bury the one row that matters under eight that don't. Wired and silent for 14 days *is* a warning: that is the shape of a broken integration every other check passes |
 | `claude.configDir` | the `~/.agentbar/claude-config-dir` hint agrees with the live `CLAUDE_CONFIG_DIR` |
+Some rows carry a **Fix it** button as well as a sentence — only where the repair is
+AgentBar's own to make: re-installing the hooks (wiring, a node path that moved, the
+script copies), creating the `~/.agentbar` directories, and clearing files past their
+pruning window. A `chmod` on a path in your home stays a sentence, because a button
+that silently changed permissions there would be the worse product.
+
+Beside them sits **Test an approval**, which is not a check at all: it raises a real
+approval through the real hook and waits for you to answer it. Every other row can
+pass while the thing it describes has never once run.
+
 | `codex.hooks` | Codex has accepted its hooks. Codex runs none until a human says yes, and an unaccepted hook is skipped in silence — so the wired row, which the older `notify` key alone satisfies, cannot tell you. `warn` until the answer lands in `[hooks.state]` |
 | `copilot.exec` | Copilot's hook runs node directly. A `bash` wrapper makes the hook's parent a shell that exits at once — and that pid is what prunes dead rows, so every Copilot row would vanish on the next refresh |
 

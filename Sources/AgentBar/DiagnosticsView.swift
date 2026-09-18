@@ -30,6 +30,11 @@ final class DiagnosticsView: NSView {
     private let copyButton = NSButton(title: "Copy report", target: nil, action: nil)
     private var checks: [Diagnostics.Check] = []
     private var running = false
+    /// The repair behind each **Fix it** button, by the button's tag. A row is
+    /// rebuilt on every refresh, so this is rebuilt with it.
+    private var repairs: [Diagnostics.Repair] = []
+    private let testButton = NSButton()
+    private let testResult = NSTextField(wrappingLabelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -48,7 +53,20 @@ final class DiagnosticsView: NSView {
         recheck.controlSize = .small
         recheck.font = .systemFont(ofSize: 11)
 
-        let header = NSStackView(views: [summary, NSView(), recheck, copyButton])
+        testButton.title = "Test an approval"
+        testButton.target = self
+        testButton.action = #selector(selfTest)
+        testButton.bezelStyle = .rounded
+        testButton.controlSize = .small
+        testButton.font = .systemFont(ofSize: 11)
+        testButton.toolTip = "Raises a real approval through the real hook. Answer it like any other."
+
+        testResult.font = .systemFont(ofSize: 10)
+        testResult.textColor = .secondaryLabelColor
+        testResult.preferredMaxLayoutWidth = Self.textWidth
+        testResult.isHidden = true
+
+        let header = NSStackView(views: [summary, NSView(), testButton, recheck, copyButton])
         header.orientation = .horizontal
         header.spacing = 6
         header.alignment = .centerY
@@ -57,7 +75,7 @@ final class DiagnosticsView: NSView {
         rows.alignment = .leading
         rows.spacing = 8
 
-        let stack = NSStackView(views: [header, rows])
+        let stack = NSStackView(views: [header, testResult, rows])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -113,6 +131,7 @@ final class DiagnosticsView: NSView {
             summary.textColor = failed.isEmpty ? .secondaryLabelColor : .systemRed
         }
 
+        repairs.removeAll()
         for check in attention.prefix(Self.maxRows) { rows.addArrangedSubview(row(check)) }
         if attention.count > Self.maxRows {
             let more = NSTextField(labelWithString:
@@ -151,11 +170,76 @@ final class DiagnosticsView: NSView {
         text.alignment = .leading
         text.spacing = 2
 
-        let row = NSStackView(views: [dot, text])
+        var parts: [NSView] = [dot, text]
+        // A fix AgentBar can carry out itself gets a button, and only then. Every
+        // check has carried its fix in words since 1.21.0; the ones worth a button
+        // are the three the app already does at launch, so the sentence "relaunch
+        // AgentBar" stops being an instruction and starts being a click.
+        if let repair = check.repair {
+            let button = NSButton(title: repair.title, target: self, action: #selector(fix(_:)))
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+            button.tag = repairs.count
+            repairs.append(repair)
+            parts += [NSView(), button]
+        }
+
+        let row = NSStackView(views: parts)
         row.orientation = .horizontal
         row.alignment = .firstBaseline
         row.spacing = 6
+        if parts.count > 2 { row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true }
         return row
+    }
+
+    /// Does the thing the row's sentence describes, then re-checks — because the
+    /// answer to "did that work" is the same report, and saying so is the whole
+    /// point of a button here.
+    @objc private func fix(_ sender: NSButton) {
+        guard repairs.indices.contains(sender.tag), !running else { return }
+        let repair = repairs[sender.tag]
+        let was = sender.title
+        sender.isEnabled = false
+        sender.title = "Fixing…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = Diagnostics.apply(repair)
+            DispatchQueue.main.async {
+                sender.title = ok ? was : "Could not"
+                sender.isEnabled = true
+                // The installer finishes its own work asynchronously; re-check once
+                // it has had a moment, or the report is of the state before the fix.
+                DispatchQueue.main.asyncAfter(deadline: .now() + (ok ? 1.2 : 0)) {
+                    self?.refresh()
+                }
+            }
+        }
+    }
+
+    /// The one check that does not read a file and reason about it: it raises a real
+    /// approval through the real hook and waits for the human to answer it. Every
+    /// other row can pass while the thing they describe has never actually run —
+    /// which is exactly what happened here for six releases.
+    @objc private func selfTest() {
+        guard !running else { return }
+        testButton.isEnabled = false
+        testButton.title = "Answer it…"
+        testResult.stringValue = "A card should be waiting for you in the menu bar. Answer it."
+        testResult.textColor = .secondaryLabelColor
+        testResult.isHidden = false
+        onResize?()
+        ApprovalSelfTest.run { [weak self] outcome in
+            guard let self else { return }
+            self.testButton.isEnabled = true
+            self.testButton.title = "Test an approval"
+            self.testResult.stringValue = outcome.line
+            if case .answered = outcome {
+                self.testResult.textColor = .secondaryLabelColor
+            } else {
+                self.testResult.textColor = .systemOrange
+            }
+            self.onResize?()
+        }
     }
 
     @objc private func copyReport() {

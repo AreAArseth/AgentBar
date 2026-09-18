@@ -96,6 +96,20 @@ All notable changes to AgentBar are documented here. This project follows
   codex-cli 0.155.0 and written down in `Scripts/hooks/codex/README.md`, including
   the two paths that are not verified yet.
 
+- **Diagnostics can now do the thing it tells you to do.** Every check has carried
+  its fix in words since 1.21.0, and for three of them the words were "relaunch
+  AgentBar" — so those rows grew a button that does it: re-install the hooks,
+  create the directories, clear the leftovers. Only where the repair is AgentBar's
+  own to make. A `chmod` on a path in your home stays a sentence, because a button
+  that quietly changed permissions there would be the worse product.
+- **And it can prove the approval path works, by using it.** *Test an approval*
+  raises a real request through the real hook — not a simulation, not a
+  special case — and waits for you to answer it. If it works, remote approval works
+  on this Mac; if it does not, the line underneath says which end broke. Every other
+  check reads a file and reasons about it, which means every other check can pass
+  while the feature the product is built on has never once run. That is not
+  hypothetical: on the machine this was written on it never had (issue #1).
+
 - **Export the record.** *Settings ▸ Approvals ▸ Export…* and
   `agentbar approvals --export` write every decision out as a spreadsheet: when,
   which agent, which directory, what was asked, who answered, which rule, and how
