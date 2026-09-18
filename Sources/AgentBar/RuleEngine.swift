@@ -190,6 +190,27 @@ final class RuleEngine {
         "security", "op", "gpg", "keychain", "defaults", "crontab", "at",
         "osascript", "open", "eval", "exec", "source",
         "kill", "killall", "pkill", "shutdown", "reboot", "halt",
+        // A shell, and the small family of tools whose entire job is to run some
+        // other command, are the same case as `sudo`: the word says one thing and
+        // the arguments do another, and no argument makes them routine. `sh -c`
+        // carries a whole command line that never meets the clause above it.
+        "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh",
+        "xargs", "nohup", "timeout", "nice", "stdbuf", "watch", "script",
+    ]
+
+    /// Words `DecisionLedger.verb` steps over on its way to the command the shape is
+    /// named after. This table has to step over the same ones, or the two disagree
+    /// about which word is the command — and the half that disagrees here is the half
+    /// that says yes. `sudo` is on verb's list too and is refused outright above,
+    /// which is why it is not on this one.
+    static let wrappers: Set<String> = ["command", "env"]
+
+    /// Where a tool may legitimately live outside the rule's directory. `/usr/bin/git`
+    /// is outside every repository on the machine and is still just git; a binary
+    /// anywhere else is not the tool the rule was written for, whatever its name says.
+    static let toolDirectories: [String] = [
+        "/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/usr/libexec/",
+        "/usr/local/bin/", "/opt/homebrew/bin/", "/opt/local/bin/",
     ]
 
     /// Flags and words that turn one of these tools into a different kind of act.
@@ -203,6 +224,13 @@ final class RuleEngine {
         "cp": ["-f", "--force"],
         "npm": ["--force", "-f"],
         "brew": ["--force", "-f"],
+        // A search that deletes what it finds, or runs something on it, is not a
+        // search. `find . -delete` reads like the most harmless line in this file.
+        "find": ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprintf", "-fls"],
+        // An interpreter handed a snippet on the command line is a shell by another
+        // name; the same interpreter handed a file in the repository is ordinary work.
+        "python": ["-c"], "python3": ["-c"], "node": ["-e", "--eval", "-p", "--print"],
+        "perl": ["-e", "-E"], "ruby": ["-e"], "php": ["-r"], "deno": ["eval"],
     ]
 
     /// Subcommands that discard work, rewrite history, or hand out rights. A rule
@@ -253,11 +281,35 @@ final class RuleEngine {
         if let first = words.first, first.contains("="), !first.hasPrefix("-") {
             return "an environment assignment in front of the command"
         }
+        // The wrappers, for the reason `wrappers` gives: the shape was taken from the
+        // word underneath them, so the table must read the same word.
+        while let first = words.first.map({ ($0 as NSString).lastPathComponent }),
+              wrappers.contains(first) {
+            words.removeFirst()
+            if let next = words.first, next.contains("="), !next.hasPrefix("-") {
+                return "an environment assignment in front of the command"
+            }
+        }
         guard let head = words.first, !head.hasPrefix("-") else {
             return "a command that will not tokenise"
         }
         let name = (head as NSString).lastPathComponent
         if refusedCommands.contains(name) { return "`\(name)` is never approved by a rule" }
+        // The command is itself a path whenever it is written as one, and "a path
+        // outside the directory the rule names" is a published clause — the one path
+        // nobody was checking it against was the command's own. The shape is taken
+        // from the last component, so `/tmp/evil/npm test` matches a rule somebody
+        // wrote for `npm test` while being a different program entirely.
+        if looksLikePath(head) {
+            let full = absolute(head, in: cwd)
+            if let fragment = refusedFragment(in: full) {
+                return "`\(fragment)` is never approved by a rule"
+            }
+            if !toolDirectories.contains(where: { full.hasPrefix($0) }),
+               full != cwd, !full.hasPrefix(cwd + "/") {
+                return "a command run from outside the directory the rule names"
+            }
+        }
 
         words.removeFirst()
         if let bad = refusedArguments[name]?.intersection(Set(words)).sorted().first {
@@ -267,8 +319,15 @@ final class RuleEngine {
            let sub = words.first(where: { !$0.hasPrefix("-") }), subs.contains(sub) {
             return "`\(name) \(sub)` is never approved by a rule"
         }
-        for word in words where looksLikePath(word) {
-            if let reason = refusalInPath(word, cwd: cwd) { return reason }
+        for word in words {
+            if looksLikePath(word) {
+                if let reason = refusalInPath(word, cwd: cwd) { return reason }
+            } else if let fragment = refusedFragment(in: "/" + word) {
+                // A bare name is still the file it names. `cat .env` and `cat ./.env`
+                // are one act; only one of them has a separator in it, and the table
+                // that lists `.env` was only ever shown the other.
+                return "`\(fragment)` is never approved by a rule"
+            }
         }
         return nil
     }
@@ -276,13 +335,20 @@ final class RuleEngine {
     /// The reason a file this request names puts it out of a rule's reach, or nil.
     static func refusalInPath(_ path: String, cwd: String) -> String? {
         let full = absolute(path, in: cwd)
-        for fragment in refusedPaths where full.contains(fragment) {
+        if let fragment = refusedFragment(in: full) {
             return "`\(fragment)` is never approved by a rule"
         }
         guard full == cwd || full.hasPrefix(cwd + "/") else {
             return "a path outside the directory the rule names"
         }
         return nil
+    }
+
+    /// Which forbidden fragment this text carries, if any. Split out because the
+    /// same question is asked of three different things: a path an edit names, a
+    /// path inside a command, and the command's own path.
+    static func refusedFragment(in text: String) -> String? {
+        refusedPaths.first { text.contains($0) }
     }
 
     // MARK: - Small, dull helpers the table leans on

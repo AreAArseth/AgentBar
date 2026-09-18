@@ -56,9 +56,13 @@ guarantees worth knowing when auditing:
   directory, and matching its `shape` is not enough on its own — `RuleEngine.refusal`
   re-reads the live command and falls through to the human on a chained, piped,
   redirected or substituted line (the shape of a chain is the shape of its head, so
-  this one is not optional), on `sudo` and friends, on destructive or
-  history-rewriting subcommands, on anything reaching off the machine, on a path
-  outside the rule's directory, and on any path that configures permission itself —
+  this one is not optional), on `sudo` and friends, on a shell or an interpreter
+  handed a snippet (`sh -c`, `node -e`: the name describes one act and the arguments
+  perform another), on wrappers such as `env` and `command` — read through, not
+  around, because the shape was taken from the word underneath them — on destructive
+  or history-rewriting subcommands, on anything reaching off the machine, on a path
+  outside the rule's directory **including the command's own path**, and on any path
+  that configures permission itself, whether or not it is written with a separator —
   `~/.agentbar`, an agent's settings directory, `.git/hooks`, `.git/config`. No
   setting disables that table, and anything the engine cannot parse is a refusal.
   A rule also has a **watching** mode, which new rules start in: it matches and

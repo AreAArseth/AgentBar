@@ -350,11 +350,12 @@ final class RuleSheet: NSObject {
             consequence.stringValue = prefix.replacingOccurrences(of: "**", with: "")
                 + "Answers \(subject) \(here) the moment it is asked.\n\n"
                 + "It will never answer more than one command on a line, anything piped, "
-                + "redirected or substituted, anything run through sudo, a destructive git or "
-                + "rm, anything that reaches off this Mac, a path outside "
+                + "redirected or substituted, anything run through sudo, a shell or an "
+                + "interpreter handed a snippet, a destructive git or rm, anything that "
+                + "reaches off this Mac, anything run from outside "
                 + "\(dir.isEmpty ? "that directory" : (dir as NSString).lastPathComponent)"
-                + ", or anything that configures permission itself. Those always come back to "
-                + "you, and no setting turns that off."
+                + " or naming a path outside it, or anything that configures permission "
+                + "itself. Those always come back to you, and no setting turns that off."
         }
         refreshTry()
     }

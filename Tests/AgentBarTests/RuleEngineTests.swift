@@ -273,6 +273,59 @@ import Testing
         #expect(RuleEngine.refusalInCommand("cat Sources/AgentBar/main.swift", cwd: Self.repo) == nil)
     }
 
+    /// A file name with no slash in it is still that file. `looksLikePath` asks for
+    /// a separator before it will check anything, which is how `cat .env` walked past
+    /// a table that has `.env` written in it: the clause was there and the tokeniser
+    /// never handed it the word.
+    @Test func aBareFileNameIsStillThatFile() {
+        for line in ["cat .env", "cat id_rsa", "head credentials", "cp .env /tmp/x"] {
+            #expect(RuleEngine.refusalInCommand(line, cwd: Self.repo) != nil,
+                    "should refuse: \(line)")
+        }
+    }
+
+    /// `DecisionLedger.verb` skips `env` and `command` to find the word the shape is
+    /// named after. The refusal table did not, so the two disagreed about which word
+    /// was the command — and when a measurement and a decision disagree, the one that
+    /// says yes is the one that matters: `env FOO=1 rm -rf build` arrived wearing the
+    /// shape of `rm` and met none of rm's own clauses.
+    @Test func aWrapperDoesNotHideTheCommandUnderneath() {
+        #expect(DecisionLedger.verb(of: "env FOO=1 rm -rf build") == "rm")
+        for line in ["env FOO=1 rm -rf build", "command rm -rf build",
+                     "env rm -rf build", "nohup rm -rf build"] {
+            #expect(RuleEngine.refusalInCommand(line, cwd: Self.repo) != nil,
+                    "should refuse: \(line)")
+        }
+    }
+
+    /// The command's own path is a path the request names, and the published clause
+    /// says a path outside the rule's directory is never approved. `npm` is the shape
+    /// either way; `/tmp/evil/npm` is not the npm anybody wrote a rule for.
+    @Test func aCommandRunFromOutsideTheDirectoryIsNotThatCommand() {
+        #expect(RuleEngine.refusalInCommand("/tmp/evil/npm test", cwd: Self.repo) != nil)
+        #expect(RuleEngine.refusalInCommand("../other/bin/make test", cwd: Self.repo) != nil)
+        // Where tools actually live is the exception, and it has to be: /usr/bin/git
+        // is outside every repository on the machine and is still just git.
+        #expect(RuleEngine.refusalInCommand("/usr/bin/git status", cwd: Self.repo) == nil)
+        #expect(RuleEngine.refusalInCommand("/opt/homebrew/bin/rg pattern", cwd: Self.repo) == nil)
+        // So is a tool the repository installed for itself.
+        #expect(RuleEngine.refusalInCommand("./node_modules/.bin/jest", cwd: Self.repo) == nil)
+    }
+
+    /// A shell, an interpreter handed a snippet, a `find` that deletes and an `xargs`
+    /// are one thing wearing four names: a word whose shape describes one act while
+    /// its arguments carry out another. No argument makes any of them routine, which
+    /// is the test the refused list has always applied.
+    @Test func anythingThatRunsSomethingElseIsNeverApproved() {
+        for line in ["sh -c 'rm -rf build'", "bash -lc make", "zsh script.zsh",
+                     "python3 -c 'import os'", "node -e 'process.exit()'",
+                     "perl -e unlink", "find . -delete", "find . -exec rm {} +",
+                     "xargs rm"] {
+            #expect(RuleEngine.refusalInCommand(line, cwd: Self.repo) != nil,
+                    "should refuse: \(line)")
+        }
+    }
+
     @Test func anEditOutsideTheRepositoryIsNeverApproved() {
         let r = request(tool: "Edit", command: nil,
                         input: #"{"file_path":"/Users/someone/.claude/settings.json"}"#,

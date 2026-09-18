@@ -33,11 +33,16 @@ All notable changes to AgentBar are documented here. This project follows
   to you if the line holds more than one command, a pipe, a redirect or a
   substitution — `git status && …` carries the shape of its head, so this one is
   the whole design; if it runs under `sudo`; if it is a destructive or
-  history-rewriting git, an `rm` that recurses or forces, a `chmod 777`; if it
-  reaches off this Mac; if it names a path outside the rule's directory; or if it
-  touches how permission itself is configured — `~/.agentbar`, an agent's settings,
-  `.git/hooks`. **No setting turns that list off**, and anything the engine cannot
-  read is a refusal.
+  history-rewriting git, an `rm` that recurses or forces, a `chmod 777`, a `find`
+  that deletes what it finds; if it is a shell, or an interpreter handed a snippet
+  — `sh -c …`, `node -e …` — because those describe one act in their name and carry
+  out another in their arguments; if it reaches off this Mac; if it names a path
+  outside the rule's directory, **including the path the command itself is run
+  from**, so a rule written for `npm test` does not cover `/tmp/somewhere/npm test`;
+  or if it touches how permission itself is configured — `~/.agentbar`, an agent's
+  settings, `.git/hooks`, an `.env` or a private key, named with a path or without
+  one. **No setting turns that list off**, and anything the engine cannot read is a
+  refusal.
 
   **You can see what it did.** Every firing writes a row naming the rule, so the
   rules list says *"Allowed 12× · last today"* under each one and `agentbar rules`
