@@ -134,6 +134,7 @@ import Testing
     /// With rules on and nothing matching, nobody answers. This is the whole
     /// contract: a failure to match is indistinguishable from AgentBar without
     /// rules at all.
+    /// **F15** of the fall-through contract in `SECURITY.md`.
     @Test func noMatchingRuleMeansNobodyAnswers() {
         let was = RulesStore.enabled
         defer { RulesStore.enabled = was }
@@ -145,6 +146,8 @@ import Testing
 
     /// A rules file that will not parse switches the engine off rather than
     /// applying whatever parsed. Nothing fires, and Diagnostics says why.
+    ///
+    /// **F16** of the fall-through contract in `SECURITY.md`.
     @Test func anUnreadableRulesFileFiresNothing() {
         let was = RulesStore.enabled
         defer { RulesStore.enabled = was }
@@ -162,6 +165,10 @@ import Testing
     }
 
     // MARK: - What an approval will never do
+    //
+    // **F18** of the fall-through contract in `SECURITY.md`: every clause here is a
+    // case where the shape is a true description and still not enough to say yes,
+    // and tripping any of them writes nothing at all.
 
     /// `DecisionLedger.verb` takes the shape from the FIRST command on the line, so
     /// a chained line wears the shape of its head. This is the refusal the whole

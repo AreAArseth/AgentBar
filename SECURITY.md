@@ -84,7 +84,10 @@ guarantees worth knowing when auditing:
 decision"** — the host falls back to asking at its own terminal. Every clause below
 is a path that must write nothing, and each is a test that runs on every release:
 F1–F14 in `Scripts/test/permission-hook-test.sh`, which names them by number and
-runs in CI on macOS and Linux; F15–F18 in `RuleEngineTests` and `RulesStoreTests`.
+runs in CI on macOS and Linux; F15–F18 in `RuleEngineTests` and `RulesStoreTests`,
+which carry the same numbers in their doc comments. `grep -rn "F17"` finds the
+clause and the test that holds it to, which is the point of numbering them: a
+clause whose test nobody can find is a clause somebody can delete.
 
 | # | When | Why it cannot be an approval |
 |---|---|---|

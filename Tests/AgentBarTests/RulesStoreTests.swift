@@ -52,6 +52,7 @@ import Testing
 
     /// A file from a newer AgentBar may carry a field that NARROWS a rule. Reading
     /// it while ignoring that field would apply a wider rule than the person wrote.
+    /// **F16**, the other half: a file from a later build is refused whole.
     @Test func aNewerVersionIsRefusedRatherThanGuessedAt() {
         let url = file()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -158,6 +159,8 @@ import Testing
 
     /// A typo in `mode` must not be read as "answering". It refuses the file — the
     /// one direction a guess is not allowed to go.
+    /// **F17** of the fall-through contract in `SECURITY.md`: a mode nobody can
+    /// read is never read as "answering".
     @Test func anUnreadableModeRefusesTheFile() {
         let url = file()
         defer { try? FileManager.default.removeItem(at: url) }
