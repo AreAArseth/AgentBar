@@ -15,6 +15,12 @@
 >   Copilot CLI status since 1.14.0 — the "no public event APIs" line below was
 >   true when written and is not any more. Cowork's coverage narrowed rather than
 >   grew: newer VM-mode sessions write nothing on the host (issue #13).
+>   **Codex too**: the "`notify` fires on turn completion only" line below was the
+>   whole of Codex until 1.28.0, which wires its own hooks engine — full lifecycle
+>   and a blocking `PermissionRequest`. `notify` stays as the bridge for the window
+>   before a human accepts those hooks. What each agent will and will not let
+>   somebody else decide is measured in
+>   [`docs/permission-surfaces.md`](../permission-surfaces.md).
 > - **Units.** The unit list omits everything added after 1.0.0 — the island and
 >   its welcome window (`Presentation`, `MascotDriver`, `AgentActions`,
 >   `WelcomeWindow`, `IslandPanel`, `IslandContentView`, `IslandController`), the
