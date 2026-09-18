@@ -374,12 +374,15 @@ enum Diagnostics {
             return [Check(id: "rules.file", title: "Rules", status: .skipped,
                           detail: "None written — every prompt comes to you.")]
         case .rules(let list):
-            let off = list.filter { !$0.enabled }.count
-            let live = list.count - off
+            let counts = RulesStore.Rule.Mode.allCases.map { mode in
+                (mode, list.filter { $0.mode == mode }.count)
+            }
+            let detail = counts.filter { $0.1 > 0 }
+                .map { "\($0.1) \($0.0.title.lowercased())" }
+                .joined(separator: ", ")
             return [Check(id: "rules.file", title: "Rules", status: .ok,
-                          detail: "\(live) in force"
-                                  + (off > 0 ? ", \(off) switched off" : "")
-                                  + (RulesStore.enabled ? "" : " — all paused by the switch in Settings ▸ Approvals"))]
+                          detail: (detail.isEmpty ? "none" : detail)
+                                  + (RulesStore.enabled ? "" : " — all paused by the switch in Settings ▸ Rules"))]
         case .invalid(let why):
             return [Check(id: "rules.file", title: "Rules", status: .fail,
                           detail: why + " No rule is being applied.",

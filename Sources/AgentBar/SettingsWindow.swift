@@ -24,7 +24,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     var onChange: (() -> Void)?
 
     enum Page: String, CaseIterable {
-        case general, notifications, shortcuts, usage, approvals, diagnostics
+        case general, notifications, shortcuts, usage, approvals, rules, diagnostics
 
         var title: String {
             switch self {
@@ -33,6 +33,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             case .shortcuts:   return "Shortcuts"
             case .usage:       return "Usage"
             case .approvals:   return "Approvals"
+            case .rules:       return "Rules"
             case .diagnostics: return "Diagnostics"
             }
         }
@@ -48,6 +49,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             case .shortcuts:     return NSColor.darkGray
             case .usage:         return .systemBlue
             case .approvals:     return .systemGreen
+            // The one page where something acts on your behalf, so it does not
+            // share a colour with the page that only remembers.
+            case .rules:         return .systemIndigo
             case .diagnostics:   return .systemOrange
             }
         }
@@ -59,6 +63,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             case .shortcuts:   return "keyboard"
             case .usage:       return "speedometer"
             case .approvals:   return "checkmark.shield"
+            case .rules:       return "list.bullet.rectangle"
             case .diagnostics: return "stethoscope"
             }
         }
@@ -98,6 +103,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         + "The summary waits until you have been away from the keyboard for two minutes."
     private var notifyCaption: NSTextField!
     private var rulesBox: NSSwitch!
+    private var rulesPageButton: NSButton!
     private var rulesView: RulesView!
     private var notifySettingsButton: NSButton!
     private var notifyTestButton: NSButton!
@@ -342,9 +348,12 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         rememberBox = SettingsChrome.toggle(target: self, action: #selector(toggleRemember))
         rulesBox = SettingsChrome.toggle(target: self, action: #selector(toggleRules))
+        rulesPageButton = SettingsChrome.smallButton("Open Rules", target: self,
+                                                     action: #selector(showRulesPage))
         rulesView = RulesView()
         rulesView.onResize = { [weak self] in self?.refit() }
         rulesView.onNew = { [weak self] in self?.addRule() }
+        rulesView.onEdit = { [weak self] rule in self?.addRule(RuleSheet.Prefill(rule)) }
 
         diagnostics = DiagnosticsView()
         diagnostics.onResize = { [weak self] in self?.refit() }
@@ -434,16 +443,32 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                                        + "“Allowed 23× here”, and so a rule can be offered "
                                        + "from it.",
                                        control: rememberBox),
+                    SettingsChrome.row("Rules",
+                                       "What AgentBar may answer on your behalf lives on its "
+                                       + "own page.",
+                                       control: rulesPageButton),
+                ]),
+                SettingsChrome.header("Kept in ~/.agentbar/decisions.jsonl, on this Mac and "
+                                      + "sent nowhere; `agentbar forget` empties it. It is "
+                                      + "also what a rule is offered from, so switching it "
+                                      + "off means no prompt ever offers one."),
+            ])
+        case .rules:
+            add([
+                SettingsChrome.card([
                     SettingsChrome.row("Answer from my rules",
-                                       "A rule you wrote answers a prompt the way you would "
-                                       + "have. Off stops every rule at once and deletes none.",
+                                       "Off stops every rule at once and deletes none. A rule "
+                                       + "set to Watching never answers either way.",
                                        control: rulesBox),
                 ]),
                 SettingsChrome.card([SettingsChrome.customRow(rulesView)]),
-                SettingsChrome.header("Rules live in ~/.agentbar/rules.json and decisions in "
-                                      + "~/.agentbar/decisions.jsonl, both on this Mac and "
-                                      + "sent nowhere. `agentbar rules` lists them; "
-                                      + "`agentbar forget` empties the history."),
+                SettingsChrome.header("A rule answers a prompt the way you would have — and "
+                                      + "only what you wrote. An approving rule names one "
+                                      + "directory, and the command is read again before it "
+                                      + "is answered: anything chained, elevated, destructive, "
+                                      + "reaching off this Mac, or touching how permission "
+                                      + "itself is set up always comes back to you. Kept in "
+                                      + "~/.agentbar/rules.json; `agentbar rules` lists them."),
             ])
         case .diagnostics:
             add([
@@ -676,19 +701,26 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// The master switch. Off means no rule fires and none is deleted — the list
     /// stays exactly as it was, which is the difference between "pause" and the
     /// thing people are afraid a switch will do.
+    @objc private func showRulesPage() { select(.rules) }
+
     @objc private func toggleRules() {
         RulesStore.enabled = rulesBox.state == .on
         onChange?()
     }
 
-    /// One rule, written in a sheet and appended. Nothing here edits an existing
-    /// rule in place: the file is the editor for that, and it says so.
-    private func addRule() {
+    /// One rule, written in a sheet. A rule that comes back carrying an id already
+    /// in the file replaces it; anything else is appended. That is the whole of
+    /// "edit": the sheet does not need to know which it is doing.
+    private func addRule(_ prefill: RuleSheet.Prefill = RuleSheet.Prefill()) {
         guard let window else { return }
-        RuleSheet.present(on: window) { [weak self] rule in
+        RuleSheet.present(on: window, prefill: prefill) { [weak self] rule in
             guard let self, let rule else { return }
             var all = RulesStore.load().rules
-            all.append(rule)
+            if let i = all.firstIndex(where: { $0.id == rule.id }) {
+                all[i] = rule
+            } else {
+                all.append(rule)
+            }
             RulesStore.save(all)
             rulesView.reload()
         }
@@ -699,15 +731,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// and this is the only difference between a rule and the count beside it.
     func addRule(from prefill: RuleSheet.Prefill) {
         show()
-        select(.approvals)
-        guard let window else { return }
-        RuleSheet.present(on: window, prefill: prefill) { [weak self] rule in
-            guard let self, let rule else { return }
-            var all = RulesStore.load().rules
-            all.append(rule)
-            RulesStore.save(all)
-            rulesView.reload()
-        }
+        select(.rules)
+        addRule(prefill)
     }
 
     @objc private func toggleEnabled() {

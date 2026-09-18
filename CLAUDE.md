@@ -62,6 +62,11 @@ open "build/AgentBar.app"
    anything it does not understand falls through to the human. The whole feature is
    one `guard` away from the product that existed before it: no match, a malformed
    rules file, a command that will not tokenise, and nobody answers.
+   A rule has three modes and the middle one is the point: **watching** matches,
+   works out the answer, writes it down and answers nothing, so an approving rule
+   can be judged on a week of what it *would* have done before it speaks. New rules
+   start there. Rules own a Settings page (`RulesView`, `RuleSheet`), and that sheet
+   spends most of its room on the rule's edges rather than on its fields.
 4. Hooks must never block the host agent: async, atomic writes, exit fast.
    Sole exception: `permission.js` blocks while the session is already waiting on
    the human, and must always time out silently to the normal terminal prompt.

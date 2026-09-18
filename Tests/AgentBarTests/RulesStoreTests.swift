@@ -136,6 +136,46 @@ import Testing
         #expect(why.contains("`id`"))
     }
 
+    // MARK: - The three modes
+
+    @Test func aModeSurvivesARoundTrip() {
+        let url = file()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let watching = RulesStore.Rule(id: "r-w", decision: "allow", shape: "bash:ls",
+                                       cwd: "/repo", mode: .watch, created: 1)
+        #expect(RulesStore.save([watching], to: url))
+        #expect(RulesStore.load(url: url).rules.first?.mode == .watch)
+    }
+
+    /// A file written by hand without the field is the ordinary case, and the
+    /// ordinary case is a rule that works.
+    @Test func aMissingModeMeansAnswering() {
+        let url = file()
+        defer { try? FileManager.default.removeItem(at: url) }
+        write(#"{"v":1,"rules":[{"id":"r-1","decision":"deny","shape":"bash:curl"}]}"#, to: url)
+        #expect(RulesStore.load(url: url).rules.first?.mode == .on)
+    }
+
+    /// A typo in `mode` must not be read as "answering". It refuses the file — the
+    /// one direction a guess is not allowed to go.
+    @Test func anUnreadableModeRefusesTheFile() {
+        let url = file()
+        defer { try? FileManager.default.removeItem(at: url) }
+        write(#"{"v":1,"rules":[{"id":"r-1","decision":"deny","shape":"bash:curl","mode":"yes"}]}"#,
+              to: url)
+        guard case .invalid(let why) = RulesStore.load(url: url) else {
+            Issue.record("expected a refusal"); return
+        }
+        #expect(why.contains("mode: yes"))
+        #expect(RulesStore.load(url: url).rules.isEmpty)
+    }
+
+    @Test func onlyAnAnsweringRuleAnswers() {
+        #expect(RulesStore.Rule(id: "a", decision: "allow", shape: "s", cwd: "/r", mode: .on).answers)
+        #expect(!RulesStore.Rule(id: "a", decision: "allow", shape: "s", cwd: "/r", mode: .watch).answers)
+        #expect(!RulesStore.Rule(id: "a", decision: "allow", shape: "s", cwd: "/r", mode: .off).answers)
+    }
+
     @Test func idsAreShortAndDistinct() {
         let ids = (0..<200).map { _ in RulesStore.newID() }
         #expect(ids.allSatisfy { $0.hasPrefix("r-") && $0.count == 8 })

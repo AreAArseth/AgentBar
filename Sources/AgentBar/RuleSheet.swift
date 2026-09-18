@@ -2,33 +2,71 @@ import Cocoa
 
 /// The sheet that writes one rule.
 ///
-/// Its real job is not collecting three fields — it is **showing what the rule will
-/// not do** before the person commits to it. A rule is matched by the ledger's
+/// Its real job is not collecting four fields — it is **making the rule's edges
+/// visible** before somebody commits to it. A rule is matched by the ledger's
 /// `shape`, which carries no arguments, so "allow `git push`" is a sentence whose
-/// edges are not obvious. The block at the bottom of this sheet is those edges, in
-/// the rule's own terms, and it changes as the rule does.
+/// edges are not obvious from reading it. Two things answer that: a paragraph that
+/// says what will never be answered, and a field where you type a real command and
+/// are told, right there, whether this rule would have taken it and why not.
 ///
 /// Summoned by a click and gone when it is answered — the same test the launcher
 /// and the banners pass.
 final class RuleSheet: NSObject {
     struct Prefill {
+        /// Empty for a new rule. Set means this sheet is editing that rule, and the
+        /// id travels back out unchanged so the caller replaces rather than appends.
+        var id = ""
         var decision = "allow"
         var shape = ""
         var cwd = ""
-        /// What the request said, so the sheet can show the person the exact line
-        /// they were looking at rather than only its shape.
+        var note = ""
+        var mode = RulesStore.Rule.Mode.watch
+        /// What the request said, so the sheet can show the exact line the person
+        /// was looking at rather than only its shape.
         var display = ""
+
+        init() {}
+
+        init(_ rule: RulesStore.Rule) {
+            id = rule.id
+            decision = rule.decision
+            shape = rule.shape
+            cwd = rule.cwd
+            note = rule.note
+            mode = rule.mode
+        }
+
+        init(decision: String, shape: String, cwd: String, display: String) {
+            self.decision = decision
+            self.shape = shape
+            self.cwd = cwd
+            self.display = display
+        }
     }
 
-    private let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 340),
+    /// Common enough to be worth offering on a machine whose approval history is
+    /// empty — which is every machine on the day AgentBar is installed. They are
+    /// examples, not a recommendation: each one still has to be chosen, given a
+    /// directory, and (for an approval) checked.
+    static let commonShapes = [
+        "bash:git status", "bash:git diff", "bash:git log", "bash:ls", "bash:cat",
+        "bash:grep", "bash:rg", "bash:npm test", "bash:swift build", "bash:make",
+        "bash:curl", "bash:rm",
+    ]
+
+    private let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 430),
                                  styleMask: [.titled], backing: .buffered, defer: false)
     private let kind = NSSegmentedControl(labels: ["Allow", "Deny"], trackingMode: .selectOne,
                                           target: nil, action: nil)
     private let shape = NSComboBox()
     private let place = NSPopUpButton()
+    private let mode = NSPopUpButton()
     private let note = NSTextField()
+    private let tryField = NSTextField()
+    private let tryResult = NSTextField(wrappingLabelWithString: "")
     private let consequence = NSTextField(wrappingLabelWithString: "")
     private var directories: [String] = []
+    private var editingID = ""
     private var done: ((RulesStore.Rule?) -> Void)?
     /// Retained for the life of the sheet; released when it closes.
     private static var open: RuleSheet?
@@ -42,9 +80,12 @@ final class RuleSheet: NSObject {
 
     private init(prefill: Prefill, done: @escaping (RulesStore.Rule?) -> Void) {
         self.done = done
+        editingID = prefill.id
         super.init()
 
-        let title = NSTextField(labelWithString: "A rule answers for you")
+        let editing = !prefill.id.isEmpty
+        let title = NSTextField(labelWithString: editing ? "Change this rule"
+                                                         : "A rule answers for you")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
 
         let blurb = NSTextField(wrappingLabelWithString:
@@ -65,17 +106,38 @@ final class RuleSheet: NSObject {
         shape.completes = true
         shape.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         shape.delegate = self
-        shape.addItems(withObjectValues: Self.knownShapes())
+        shape.addItems(withObjectValues: Self.offeredShapes())
         shape.stringValue = prefill.shape
         shape.placeholderString = "git status"
+        shape.toolTip = "What repeats — the command's verb, never its arguments. Type "
+            + "`git status`, or pick one you have decided about before."
 
         directories = Self.knownDirectories(including: prefill.cwd)
         place.target = self
         place.action = #selector(changed)
         rebuildPlaces(selecting: prefill.cwd)
 
+        mode.target = self
+        mode.action = #selector(changed)
+        for m in RulesStore.Rule.Mode.allCases {
+            mode.addItem(withTitle: m.title)
+            mode.lastItem?.representedObject = m.rawValue
+            mode.lastItem?.toolTip = m.explanation
+        }
+        mode.selectItem(at: RulesStore.Rule.Mode.allCases.firstIndex(of: prefill.mode) ?? 0)
+
         note.placeholderString = "Why (optional)"
         note.font = .systemFont(ofSize: 12)
+        note.stringValue = prefill.note
+
+        tryField.placeholderString = "git push --force origin main"
+        tryField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        tryField.delegate = self
+        tryField.toolTip = "Type a real command, or a file path, and see whether this rule "
+            + "would have taken it."
+
+        tryResult.font = .systemFont(ofSize: 11)
+        tryResult.preferredMaxLayoutWidth = 420
 
         consequence.font = .systemFont(ofSize: 11)
         consequence.textColor = .secondaryLabelColor
@@ -84,7 +146,8 @@ final class RuleSheet: NSObject {
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancel.bezelStyle = .rounded
         cancel.keyEquivalent = "\u{1b}"
-        let add = NSButton(title: "Add rule", target: self, action: #selector(commit))
+        let add = NSButton(title: editing ? "Save" : "Add rule", target: self,
+                           action: #selector(commit))
         add.bezelStyle = .rounded
         add.keyEquivalent = "\r"
 
@@ -95,8 +158,10 @@ final class RuleSheet: NSObject {
         let form = NSStackView(views: [
             title, blurb,
             labelled("Answer", kind), labelled("When", shape), labelled("In", place),
-            labelled("Note", note),
-            separator(), consequence, buttons,
+            labelled("Mode", mode), labelled("Note", note),
+            separator(), consequence,
+            labelled("Try it", tryField), tryResult,
+            buttons,
         ])
         form.orientation = .vertical
         form.alignment = .leading
@@ -113,11 +178,33 @@ final class RuleSheet: NSObject {
             form.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             blurb.widthAnchor.constraint(equalToConstant: 420),
             consequence.widthAnchor.constraint(equalToConstant: 420),
+            tryResult.widthAnchor.constraint(equalToConstant: 420),
             buttons.widthAnchor.constraint(equalToConstant: 420),
         ])
         sheet.contentView = content
-        sheet.contentMinSize = NSSize(width: 460, height: 300)
+        sheet.contentMinSize = NSSize(width: 470, height: 380)
         refresh()
+    }
+
+    /// One sheet, drawn to a file, for the same reason `SettingsWindow` has one:
+    /// the parts of this window that can be wrong are its layout and its wording,
+    /// and neither of those is something a test can look at. Filled in, and with
+    /// the try field already answered, because an empty form shows none of the
+    /// three things this sheet exists to say.
+    static func renderForVerification(to url: URL, prefill: Prefill, trying: String) -> Bool {
+        let sheet = RuleSheet(prefill: prefill) { _ in }
+        open = sheet
+        defer { open = nil }
+        sheet.tryField.stringValue = trying
+        sheet.refresh()
+        guard let root = sheet.sheet.contentView else { return false }
+        root.layoutSubtreeIfNeeded()
+        root.setFrameSize(root.fittingSize)
+        root.layoutSubtreeIfNeeded()
+        guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return false }
+        root.cacheDisplay(in: root.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: url)) != nil
     }
 
     private func labelled(_ text: String, _ control: NSView) -> NSView {
@@ -143,15 +230,17 @@ final class RuleSheet: NSObject {
 
     // MARK: - The two lists it offers
 
-    /// Shapes this person has actually decided about, newest first. A rule for
-    /// something you have never been asked is a rule for a prompt that may never
-    /// come; the free-text field is still there for when it is.
-    static func knownShapes(in records: [DecisionLedger.Record] = DecisionLedger.cached()) -> [String] {
+    /// Shapes this person has actually decided about, then the common ones. Without
+    /// the second half the field is empty on the day AgentBar is installed, which is
+    /// exactly when somebody is trying to work out what to type into it.
+    static func offeredShapes(in records: [DecisionLedger.Record] = DecisionLedger.cached(),
+                              common: [String] = RuleSheet.commonShapes) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         for r in records.reversed() where !r.shape.isEmpty && seen.insert(r.shape).inserted {
             out.append(r.shape)
         }
+        for c in common where seen.insert(c).inserted { out.append(c) }
         return out
     }
 
@@ -184,13 +273,30 @@ final class RuleSheet: NSObject {
         place.menu?.addItem(.separator())
         place.addItem(withTitle: "Choose…")
         place.lastItem?.representedObject = "choose"
-        if let i = directories.firstIndex(of: cwd) { place.selectItem(at: i) }
+        if let i = directories.firstIndex(of: cwd) {
+            place.selectItem(at: i)
+        } else if cwd.isEmpty, isDeny, let any = place.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == ""
+        }) {
+            place.selectItem(at: any)
+        }
     }
 
     private var isDeny: Bool { kind.selectedSegment == 1 }
 
     private var selectedDirectory: String {
         (place.selectedItem?.representedObject as? String) ?? ""
+    }
+
+    private var selectedMode: RulesStore.Rule.Mode {
+        RulesStore.Rule.Mode(rawValue: (mode.selectedItem?.representedObject as? String) ?? "")
+            ?? .watch
+    }
+
+    private var typedShape: String {
+        let text = shape.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return "" }
+        return text.contains(":") ? text : "bash:" + DecisionLedger.verb(of: text)
     }
 
     // MARK: - Keeping the consequence honest
@@ -202,8 +308,7 @@ final class RuleSheet: NSObject {
         }
         // "Any directory" exists only for a denial; switching to Allow must not
         // leave it selected and quietly mean something it is not allowed to mean.
-        let keep = selectedDirectory == "choose" ? "" : selectedDirectory
-        rebuildPlaces(selecting: keep)
+        rebuildPlaces(selecting: selectedDirectory)
         refresh()
     }
 
@@ -226,27 +331,80 @@ final class RuleSheet: NSObject {
     }
 
     private func refresh() {
-        let what = RulesView.readable(shape.stringValue.trimmingCharacters(in: .whitespaces))
+        let what = RulesView.readable(typedShape)
         let subject = what.isEmpty ? "this" : "`\(what)`"
         let dir = selectedDirectory
         let here = dir.isEmpty ? "anywhere" : "in " + (dir as NSString).lastPathComponent
+        let prefix: String
+        switch selectedMode {
+        case .on:    prefix = ""
+        case .watch: prefix = "**Watching, so it answers nothing yet.** Once you turn it on: "
+        case .off:   prefix = "**Off, so it does nothing.** Turned on, it would: "
+        }
         if isDeny {
-            consequence.stringValue =
-                "Refuses \(subject) \(here), every time, without asking. A refusal is never "
+            consequence.stringValue = prefix.replacingOccurrences(of: "**", with: "")
+                + "Refuses \(subject) \(here), every time, without asking. A refusal is never "
                 + "narrowed and never needs to be — the worst it can cost you is a prompt you "
                 + "have to answer somewhere else."
-            consequence.textColor = .secondaryLabelColor
         } else {
-            consequence.stringValue =
-                "Answers \(subject) \(here) the moment it is asked.\n\n"
+            consequence.stringValue = prefix.replacingOccurrences(of: "**", with: "")
+                + "Answers \(subject) \(here) the moment it is asked.\n\n"
                 + "It will never answer more than one command on a line, anything piped, "
                 + "redirected or substituted, anything run through sudo, a destructive git or "
                 + "rm, anything that reaches off this Mac, a path outside "
                 + "\(dir.isEmpty ? "that directory" : (dir as NSString).lastPathComponent)"
                 + ", or anything that configures permission itself. Those always come back to "
                 + "you, and no setting turns that off."
-            consequence.textColor = .labelColor
         }
+        refreshTry()
+    }
+
+    /// The field that answers "would this rule have taken *that*?" — the one thing
+    /// a paragraph cannot do, because the paragraph describes a category and the
+    /// person is holding a specific command.
+    private func refreshTry() {
+        let text = tryField.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else {
+            tryResult.stringValue = ""
+            return
+        }
+        let (verdict, colour) = Self.tryOut(text, shape: typedShape, cwd: selectedDirectory,
+                                            deny: isDeny)
+        tryResult.stringValue = verdict
+        tryResult.textColor = colour
+    }
+
+    /// Pure, so the wording is testable: what this rule would do with that command.
+    /// A path is judged as a path and anything else as a command, which is the same
+    /// split `DecisionLedger.shape(of:)` makes.
+    static func tryOut(_ text: String, shape: String, cwd: String,
+                       deny: Bool) -> (String, NSColor) {
+        guard !shape.isEmpty else {
+            return ("Fill in what the rule matches first.", .secondaryLabelColor)
+        }
+        let isPath = !text.contains(" ") && text.contains("/")
+        let itsShape = isPath
+            ? "edit:" + DecisionLedger.folder(of: text)
+            : "bash:" + DecisionLedger.verb(of: text)
+        // A rule keyed on an edit and a typed command are simply about different
+        // things; say that rather than pretending to judge it.
+        guard itsShape == shape || (isPath && shape.hasSuffix(DecisionLedger.folder(of: text)))
+        else {
+            return ("This rule does not cover that — it is \(RulesView.readable(itsShape)), "
+                    + "and the rule is \(RulesView.readable(shape)).", .secondaryLabelColor)
+        }
+        if deny {
+            return ("Refused, without asking.", .systemRed)
+        }
+        guard !cwd.isEmpty else {
+            return ("Comes back to you: the rule has no directory yet.", .systemOrange)
+        }
+        let reason = isPath ? RuleEngine.refusalInPath(text, cwd: cwd)
+                            : RuleEngine.refusalInCommand(text, cwd: cwd)
+        if let reason {
+            return ("Comes back to you — \(reason).", .systemOrange)
+        }
+        return ("Answered yes, without asking.", .systemGreen)
     }
 
     // MARK: - Leaving
@@ -257,17 +415,18 @@ final class RuleSheet: NSObject {
     }
 
     @objc private func commit() {
-        let text = shape.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { complain("A rule needs something to match.",
-                                            "Pick a prompt you have answered before, or type "
-                                            + "one — `git status`, `npm test`.") ; return }
-        // `git status` typed in the field means the shape `bash:git status`; a
-        // shape that already names its kind is taken as written.
-        let normalised = text.contains(":") ? text : "bash:" + DecisionLedger.verb(of: text)
+        guard !typedShape.isEmpty else {
+            complain("A rule needs something to match.",
+                     "Pick a prompt you have answered before, or type one — `git status`, "
+                     + "`npm test`.")
+            return
+        }
         let dir = selectedDirectory == "choose" ? "" : selectedDirectory
-        var rule = RulesStore.Rule(id: RulesStore.newID(), decision: isDeny ? "deny" : "allow",
-                                   shape: normalised, cwd: dir,
-                                   note: note.stringValue.trimmingCharacters(in: .whitespaces))
+        var rule = RulesStore.Rule(id: editingID.isEmpty ? RulesStore.newID() : editingID,
+                                   decision: isDeny ? "deny" : "allow",
+                                   shape: typedShape, cwd: dir,
+                                   note: note.stringValue.trimmingCharacters(in: .whitespaces),
+                                   mode: selectedMode)
         // The same validation the file gets, before the file gets it — a rule that
         // would refuse the whole file on the next launch must not be written now.
         if let why = RulesStore.validate(rule, index: 0, seen: []) {
@@ -294,10 +453,26 @@ final class RuleSheet: NSObject {
     }
 }
 
-extension RuleSheet: NSComboBoxDelegate {
+extension RuleSheet: NSComboBoxDelegate, NSTextFieldDelegate {
     func comboBoxSelectionDidChange(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in self?.refresh() }
     }
 
     func controlTextDidChange(_ obj: Notification) { refresh() }
+
+    /// Both fields here hold a command, and macOS's text substitutions are for
+    /// prose: with "smart dashes" on system-wide, typing `--force` into the try
+    /// field gives you an em dash, and the answer under it would then be about a
+    /// command nobody could run. Smart quotes are the same trap one step further —
+    /// a curly quote is not a shell quote. Turned off on the field editor, which
+    /// is the only place the substitution happens.
+    func control(_ control: NSControl, textShouldBeginEditing fieldEditor: NSText) -> Bool {
+        if let editor = fieldEditor as? NSTextView {
+            editor.isAutomaticDashSubstitutionEnabled = false
+            editor.isAutomaticQuoteSubstitutionEnabled = false
+            editor.isAutomaticTextReplacementEnabled = false
+            editor.isAutomaticSpellingCorrectionEnabled = false
+        }
+        return true
+    }
 }

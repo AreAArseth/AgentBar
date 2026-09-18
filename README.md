@@ -128,8 +128,13 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   terminal is not a decision anybody here witnessed.
 - **Rules you wrote** — the one thing AgentBar will answer without asking, and only
   ever a rule you typed yourself. When you have answered the same prompt the same way
-  five times, the card offers to write it down; **Settings ▸ Approvals** is where they
-  live, in plain JSON at `~/.agentbar/rules.json` that you can edit by hand. A rule
+  five times, the card offers to write it down; **Settings ▸ Rules** is where they
+  live, in plain JSON at `~/.agentbar/rules.json` that you can edit by hand. Writing
+  one shows you what it will **not** answer, and gives you a field where you type a
+  real command — `git push --force origin main` — and are told on the spot whether
+  this rule would have taken it, and which clause stopped it. A new rule starts out
+  **watching**: it answers nothing and writes down what it *would* have done, so you
+  can look at a week of that before you let it speak for you. A rule
   that **refuses** may cover every repository on the machine. A rule that **approves**
   names one — and before it answers, the command itself is checked again, not just its
   shape: anything chained, piped, redirected or substituted, anything under `sudo`, a

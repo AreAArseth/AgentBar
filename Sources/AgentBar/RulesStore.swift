@@ -47,22 +47,50 @@ enum RulesStore {
         /// legal only for a denial — see `validate`.
         var cwd = ""
         var note = ""
-        var enabled = true
+        var mode = Mode.on
+
+        /// Off, watching, or answering. The middle one is the whole reason this is
+        /// three states and not a checkbox: a rule that **approves** cannot be
+        /// checked by reading it — you find out whether it matched what you pictured
+        /// by watching it not answer for a week. Everything that enforces anything
+        /// gets this, and an approving rule is the one thing in AgentBar that does.
+        enum Mode: String, CaseIterable {
+            case on, watch, off
+
+            var title: String {
+                switch self {
+                case .on:    return "Answering"
+                case .watch: return "Watching"
+                case .off:   return "Off"
+                }
+            }
+
+            /// What it does when a matching request arrives.
+            var explanation: String {
+                switch self {
+                case .on:    return "Answers, and writes down that it did."
+                case .watch: return "Answers nothing — writes down what it would have done, so you can check it before trusting it."
+                case .off:   return "Does nothing at all. Still here."
+                }
+            }
+        }
 
         var isAllow: Bool { decision == "allow" }
+        /// Only an `on` rule ever writes an answer.
+        var answers: Bool { mode == .on }
 
         var json: [String: Any] {
             ["id": id, "created": Int(created), "decision": decision, "agent": agent,
-             "shape": shape, "cwd": cwd, "note": note, "enabled": enabled]
+             "shape": shape, "cwd": cwd, "note": note, "mode": mode.rawValue]
         }
 
         init() {}
 
         init(id: String, decision: String, shape: String, cwd: String = "",
-             agent: String = "", note: String = "", enabled: Bool = true,
+             agent: String = "", note: String = "", mode: Mode = .on,
              created: TimeInterval = Date().timeIntervalSince1970) {
             self.id = id; self.decision = decision; self.shape = shape; self.cwd = cwd
-            self.agent = agent; self.note = note; self.enabled = enabled; self.created = created
+            self.agent = agent; self.note = note; self.mode = mode; self.created = created
         }
 
         init?(json o: [String: Any]) {
@@ -75,8 +103,17 @@ enum RulesStore {
             agent = o["agent"] as? String ?? ""
             cwd = o["cwd"] as? String ?? ""
             note = o["note"] as? String ?? ""
-            enabled = o["enabled"] as? Bool ?? true
+            // An unreadable `mode` is not defaulted to `on`: a file somebody edited
+            // by hand and got wrong must not silently start answering. `validate`
+            // turns this into a refusal of the whole file.
+            mode = Mode(rawValue: o["mode"] as? String ?? Mode.on.rawValue) ?? .off
+            if o["mode"] != nil, Mode(rawValue: o["mode"] as? String ?? "") == nil {
+                badMode = o["mode"] as? String ?? "(not a string)"
+            }
         }
+
+        /// Set when `mode` was present and unreadable, so `validate` can name it.
+        var badMode: String?
     }
 
     // MARK: - Reading
@@ -145,6 +182,9 @@ enum RulesStore {
         }
         if !r.cwd.isEmpty && !r.cwd.hasPrefix("/") {
             return "\(where_) has a `cwd` that is not an absolute path."
+        }
+        if let bad = r.badMode {
+            return "\(where_) says `mode: \(bad)`; it must be \"on\", \"watch\" or \"off\"."
         }
         return nil
     }

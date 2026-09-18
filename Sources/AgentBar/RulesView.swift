@@ -1,13 +1,15 @@
 import Cocoa
 
-/// The rules list in **Settings ▸ Approvals**: what you told AgentBar to answer
-/// for you, and what each one has actually done.
+/// The rules list in **Settings ▸ Rules**: what you told AgentBar to answer for
+/// you, whether it is answering yet, and what it has actually done.
 ///
-/// Two things it insists on. A rule's line always carries **what it has done**, not
-/// only what it says — an approving rule that has fired forty times is a different
-/// object from one that has never fired, and the difference belongs on the same
-/// line as the rule. And a rules file that will not parse is shown as exactly that:
-/// a refusal, in red, with no rules listed under it, because none are in force.
+/// Three things it insists on. A rule's line always carries **what it has done**,
+/// not only what it says — a rule that has fired forty times is a different object
+/// from one that has never fired, and the difference belongs on the same line. The
+/// **mode** is a control on that line rather than a checkbox somewhere else,
+/// because "watching" is a state somebody has to be able to see at a glance and get
+/// out of. And a rules file that will not parse is shown as exactly that: a
+/// refusal, in red, with no rules listed under it, because none are in force.
 ///
 /// Its own file rather than another method on `SettingsWindow`, for the reason
 /// `DiagnosticsView` is: a section that builds a variable number of subviews and
@@ -15,13 +17,14 @@ import Cocoa
 final class RulesView: NSView {
     /// Fired when the row count changed, so the window can re-fit — both ways.
     var onResize: (() -> Void)?
-    /// The person asked for a new rule. The sheet belongs to the window, not here.
+    /// The person asked for a new rule, or to change one. The sheet belongs to the
+    /// window, not here.
     var onNew: (() -> Void)?
+    var onEdit: ((RulesStore.Rule) -> Void)?
 
-    /// Beyond this the window runs off the bottom of the screen — and every page
-    /// is sized to the tallest one, so a long list here makes Notifications tall
-    /// too. Same cap Diagnostics uses, for the same reason; the file is where a
-    /// long list lives and the last row says so.
+    /// Beyond this the window runs off the bottom of the screen — and every page is
+    /// sized to the tallest one. Same cap `DiagnosticsView` uses; the file is where
+    /// a long list lives, and the last row says so.
     private static let maxRows = 4
     private static let textWidth = SettingsWindow.minWidth - 58
 
@@ -53,12 +56,12 @@ final class RulesView: NSView {
 
         rows.orientation = .vertical
         rows.alignment = .leading
-        rows.spacing = 8
+        rows.spacing = 10
 
         let stack = NSStackView(views: [header, rows])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -113,12 +116,11 @@ final class RulesView: NSView {
 
     private func summaryLine(_ list: [RulesStore.Rule]) -> String {
         guard !list.isEmpty else { return "No rules yet" }
-        let allows = list.filter(\.isAllow).count
-        let denies = list.count - allows
-        var parts: [String] = []
-        if allows > 0 { parts.append("\(allows) say\(allows == 1 ? "s" : "") yes") }
-        if denies > 0 { parts.append("\(denies) say\(denies == 1 ? "s" : "") no") }
-        return "\(list.count) rule\(list.count == 1 ? "" : "s") · " + parts.joined(separator: ", ")
+        let counts = RulesStore.Rule.Mode.allCases.compactMap { mode -> String? in
+            let n = list.filter { $0.mode == mode }.count
+            return n > 0 ? "\(n) \(mode.title.lowercased())" : nil
+        }
+        return "\(list.count) rule\(list.count == 1 ? "" : "s") · " + counts.joined(separator: ", ")
     }
 
     private func note(_ text: String, colour: NSColor) -> NSView {
@@ -130,65 +132,85 @@ final class RulesView: NSView {
         return label
     }
 
-    /// One rule: a switch, what it does, and what it has done.
+    /// One rule: what it does, whether it is doing it, and what it has done.
     private func row(_ rule: RulesStore.Rule, ledger: [DecisionLedger.Record]) -> NSView {
-        let box = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleRule(_:)))
-        box.state = rule.enabled ? .on : .off
-        box.identifier = NSUserInterfaceItemIdentifier(rule.id)
-        box.toolTip = rule.enabled ? "Switch this rule off without deleting it"
-                                   : "Switched off — it answers nothing"
-
-        // A switched-off rule is drawn as switched off — greyed through, not merely
-        // an unticked box somebody has to find. It is still listed, because the
-        // point of the switch is that it does not delete anything.
+        let live = rule.mode != .off
         let verb = NSTextField(labelWithString: rule.isAllow ? "Allow" : "Deny")
         verb.font = .systemFont(ofSize: 11.5, weight: .semibold)
-        verb.textColor = rule.enabled ? (rule.isAllow ? .systemGreen : .systemRed)
-                                      : .tertiaryLabelColor
+        verb.textColor = live ? (rule.isAllow ? .systemGreen : .systemRed) : .tertiaryLabelColor
 
         let what = NSTextField(labelWithString: Self.readable(rule.shape))
         what.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        what.textColor = rule.enabled ? .labelColor : .tertiaryLabelColor
+        what.textColor = live ? .labelColor : .tertiaryLabelColor
         what.lineBreakMode = .byTruncatingTail
 
-        let wherE = NSTextField(labelWithString: rule.cwd.isEmpty
-                                ? "everywhere"
-                                : "in " + (rule.cwd as NSString).lastPathComponent)
-        wherE.font = .systemFont(ofSize: 11.5)
-        wherE.textColor = rule.enabled ? .secondaryLabelColor : .tertiaryLabelColor
-        wherE.toolTip = rule.cwd.isEmpty ? "Any directory — only a denial may say this" : rule.cwd
+        let wherever = NSTextField(labelWithString: rule.cwd.isEmpty
+                                   ? "everywhere"
+                                   : "in " + (rule.cwd as NSString).lastPathComponent)
+        wherever.font = .systemFont(ofSize: 11.5)
+        wherever.textColor = live ? .secondaryLabelColor : .tertiaryLabelColor
+        wherever.toolTip = rule.cwd.isEmpty ? "Any directory — only a denial may say this" : rule.cwd
 
-        let remove = NSButton(title: "Remove", target: self, action: #selector(removeRule(_:)))
-        remove.bezelStyle = .inline
-        remove.controlSize = .small
-        remove.font = .systemFont(ofSize: 10.5)
-        remove.identifier = NSUserInterfaceItemIdentifier(rule.id)
+        // The mode sits on the rule's own line, because "watching" is a state
+        // somebody has to be able to see without opening anything.
+        let mode = NSPopUpButton()
+        mode.controlSize = .small
+        mode.font = .systemFont(ofSize: 11)
+        mode.identifier = NSUserInterfaceItemIdentifier(rule.id)
+        mode.target = self
+        mode.action = #selector(changeMode(_:))
+        for m in RulesStore.Rule.Mode.allCases {
+            mode.addItem(withTitle: m.title)
+            mode.lastItem?.representedObject = m.rawValue
+            mode.lastItem?.toolTip = m.explanation
+        }
+        mode.selectItem(at: RulesStore.Rule.Mode.allCases.firstIndex(of: rule.mode) ?? 0)
+        mode.toolTip = rule.mode.explanation
 
-        let top = NSStackView(views: [box, verb, what, wherE, NSView(), remove])
+        let top = NSStackView(views: [verb, what, wherever, NSView(), mode])
         top.orientation = .horizontal
         top.spacing = 6
-        top.alignment = .firstBaseline
+        top.alignment = .centerY
 
-        // What it has actually done, from the ledger — never from a counter in the
-        // rules file. The intent lives in one place and the record in another, and
-        // this line is the only place they meet.
-        let fired = DecisionLedger.firings(rule: rule.id, in: ledger)
-        var trail = rule.enabled ? DecisionLedger.firingLine(fired)
-                                 : "Switched off" + (fired.isEmpty ? "" : " · " + DecisionLedger.firingLine(fired))
+        // What it has done — or, while it is watching, what it would have done.
+        // Read from the ledger, never from a counter inside the rules file: intent
+        // lives in one place and the record in another, and this line is the only
+        // place the two meet.
+        let watching = rule.mode == .watch
+        let counts = watching ? DecisionLedger.wouldHave(rule: rule.id, in: ledger)
+                              : DecisionLedger.firings(rule: rule.id, in: ledger)
+        var trail = DecisionLedger.firingLine(counts, wouldHave: watching)
         if !rule.note.isEmpty { trail += " · " + rule.note }
         let detail = NSTextField(labelWithString: trail)
         detail.font = .systemFont(ofSize: 10.5)
-        detail.textColor = fired.isEmpty ? .tertiaryLabelColor : .secondaryLabelColor
+        detail.textColor = counts.isEmpty ? .tertiaryLabelColor : .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
 
-        let stack = NSStackView(views: [top, detail])
+        let edit = inline("Edit", #selector(editRule(_:)), rule.id)
+        let remove = inline("Remove", #selector(removeRule(_:)), rule.id)
+        let bottom = NSStackView(views: [detail, NSView(), edit, remove])
+        bottom.orientation = .horizontal
+        bottom.spacing = 8
+        bottom.alignment = .centerY
+
+        let stack = NSStackView(views: [top, bottom])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(equalToConstant: Self.textWidth).isActive = true
         top.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        bottom.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         return stack
+    }
+
+    private func inline(_ title: String, _ action: Selector, _ id: String) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.bezelStyle = .inline
+        b.controlSize = .small
+        b.font = .systemFont(ofSize: 10.5)
+        b.identifier = NSUserInterfaceItemIdentifier(id)
+        return b
     }
 
     /// `bash:git push` reads as `git push`; `edit:Sources/*.swift` keeps its prefix
@@ -204,6 +226,12 @@ final class RulesView: NSView {
 
     @objc private func newRule() { onNew?() }
 
+    @objc private func editRule(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let rule = rules.first(where: { $0.id == id }) else { return }
+        onEdit?(rule)
+    }
+
     @objc private func revealFile() {
         let url = RulesStore.fileURL
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -212,10 +240,12 @@ final class RulesView: NSView {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    @objc private func toggleRule(_ sender: NSButton) {
+    @objc private func changeMode(_ sender: NSPopUpButton) {
         guard let id = sender.identifier?.rawValue,
-              let i = rules.firstIndex(where: { $0.id == id }) else { return }
-        rules[i].enabled = sender.state == .on
+              let i = rules.firstIndex(where: { $0.id == id }),
+              let raw = sender.selectedItem?.representedObject as? String,
+              let mode = RulesStore.Rule.Mode(rawValue: raw) else { return }
+        rules[i].mode = mode
         RulesStore.save(rules)
         reload()
     }
@@ -223,15 +253,17 @@ final class RulesView: NSView {
     @objc private func removeRule(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue,
               let rule = rules.first(where: { $0.id == id }) else { return }
-        // Removing a rule is not destructive in the way deleting work is, but it is
+        // Removing a rule is not destructive the way deleting work is, but it is
         // silent otherwise: the prompts simply start coming back, and a week later
-        // nobody remembers why. One confirmation, naming the rule.
+        // nobody remembers why. One confirmation, naming the rule — and it says
+        // that switching it off is the other option.
         let alert = NSAlert()
         alert.messageText = "Remove this rule?"
         alert.informativeText = "\(rule.isAllow ? "Allow" : "Deny") \(Self.readable(rule.shape))"
             + (rule.cwd.isEmpty ? "" : " in " + (rule.cwd as NSString).lastPathComponent)
             + ".\n\nThe prompts it was answering will come back to you. What it already "
-            + "did stays in the approval history."
+            + "did stays in the approval history. If you only want it to stop for now, "
+            + "set it to Off instead."
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

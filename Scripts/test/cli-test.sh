@@ -447,6 +447,26 @@ check "one bad rule voids the file"         'echo "$OUT" | grep -q "No rules are
 printf 'not json' > "$HOME/.agentbar/rules.json"
 check "junk voids the file too"             '"$CLI" rules | grep -q "not valid JSON"'
 
+# A rule can be made to watch: it answers nothing and writes down what it would
+# have done. The two are counted apart, because one of them happened.
+fresh_home
+printf '{"v":1,"rules":[{"id":"r-www","decision":"allow","shape":"bash:git status","cwd":"%s","mode":"watch"}]}' \
+  "$HOME/proj" > "$HOME/.agentbar/rules.json"
+check "a watching rule says so"             '"$CLI" rules | grep -q "(watch)"'
+check "and that it matched nothing yet"     '"$CLI" rules | grep -q "nothing matched yet"'
+printf '{"v":1,"ts":%s,"agent":"claude","sessionId":"s1","project":"proj","cwd":"%s","tool":"Bash","shape":"bash:git status","display":"Bash: git status","decision":"watch","would":"allow","waited":0,"via":"rule","rule":"r-www"}\n' \
+  "$(date +%s)" "$HOME/proj" > "$HOME/.agentbar/decisions.jsonl"
+check "it counts what it would have done"   '"$CLI" rules | grep -q "1x would have"'
+# The row is not something that happened, so nothing counts it as one.
+OUT="$("$CLI" approvals)"
+# Neither a person nor a rule answered anything, so the day has nothing in it —
+# not "0 answered", which would be a result where there is an absence.
+check "a watch row answered nothing"        'echo "$OUT" | grep -q "Nothing answered yet" && ! echo "$OUT" | grep -q "by your rules"'
+check "rules --json separates the two"      '"$CLI" rules --json | grep -q "\"wouldHave\": 1" && "$CLI" rules --json | grep -q "\"allowed\": 0"'
+# A typo in mode must not be read as "on".
+printf '{"v":1,"rules":[{"id":"r-x","decision":"deny","shape":"bash:curl","mode":"yes"}]}' > "$HOME/.agentbar/rules.json"
+check "an unreadable mode voids the file"   '"$CLI" rules | grep -q "mode is not on, watch or off"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

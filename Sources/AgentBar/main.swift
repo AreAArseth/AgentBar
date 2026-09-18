@@ -176,6 +176,21 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-settings"),
     exit(SettingsWindow.shared.renderForVerification(to: url) ? 0 : 1)
 }
 
+// The rule sheet, drawn to a file. Same purpose as --render-settings: the things
+// that can be wrong about that window are its layout and its wording.
+if let i = CommandLine.arguments.firstIndex(of: "--render-rule-sheet"),
+   CommandLine.arguments.indices.contains(i + 1) {
+    _ = NSApplication.shared
+    let url = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    var prefill = RuleSheet.Prefill(
+        decision: "allow", shape: "bash:git push",
+        cwd: FileManager.default.currentDirectoryPath,
+        display: "Bash: git push origin main")
+    if CommandLine.arguments.indices.contains(i + 2) { prefill.shape = CommandLine.arguments[i + 2] }
+    let trying = CommandLine.arguments.indices.contains(i + 3) ? CommandLine.arguments[i + 3] : ""
+    exit(RuleSheet.renderForVerification(to: url, prefill: prefill, trying: trying) ? 0 : 1)
+}
+
 // Whether Claude's quota can be read at all, in one line, without the menu and
 // without the app running: the same call the timer makes, the same status
 // sentence Settings shows. It has to be the *bundle's* binary to mean anything —

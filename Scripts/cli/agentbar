@@ -503,11 +503,14 @@ function printApprovals(argv, json) {
   const midnight = new Date(nowMs()); midnight.setHours(0, 0, 0, 0);
   const since = midnight.getTime() / 1000 - (days - 1) * 86400;
   const all = readDecisions().filter((r) => r.ts >= since);
-  // A rule answers in milliseconds and nobody was asked, so its rows are counted
-  // apart: mixed into "18 answered" they would inflate what the person did and
-  // deflate the average wait with time nobody waited.
-  const rows = all.filter((r) => r.via !== "rule");
-  const byRules = all.length - rows.length;
+  // Three kinds of row, three different answers to "what happened". A person
+  // answered; a rule answered, in milliseconds and without asking, so mixing it
+  // into "18 answered" would inflate what the person did and deflate the wait
+  // with time nobody waited; or a WATCHING rule answered nothing at all and only
+  // wrote down what it would have done — which is not something that happened and
+  // belongs in neither count.
+  const rows = all.filter((r) => r.via !== "rule" && r.decision !== "watch");
+  const byRules = all.filter((r) => r.via === "rule" && r.decision !== "watch").length;
 
   // Counted per repo: the same command is routine in one checkout and the
   // opposite in another.
@@ -572,6 +575,10 @@ function readRules() {
       return { state: "invalid", why: `rule ${r.id}: decision is not allow or deny`, rules: [] };
     if (r.decision === "allow" && !r.cwd)
       return { state: "invalid", why: `rule ${r.id}: approves without naming a directory`, rules: [] };
+    // An unreadable mode is never read as "on": a typo must not start a rule
+    // answering. Same refusal the app makes.
+    if (r.mode !== undefined && !["on", "watch", "off"].includes(r.mode))
+      return { state: "invalid", why: `rule ${r.id}: mode is not on, watch or off`, rules: [] };
   }
   return { state: "rules", rules: o.rules };
 }
@@ -579,7 +586,12 @@ function readRules() {
 function printRules(json) {
   const loaded = readRules();
   const decisions = readDecisions();
-  const fired = (id) => decisions.filter((d) => d.rule === id && d.via === "rule");
+  // What it did, and — for a watching rule — what it would have done. Two
+  // different questions, and a row that says `watch` is not something that
+  // happened, so it is never counted as one.
+  const fired = (id) => decisions.filter((d) => d.rule === id && d.via === "rule"
+                                                && d.decision !== "watch");
+  const wouldHave = (id) => decisions.filter((d) => d.rule === id && d.decision === "watch");
 
   if (json) {
     console.log(JSON.stringify({
@@ -588,10 +600,12 @@ function printRules(json) {
       applied: false,
       rules: loaded.rules.map((r) => {
         const rows = fired(r.id);
-        return { ...r,
+        const watched = wouldHave(r.id);
+        return { ...r, mode: r.mode || "on",
                  allowed: rows.filter((d) => d.decision === "allow").length,
                  denied: rows.filter((d) => d.decision === "deny").length,
-                 last: rows.reduce((m, d) => Math.max(m, d.ts || 0), 0) };
+                 wouldHave: watched.length,
+                 last: rows.concat(watched).reduce((m, d) => Math.max(m, d.ts || 0), 0) };
       }),
     }, null, 2));
     return;
@@ -605,13 +619,21 @@ function printRules(json) {
     console.log(dim("Nothing in the file is applied while any of it is wrong."));
     return;
   }
+  let watching = 0;
   for (const r of loaded.rules) {
-    const rows = fired(r.id);
+    const mode = r.mode || "on";
+    if (mode === "watch") watching++;
     const verb = r.decision === "allow" ? green("allow") : red("deny ");
     const where = r.cwd ? path.basename(r.cwd) : "everywhere";
-    const count = rows.length ? `${rows.length}x` : dim("never fired");
-    const off = r.enabled === false ? dim(" (off)") : "";
-    console.log(`${verb} ${bold(r.shape.padEnd(26))} ${where.padEnd(18)} ${count}${off}`);
+    const rows = mode === "watch" ? wouldHave(r.id) : fired(r.id);
+    const count = rows.length
+      ? `${rows.length}x${mode === "watch" ? " would have" : ""}`
+      : dim(mode === "watch" ? "nothing matched yet" : "never fired");
+    const state = mode === "on" ? "" : dim(` (${mode})`);
+    console.log(`${verb} ${bold(r.shape.padEnd(26))} ${where.padEnd(18)} ${count}${state}`);
+  }
+  if (watching) {
+    console.log("\n" + dim(`${watching} watching: answering nothing, writing down what it would have done.`));
   }
   console.log("\n" + dim("Applied by the macOS app. This command lists them; it does not answer from them."));
 }

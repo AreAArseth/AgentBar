@@ -34,9 +34,10 @@ import Testing
     }
 
     private func allow(_ shape: String, in cwd: String = RuleEngineTests.repo,
-                       agent: String = "", enabled: Bool = true) -> RulesStore.Rule {
+                       agent: String = "",
+                       mode: RulesStore.Rule.Mode = .on) -> RulesStore.Rule {
         RulesStore.Rule(id: "r-allow", decision: "allow", shape: shape, cwd: cwd,
-                        agent: agent, enabled: enabled)
+                        agent: agent, mode: mode)
     }
 
     private func deny(_ shape: String, in cwd: String = "",
@@ -73,9 +74,29 @@ import Testing
                                    rules: [allow("bash:git status")]) == nil)
     }
 
-    @Test func aDisabledRuleSaysNothing() {
+    @Test func aRuleThatIsOffSaysNothing() {
         #expect(RuleEngine.verdict(for: request(), cwd: Self.repo,
-                                   rules: [allow("bash:git status", enabled: false)]) == nil)
+                                   rules: [allow("bash:git status", mode: .off)]) == nil)
+    }
+
+    /// A watching rule still MATCHES — being matched is the whole of what it does.
+    /// What stops it is `handle`, not `verdict`: the verdict is exactly the thing
+    /// being written down for the person to judge.
+    @Test func aWatchingRuleStillReachesAVerdict() {
+        #expect(RuleEngine.verdict(for: request(), cwd: Self.repo,
+                                   rules: [allow("bash:git status", mode: .watch)])?.behavior
+                == "allow")
+    }
+
+    /// …and answers nothing. `handle` returns false, so the card appears and the
+    /// human decides, which is the point of the mode.
+    @Test func aWatchingRuleAnswersNothing() {
+        let was = RulesStore.enabled
+        defer { RulesStore.enabled = was }
+        RulesStore.enabled = true
+        #expect(RuleEngine.shared.handle(request(), session: nil,
+                                         load: .rules([allow("bash:git status", mode: .watch)]))
+                == false)
     }
 
     @Test func aRuleCanBeHeldToOneAgent() {
@@ -195,6 +216,13 @@ import Testing
         }
     }
 
+    /// A curly quote is not a shell quote, but a command pasted out of a document
+    /// carries them, and the comparison has to see the flag underneath either way.
+    @Test func aCurlyQuoteDoesNotHideAFlagEither() {
+        #expect(RuleEngine.unquote("\u{201C}-rf\u{201D}") == "-rf")
+        #expect(RuleEngine.refusalInCommand("rm \u{2018}-rf\u{2019} build", cwd: Self.repo) != nil)
+    }
+
     /// Quotes are how a flag arrives looking like a word.
     @Test func quotingAFlagDoesNotHideIt() {
         #expect(RuleEngine.unquote(#""-rf""#) == "-rf")
@@ -290,6 +318,106 @@ import Testing
         #expect(RuleEngine.refusal(for: request(cwd: ""), cwd: "") != nil)
         #expect(RuleEngine.verdict(for: request(cwd: ""), cwd: "",
                                    rules: [allow("bash:git status", in: "/")]) == nil)
+    }
+
+    // MARK: - What a watching rule writes down
+
+    /// A `watch` row is not a verdict, so every counter that switches on the
+    /// verdicts already skips it — which is why it is spelled as its own decision
+    /// rather than as an `allow` with a flag beside it.
+    @Test func aWatchRowIsNotCountedAsSomethingThatHappened() {
+        var row = DecisionLedger.Record()
+        row.shape = "bash:git status"
+        row.cwd = Self.repo
+        row.decision = "watch"
+        row.would = "allow"
+        row.via = "rule"
+        row.rule = "r-allow"
+        row.ts = 1_789_646_400
+        let summary = DecisionLedger.summary(shape: "bash:git status", cwd: Self.repo, in: [row])
+        #expect(summary.isEmpty)
+        #expect(DecisionLedger.firings(rule: "r-allow", in: [row]).isEmpty)
+        #expect(DecisionLedger.byRules(in: [row], since: 0, until: .greatestFiniteMagnitude) == 0)
+        #expect(DecisionLedger.waiting(in: [row], since: 0,
+                                       until: .greatestFiniteMagnitude).answered == 0)
+    }
+
+    /// …and is counted by the one thing asking the question the mode exists to
+    /// answer: what would this rule have done?
+    @Test func aWatchRowIsCountedAsWhatWouldHaveHappened() {
+        var row = DecisionLedger.Record()
+        row.decision = "watch"
+        row.would = "allow"
+        row.via = "rule"
+        row.rule = "r-allow"
+        row.ts = 1_789_646_400
+        let would = DecisionLedger.wouldHave(rule: "r-allow", in: [row])
+        #expect(would.allowed == 1)
+        #expect(would.denied == 0)
+        #expect(DecisionLedger.firingLine(would, wouldHave: true).hasPrefix("Would have allowed 1×"))
+    }
+
+    @Test func aRuleThatHasNotMatchedSaysSoDifferentlyWhileWatching() {
+        #expect(DecisionLedger.firingLine(DecisionLedger.Summary()) == "Never fired yet")
+        #expect(DecisionLedger.firingLine(DecisionLedger.Summary(), wouldHave: true)
+                == "Nothing has matched it yet")
+    }
+
+    // MARK: - Trying a command against the rule being written
+
+    /// The field that answers "would this rule have taken *that*" — the thing a
+    /// paragraph cannot do, because the paragraph describes a category and the
+    /// person is holding one specific command.
+    @Test func tryingACommandSaysWhatWouldHappen() {
+        let shape = "bash:git status"
+        #expect(RuleSheet.tryOut("git status --short", shape: shape, cwd: Self.repo,
+                                 deny: false).0 == "Answered yes, without asking.")
+        #expect(RuleSheet.tryOut("git status && echo hi", shape: shape, cwd: Self.repo,
+                                 deny: false).0.hasPrefix("Comes back to you"))
+        #expect(RuleSheet.tryOut("git status ../../etc/passwd", shape: shape, cwd: Self.repo,
+                                 deny: false).0.hasPrefix("Comes back to you"))
+        #expect(RuleSheet.tryOut("git status --short", shape: shape, cwd: Self.repo,
+                                 deny: true).0 == "Refused, without asking.")
+    }
+
+    /// The try field is where somebody finds out that a rule they were about to
+    /// write cannot fire at all. `git push` publishes work to somewhere else, so no
+    /// approving rule takes it — with or without a flag — and saying that in the
+    /// sheet is better than letting them write a rule that never does anything.
+    @Test func tryingSomethingNoApprovalEverTakesSaysSo() {
+        let shape = "bash:git push"
+        #expect(RuleSheet.tryOut("git push origin main", shape: shape, cwd: Self.repo,
+                                 deny: false).0.hasPrefix("Comes back to you"))
+        // A denial of the same thing is perfectly ordinary.
+        #expect(RuleSheet.tryOut("git push origin main", shape: shape, cwd: Self.repo,
+                                 deny: true).0 == "Refused, without asking.")
+    }
+
+    @Test func tryingSomethingTheRuleDoesNotCoverSaysThat() {
+        let answer = RuleSheet.tryOut("npm test", shape: "bash:git push", cwd: Self.repo,
+                                      deny: false).0
+        #expect(answer.contains("does not cover"))
+        #expect(answer.contains("npm test"))
+    }
+
+    @Test func tryingWithNoDirectoryYetSaysThat() {
+        #expect(RuleSheet.tryOut("git push", shape: "bash:git push", cwd: "", deny: false).0
+                .contains("no directory"))
+    }
+
+    /// On the day AgentBar is installed the ledger is empty, which is exactly when
+    /// somebody is working out what to type into that field.
+    @Test func shapesAreOfferedEvenWithNoHistory() {
+        let offered = RuleSheet.offeredShapes(in: [])
+        #expect(offered.contains("bash:git status"))
+        #expect(!offered.isEmpty)
+    }
+
+    @Test func whatYouDecidedComesBeforeTheExamples() {
+        var row = DecisionLedger.Record()
+        row.shape = "bash:pnpm build"
+        row.decision = "allow"
+        #expect(RuleSheet.offeredShapes(in: [row]).first == "bash:pnpm build")
     }
 
     // MARK: - What it does approve

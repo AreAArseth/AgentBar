@@ -71,8 +71,17 @@ final class DecisionLedger {
         /// The request's own one-line summary, for showing a person what a count
         /// refers to. Capped by the hook at ~60 characters before it ever gets here.
         var display = ""
-        /// allow | always | deny | defer | answer
+        /// allow | always | deny | defer | answer | **watch**
+        ///
+        /// `watch` is not a verdict and nothing happened: a rule in its watching
+        /// mode saw a request it matched and deliberately did not answer it. It is
+        /// spelled as its own decision rather than as `allow` with a flag beside
+        /// it, so that every counter that switches on the verdicts already skips
+        /// it. A row that says `allow` when nothing was allowed is the kind of
+        /// record this project does not write.
         var decision = ""
+        /// For a `watch` row: what the rule would have answered. Empty otherwise.
+        var would = ""
         /// How long the agent sat blocked before this landed. The half of the loop
         /// nobody measures.
         var waited: TimeInterval = 0
@@ -88,7 +97,7 @@ final class DecisionLedger {
             ["v": 1, "ts": Int(ts), "agent": agent, "sessionId": sessionId,
              "project": project, "cwd": cwd, "tool": tool, "shape": shape,
              "display": display, "decision": decision,
-             "waited": Int(waited.rounded()), "via": via, "rule": rule]
+             "waited": Int(waited.rounded()), "via": via, "rule": rule, "would": would]
         }
 
         init() {}
@@ -111,13 +120,14 @@ final class DecisionLedger {
             waited = (o["waited"] as? NSNumber)?.doubleValue ?? 0
             via = o["via"] as? String ?? ""
             rule = o["rule"] as? String ?? ""
+            would = o["would"] as? String ?? ""
         }
     }
 
     /// Records a decision that actually reached `answers.d`. Callers pass only what
     /// they already hold at the click; nothing here goes looking for more.
     func record(_ decision: String, request: ApprovalRequest, session: Session?,
-                via: String = "app", rule: String = "",
+                via: String = "app", rule: String = "", would: String = "",
                 now: TimeInterval = Date().timeIntervalSince1970) {
         guard Self.enabled else { return }
         var r = Record()
@@ -137,6 +147,7 @@ final class DecisionLedger {
         r.waited = request.ts > 0 ? max(0, now - request.ts) : 0
         r.via = via
         r.rule = rule
+        r.would = would
         writer.async { [url] in Self.append([r], to: url) }
     }
 
@@ -311,6 +322,22 @@ final class DecisionLedger {
             switch r.decision {
             case "allow": out.allowed += 1
             case "deny":  out.denied += 1
+            default:      continue          // `watch` is not something it did
+            }
+            out.lastAt = max(out.lastAt, r.ts)
+        }
+        return out
+    }
+
+    /// What a watching rule **would** have done. The whole point of the mode: a
+    /// week of this is how somebody finds out an approving rule matches what they
+    /// pictured, without it having approved anything yet.
+    static func wouldHave(rule id: String, in records: [Record]) -> Summary {
+        var out = Summary()
+        for r in records where r.rule == id && r.decision == "watch" {
+            switch r.would {
+            case "allow": out.allowed += 1
+            case "deny":  out.denied += 1
             default:      continue
             }
             out.lastAt = max(out.lastAt, r.ts)
@@ -320,11 +347,13 @@ final class DecisionLedger {
 
     /// "Allowed 12× · last today" for a rule's row. Unlike `hint`, one firing is
     /// worth saying: it is the first proof the rule does what it says.
-    static func firingLine(_ s: Summary, now: Date = Date()) -> String {
-        guard !s.isEmpty else { return "Never fired yet" }
+    static func firingLine(_ s: Summary, wouldHave: Bool = false, now: Date = Date()) -> String {
+        guard !s.isEmpty else {
+            return wouldHave ? "Nothing has matched it yet" : "Never fired yet"
+        }
         var parts: [String] = []
-        if s.allowed > 0 { parts.append("Allowed \(s.allowed)×") }
-        if s.denied > 0 { parts.append("Denied \(s.denied)×") }
+        if s.allowed > 0 { parts.append("\(wouldHave ? "Would have allowed" : "Allowed") \(s.allowed)×") }
+        if s.denied > 0 { parts.append("\(wouldHave ? "would have denied" : "Denied") \(s.denied)×") }
         var text = parts.joined(separator: ", ")
         if s.lastAt > 0 { text += " · last \(ago(Date(timeIntervalSince1970: s.lastAt), now: now))" }
         return text
@@ -334,7 +363,9 @@ final class DecisionLedger {
     /// The day's account says both, because "18 answered" that quietly included
     /// six a rule made would be the wrong number in the most important place.
     static func byRules(in records: [Record], since: TimeInterval, until: TimeInterval) -> Int {
-        records.filter { $0.ts >= since && $0.ts <= until && $0.via == "rule" }.count
+        records.filter {
+            $0.ts >= since && $0.ts <= until && $0.via == "rule" && $0.decision != "watch"
+        }.count
     }
 
     /// How long agents sat blocked on the human over a span. The other half of the

@@ -95,7 +95,7 @@ Where each agent lives, and what says it is ours:
 |---|---|
 | `orphans` | nothing in `state.d` / `requests.d` / `answers.d` is past its pruning window. Warn only — frontends skip them |
 | `frontend.present` | somebody can answer a blocking hook: the app on macOS (`pgrep -x AgentBar`), a fresh `watcher.json` heartbeat anywhere. CLI only; the app knows this about itself |
-| `rules.file` | `~/.agentbar/rules.json` parses and every rule in it is valid. **`fail` when it does not**, naming the rule — this is the one failure in the app that is invisible by design: no rule fires, every prompt comes back, and that is indistinguishable from AgentBar working normally. `skipped` when there is no file, which is most people. macOS only for now, because only the app applies rules |
+| `rules.file` | `~/.agentbar/rules.json` parses and every rule in it is valid. **`fail` when it does not**, naming the rule — this is the one failure in the app that is invisible by design: no rule fires, every prompt comes back, and that is indistinguishable from AgentBar working normally. `skipped` when there is no file, which is most people. The detail counts the rules by mode (answering / watching / off). macOS only for now, because only the app applies rules |
 
 ### macOS only
 

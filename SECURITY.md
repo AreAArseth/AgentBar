@@ -61,8 +61,12 @@ guarantees worth knowing when auditing:
   outside the rule's directory, and on any path that configures permission itself —
   `~/.agentbar`, an agent's settings directory, `.git/hooks`, `.git/config`. No
   setting disables that table, and anything the engine cannot parse is a refusal.
+  A rule also has a **watching** mode, which new rules start in: it matches and
+  works out the answer, writes down what it would have done, and answers nothing,
+  so an approving rule can be judged on a week of evidence before it speaks.
   Every firing appends a `decisions.jsonl` row carrying `via:"rule"` and the rule's
-  id; one invalid rule voids the whole file and Diagnostics reports it, because a
+  id (a watching rule's row says `decision:"watch"`, which is not a verdict and is
+  counted by nothing as one); one invalid rule voids the whole file and Diagnostics reports it, because a
   rule that quietly stopped applying looks identical to AgentBar behaving normally.
   See `Sources/AgentBar/RuleEngine.swift`.
 - Every failure path (app missing, killed hook, timeout, malformed files, a rules

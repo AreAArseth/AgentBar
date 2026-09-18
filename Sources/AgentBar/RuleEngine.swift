@@ -30,7 +30,10 @@ final class RuleEngine {
     struct Firing: Equatable {
         let at: Date
         let ruleID: String
+        /// allow | deny | watch
         let decision: String
+        /// What a watching rule would have said. Empty for a real firing.
+        let would: String
         let display: String
     }
 
@@ -40,6 +43,11 @@ final class RuleEngine {
     /// to collect its answer — without this the same rule would write the same
     /// answer repeatedly and the ledger would count one decision many times.
     private var answered: Set<String> = []
+    /// Requests a **watching** rule has already written a note about. Same problem,
+    /// different verb: without this the two-second poll would file one "would have
+    /// allowed" per tick for the whole ten minutes a request can be pending, and a
+    /// mode meant for judging a rule would be unreadable after one prompt.
+    private var noted: Set<String> = []
     private var firings: [Firing] = []
 
     /// Newest first, capped: a glance, not a log.
@@ -61,12 +69,36 @@ final class RuleEngine {
         let rules = (load ?? RulesStore.cached()).rules
         let cwd = request.cwd.isEmpty ? (session?.cwd ?? "") : request.cwd
         guard let verdict = Self.verdict(for: request, cwd: cwd, rules: rules) else { return false }
+
+        // Watching: work out the answer, write it down, and do not give it. The
+        // card appears, the human decides, and a week of these is how somebody
+        // learns whether the rule matches what they pictured — before it has
+        // approved anything.
+        guard verdict.rule.answers else {
+            lock.lock()
+            let alreadyNoted = noted.contains(request.identity)
+            if !alreadyNoted {
+                noted.insert(request.identity)
+                firings.insert(Firing(at: now, ruleID: verdict.rule.id, decision: "watch",
+                                      would: verdict.behavior, display: request.display), at: 0)
+                if firings.count > 20 { firings.removeLast(firings.count - 20) }
+            }
+            lock.unlock()
+            if !alreadyNoted {
+                DecisionLedger.shared.record("watch", request: request, session: session,
+                                             via: "rule", rule: verdict.rule.id,
+                                             would: verdict.behavior,
+                                             now: now.timeIntervalSince1970)
+            }
+            return false
+        }
+
         guard AnswerWriter.write(behavior: verdict.behavior, for: request) else { return false }
 
         lock.lock()
         answered.insert(request.identity)
         firings.insert(Firing(at: now, ruleID: verdict.rule.id, decision: verdict.behavior,
-                              display: request.display), at: 0)
+                              would: "", display: request.display), at: 0)
         if firings.count > 20 { firings.removeLast(firings.count - 20) }
         lock.unlock()
 
@@ -81,6 +113,7 @@ final class RuleEngine {
     func forget(keeping live: Set<String>) {
         lock.lock(); defer { lock.unlock() }
         answered.formIntersection(live)
+        noted.formIntersection(live)
     }
 
     // MARK: - Matching
@@ -104,7 +137,9 @@ final class RuleEngine {
     }
 
     static func matches(_ rule: RulesStore.Rule, shape: String, agent: String, cwd: String) -> Bool {
-        guard rule.enabled, rule.shape == shape else { return false }
+        // A watching rule matches — being matched is the whole of what it does. An
+        // `off` rule does not, which is what makes "off" different from "watch".
+        guard rule.mode != .off, rule.shape == shape else { return false }
         if !rule.agent.isEmpty, rule.agent != agent { return false }
         if rule.cwd.isEmpty { return true }          // denials only; enforced at load
         // A directory inside the one that was named is still inside it — that is
@@ -268,8 +303,13 @@ final class RuleEngine {
     }
 
     /// Quotes are how a dangerous flag arrives looking like a word. Strip them
-    /// before anything is compared; a quoted flag is still that flag.
+    /// before anything is compared; a quoted flag is still that flag. Curly ones
+    /// too — a shell does not treat them as quotes, but a person who pasted a
+    /// command out of a document may well have them, and the comparison must see
+    /// the flag underneath either way.
+    static let quotes: Set<Character> = ["\"", "'", "\u{2018}", "\u{2019}", "\u{201C}", "\u{201D}", "`"]
+
     static func unquote(_ s: String) -> String {
-        String(s.filter { $0 != "\"" && $0 != "'" })
+        String(s.filter { !quotes.contains($0) })
     }
 }

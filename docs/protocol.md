@@ -309,12 +309,19 @@ decisions about the same command are two decisions, and counting them is the poi
 ```json
 {"v":1,"ts":1789561881,"agent":"claude","sessionId":"abc-123","project":"AgentBar",
  "cwd":"/Users/me/AgentBar","tool":"Bash","shape":"bash:git push",
- "display":"Bash: git push origin main","decision":"allow","waited":42,"via":"app"}
+ "display":"Bash: git push origin main","decision":"allow","waited":42,"via":"app",
+ "rule":"","would":""}
 ```
 
 - `decision` is one of the verbs the answer carried: `allow` | `always` | `deny` |
-  `defer` | `answer`. Only `allow`/`always`/`deny` are verdicts; the other two are
-  a hand-off and a question, and a reader counting repeats MUST skip them.
+  `defer` | `answer` | `watch`. Only `allow`/`always`/`deny` are verdicts; the rest
+  are a hand-off, a question, and a note that nothing happened, and a reader
+  counting repeats MUST skip them.
+- `watch` means a rule in its watching mode matched a request and **deliberately
+  did not answer it**; `would` carries what it would have said. It is spelled as
+  its own decision rather than as an `allow` with a flag beside it precisely so
+  that every reader already switching on the verdicts skips it without being
+  changed. A row saying `allow` when nothing was allowed would be a false record.
 - `waited` is seconds between the request's `ts` and the decision — how long the
   agent sat blocked on the human. A request with no `ts`, or one stamped in the
   future, contributes `0` rather than a negative number.
@@ -364,7 +371,7 @@ avoids: **answering without asking.**
       "shape": "bash:git status",  // exactly the decisions.jsonl key, same normalisation
       "cwd": "/Users/me/AgentBar", // "" = anywhere, DENIALS ONLY
       "note": "read-only",
-      "enabled": true
+      "mode": "watch"           // on | watch | off; absent means "on"
     }
   ]
 }
@@ -381,6 +388,13 @@ Normative, and the reason each one is here:
   containing an approving rule with no `cwd`.
 - A rule MUST NOT be created from a `ruleSuggestion`. Suggestions are produced by
   the agent being guarded; a rule is written from what the person did.
+- `mode` is `on` (answers), `watch` (answers nothing and writes down what it
+  would have answered) or `off` (does nothing). Absent means `on`. A `mode` that
+  is present and unreadable **refuses the file**: a typo must never be read as
+  "start answering". `watch` exists because an approving rule cannot be checked by
+  reading it — you find out whether it matched what you pictured by watching it
+  not answer for a week, which is what everything else that enforces anything
+  does before it enforces.
 - The file carries **no counters**. What a rule has done is read back from
   `decisions.jsonl` by its `id`, so intent and record never disagree.
 - **A file that does not parse, or that contains one invalid rule, means no rule is
@@ -391,6 +405,11 @@ Normative, and the reason each one is here:
   exactly like working correctly.
 - An unknown `v` is refused for the same reason: a later version may add a field
   that *narrows* a rule, and ignoring it would apply a wider rule than was written.
+
+A rule whose `mode` is `watch` is matched exactly as an `on` rule is — including
+the live-request re-check below, because the answer being written down has to be
+the answer that would have been given — and then writes a `watch` row instead of
+an answer.
 
 **Before writing an `allow` answer from a rule, a frontend MUST re-check the live
 request** — the command as it will actually run, not its shape — and fall through

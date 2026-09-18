@@ -45,6 +45,23 @@ All notable changes to AgentBar are documented here. This project follows
   `~/.agentbar/rules.json` — plain JSON, yours to edit — and the record lives in the
   ledger, so the two can never disagree.
 
+  **And you can watch it before you trust it.** A rule has three states, not two.
+  A new one starts out **watching**: it matches, works out the answer, writes down
+  what it *would* have done — and answers nothing. The prompt still comes to you.
+  A week of *"would have allowed 14×"* is how somebody finds out whether an
+  approving rule matches what they pictured, and it is the only way to find that
+  out that costs nothing when the answer is no. Everything that enforces anything
+  gets an audit mode before an enforce mode; this is AgentBar's.
+
+  **Rules have their own page** in Settings, with an editor that spends most of its
+  room on the rule's edges: what it will never answer, and a field where you type a
+  real command — `git push --force origin main` — and are told on the spot whether
+  this rule would have taken it, and which clause stopped it. A rule can be changed
+  after it is written, not only removed and typed again. On a Mac where nothing has
+  been decided yet the field still offers the ordinary shapes — `git status`,
+  `npm test`, `swift build` — because the day AgentBar is installed is exactly when
+  somebody is working out what to put in it.
+
   Nothing in the file applies while any of it is wrong. One malformed rule voids the
   whole file rather than leaving three of your four running with nothing on screen
   saying which, and **Diagnostics reports it** — a rule that quietly stopped working
@@ -56,7 +73,8 @@ All notable changes to AgentBar are documented here. This project follows
   added up — a rule answers in milliseconds and nobody was asked, so folding its
   rows in would overstate what you did and understate the wait. `agentbar approvals`
   does the same.
-- **`agentbar rules`** lists what you wrote and what each rule has done. It lists
+- **`agentbar rules`** lists what you wrote, which mode each rule is in, and what
+  it has done — or, while it is watching, what it would have done. It lists
   them; only the app answers from one, and it says so. The check that makes an
   approving rule safe is one table in one language, and a second copy of it in the
   CLI would be a second thing to keep identical in the one place where drifting
