@@ -165,6 +165,8 @@ are worth repeating whenever the approval path is touched:
 | A watching rule answers nothing | The same rule in `watch` mode wrote `decision:"watch"` naming itself, and the prompt still went to the human |
 | **The refusal table stops an approving rule** | A rule written to allow `bash:git push`, in the right directory, in `on` mode, did not answer: the hook waited out its deadline and wrote nothing, and no ledger row was written at all. Same for `git status && echo …` under a rule for `git status` |
 | A denying rule may be broad | A `deny` rule with no directory answered a `curl` immediately, and the row names it |
+| The Codex shim, end to end | `hook.js permission.js` with a Codex payload wrote `requests.d/codex-<session>-<turn>.json` and a `state.d/codex-<session>.json` row, filed the request under `codex`, and returned Claude's envelope |
+| The notify bridge has not stood down | With the hooks written and **not** yet accepted, `notify.js` still wrote its row — which is the only thing showing a Codex session in that window |
 
 The one that matters is the fourth: it is the difference between a rule engine and
 a rule engine somebody can widen by writing the rule they wanted. It failing would
