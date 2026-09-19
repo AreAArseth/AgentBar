@@ -30,9 +30,9 @@ fresh_home() {
   mkdir -p "$HOME/.agentbar/state.d" "$HOME/.agentbar/requests.d" "$HOME/.agentbar/answers.d"
 }
 
-seed_session() { # $1 id, $2 state, $3 pid
-  printf '{"agent":"claude","state":"%s","label":"x","project":"proj","cwd":"","sessionId":"%s","pid":%s,"started":true,"ts":%s}' \
-    "$2" "$1" "$3" "$(date +%s)" > "$HOME/.agentbar/state.d/$1.json"
+seed_session() { # $1 id, $2 state, $3 pid, $4 cwd (optional)
+  printf '{"agent":"claude","state":"%s","label":"x","project":"proj","cwd":"%s","sessionId":"%s","pid":%s,"started":true,"ts":%s}' \
+    "$2" "${4:-}" "$1" "$3" "$(date +%s)" > "$HOME/.agentbar/state.d/$1.json"
 }
 
 seed_request() { # $1 name, $2 hookPid
@@ -531,6 +531,28 @@ OUT="$("$CLI" usage)"
 check "usage still reads the window"        'echo "$OUT" | grep -q "60% left"'
 check "usage drops an impossible reset"     '! echo "$OUT" | grep -q "resets"'
 check "usage never prints Invalid Date"     '! echo "$OUT" | grep -q "Invalid Date"'
+
+# --- the directory a decision was made in comes off the request ------------------
+# The hook has carried `cwd` on the request since 1.28.0 precisely so no reader has
+# to join back through state.d for it. The app prefers it and falls back to the
+# session; this half only ever read the session, so a decision answered after its
+# session row was gone landed in the ledger with no directory at all — and the
+# directory is what scopes "allowed 23x here" and what a rule matches on. Caught on
+# a real machine, by answering a real request with no session row behind it.
+fresh_home
+printf '{"sessionId":"gone","agent":"claude","toolName":"Bash","display":"Bash: git status","toolInputPretty":"{}","context":{"kind":"bash","command":"git status"},"cwd":"/repo/from-the-request","pid":%s,"hookPid":%s,"ts":%s}' \
+  $$ $$ "$(date +%s)" > "$HOME/.agentbar/requests.d/c1.json"
+"$CLI" approve >/dev/null
+check "the ledger takes cwd off the request" 'grep -q "\"cwd\":\"/repo/from-the-request\"" "$HOME/.agentbar/decisions.jsonl"'
+
+# And the session still wins nothing it should not: a request with no cwd of its
+# own falls back to the session's, which is the older behaviour unchanged.
+fresh_home
+seed_session s9 permission $$ "$HOME/proj"
+printf '{"sessionId":"s9","agent":"claude","toolName":"Bash","display":"Bash: git status","toolInputPretty":"{}","context":{"kind":"bash","command":"git status"},"pid":%s,"hookPid":%s,"ts":%s}' \
+  $$ $$ "$(date +%s)" > "$HOME/.agentbar/requests.d/c2.json"
+"$CLI" approve >/dev/null
+check "and falls back to the session's cwd" 'grep -q "\"cwd\":\"$HOME/proj\"" "$HOME/.agentbar/decisions.jsonl"'
 
 echo "---"
 echo "$pass passed, $fail failed"

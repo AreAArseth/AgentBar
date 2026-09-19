@@ -306,7 +306,13 @@ function recordDecision(r, decision) {
   const session = sessions().find((x) => x.sessionId === r.sessionId || x.id === r.sessionId);
   const rec = {
     v: 1, ts: now(), agent: r.agent || "", sessionId: r.sessionId || "",
-    project: (session && session.project) || "", cwd: (session && session.cwd) || "",
+    project: (session && session.project) || "",
+    // The hook has carried the directory on the request since 1.28.0, so that no
+    // reader has to join back through state.d for it — and a request answered
+    // after its session row is gone has nothing to join to. The app prefers the
+    // request and falls back to the session; this half only read the session, and
+    // the directory is what scopes "allowed 23x here" and what a rule matches on.
+    cwd: r.cwd || (session && session.cwd) || "",
     tool: r.toolName || "", shape: decisionShape(r), display: r.display || "",
     decision,
     // A request with no ts, or one stamped in the future, contributes no wait
