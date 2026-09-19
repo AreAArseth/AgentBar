@@ -105,11 +105,17 @@ tell from the card which one.
 What a veto *could* honestly carry is the deny half of the rules you wrote —
 "never `git push --force`, in any repository, from any agent" enforced on Cursor
 and Gemini too, with no card and no waiting. That is a real feature and a different
-one: it needs the rules engine to answer without the app being the thing that
-answers, and `DecisionLedger.shape` lives in Swift while the hook is JavaScript.
-It is written down here rather than built, because building it means a second
-implementation of the shape vocabulary, and a second one is a second thing to keep
-in sync.
+one, and the thing standing in its way is not where the code lives: the app already
+evaluates every rule for every request, so no second copy of `DecisionLedger.shape`
+is needed. What it costs is a **wait on every tool call**. A veto hook cannot know
+whether a rule denies without asking, and asking means blocking — so a refusal that
+fires once a month is paid for by a pause in front of every `ls`. A digest of the
+active denials, written by the app and read by the hook without blocking, is the
+shape of an answer; a card that appears with only one button on it is the other
+half of the question.
+
+Written down here rather than built, because those are decisions about what the
+product feels like, not about how to write it.
 
 ## Keeping this file honest
 
