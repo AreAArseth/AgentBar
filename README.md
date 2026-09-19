@@ -71,8 +71,10 @@ The install touches exactly these, all reversible (see [Uninstall](#uninstall)):
 - Copies the hook scripts to `~/.agentbar/hooks/`.
 - Merges AgentBar hook entries into your Claude Code settings — `~/.claude/settings.json`,
   and your `CLAUDE_CONFIG_DIR` if you set one. Existing hooks are preserved.
-- Adds a `notify` line to `~/.codex/config.toml` **only if you use Codex and have none**;
-  merges into `~/.cursor/hooks.json` / `~/.gemini/settings.json` /
+- Writes into `~/.codex/config.toml` **only if you use Codex**: a `notify` line if
+  it has none, and a hooks block between two marker comments — what is outside them
+  stays as you wrote it, and Codex asks you once before running any of it.
+  Merges into `~/.cursor/hooks.json` / `~/.gemini/settings.json` /
   `~/.gemini/antigravity{,-cli}/hooks.json` / `~/.qwen/settings.json`
   **only if those exist**. Writes its own `~/.copilot/hooks/agentbar.json`
   **only if you use Copilot** — a separate file, so your own hooks stay untouched.
@@ -267,9 +269,12 @@ see the [agent table](#agent-support). New agent sessions appear in the bar from
 
 > **What install touches:** hook scripts are copied to `~/.agentbar/hooks/`, hook
 > entries are merged into your Claude `settings.json` (`~/.claude` **and** a custom
-> `CLAUDE_CONFIG_DIR`, both; existing hooks are preserved), a `notify` line is added
-> to `~/.codex/config.toml` only if none exists, and — only for tools you already
-> have — hook entries are merged into `~/.cursor/hooks.json`,
+> `CLAUDE_CONFIG_DIR`, both; existing hooks are preserved), and **`~/.codex/config.toml`
+> gets a `notify` line if it has none, plus a hooks block between
+> `# >>> agentbar >>>` and `# <<< agentbar <<<`** — everything outside those two
+> lines is left byte for byte, and **Codex asks you once** before it runs any of
+> it, so writing them decides nothing on your behalf. Then — only for tools you
+> already have — hook entries are merged into `~/.cursor/hooks.json`,
 > `~/.gemini/settings.json`, `~/.gemini/antigravity{,-cli}/hooks.json` and
 > `~/.qwen/settings.json`, and the OpenCode plugin is copied to
 > `~/.config/opencode/plugins/agentbar.js`. A config that exists but isn't valid
@@ -356,7 +361,10 @@ osascript -e 'quit app "AgentBar"'
 rm -rf ~/.agentbar
 # remove the AgentBar hook entries (they all reference ~/.agentbar/hooks/):
 #   ~/.claude/settings.json (and your CLAUDE_CONFIG_DIR) — delete rules whose command contains "/.agentbar/hooks/"
-#   ~/.codex/config.toml       — delete the notify line referencing "/.agentbar/hooks/"
+#   ~/.codex/config.toml       — delete the notify line referencing "/.agentbar/hooks/",
+#                                and the block from "# >>> agentbar >>>" to "# <<< agentbar <<<"
+#                                (plus any [hooks.state] entry naming that file, which is
+#                                 Codex's record of you having accepted them)
 #   ~/.cursor/hooks.json       — delete entries whose command references "/.agentbar/hooks/cursor/"
 #   ~/.gemini/settings.json    — delete hook groups whose command references "/.agentbar/hooks/gemini/"
 #   ~/.gemini/antigravity/hooks.json and ~/.gemini/antigravity-cli/hooks.json

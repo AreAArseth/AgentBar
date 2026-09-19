@@ -31,6 +31,7 @@ main() {
   echo "  • copy hook scripts to ~/.agentbar/hooks/"
   echo "  • merge AgentBar hooks into your Claude settings (~/.claude, or CLAUDE_CONFIG_DIR)"
   echo "  • wire Codex / Cursor / Gemini / Antigravity / Qwen / Copilot / OpenCode hooks — only for the tools you already use"
+  echo "    (Codex asks you once, in its own prompt, before it runs any of them)"
   echo "  • launch AgentBar in the background from the SessionStart hook"
   echo "No network calls, no telemetry. Uninstall steps are in the README."
   # Under `curl … | bash`, stdin is the script itself — read the answer from the
