@@ -150,3 +150,25 @@ mislead the next reader.
   for eyeballing.
 - **The two watchers' file-format parsing** is tested only through the live-app
   suites, because their inputs are what the third-party apps write.
+
+## What was checked by hand, against the running app
+
+A suite proves the logic; it does not prove that the app anybody installed is
+wired to it. These were run on 19 Sep 2026 against **1.28.0 in `/Applications`**,
+using the hook as installed in `~/.agentbar/hooks` and a real request, and they
+are worth repeating whenever the approval path is touched:
+
+| What | How it was seen |
+|---|---|
+| The whole path, allow and deny | The installed `permission.js` was run with a real payload, answered from `agentbar approve` / `deny`, and printed the envelope an agent would have received |
+| A rule the human wrote answers | An `on` rule for `bash:echo` in one directory answered in under a second, with a ledger row carrying `via:"rule"` and the rule's id |
+| A watching rule answers nothing | The same rule in `watch` mode wrote `decision:"watch"` naming itself, and the prompt still went to the human |
+| **The refusal table stops an approving rule** | A rule written to allow `bash:git push`, in the right directory, in `on` mode, did not answer: the hook waited out its deadline and wrote nothing, and no ledger row was written at all. Same for `git status && echo …` under a rule for `git status` |
+| A denying rule may be broad | A `deny` rule with no directory answered a `curl` immediately, and the row names it |
+
+The one that matters is the fourth: it is the difference between a rule engine and
+a rule engine somebody can widen by writing the rule they wanted. It failing would
+look exactly like it working, from everywhere except the ledger.
+
+Still not checked by hand: the Codex trust prompt (needs a real Codex session), and
+the rule sheet's own editor.
