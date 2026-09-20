@@ -196,6 +196,32 @@ All notable changes to AgentBar are documented here. This project follows
   reading applies to a wait in the decision ledger, which is a file you are invited
   to keep and other tools can append to.
 
+- **One broken character could hide a whole session.** A lone half of a surrogate
+  pair — from a pasted prompt, a trim somewhere upstream, a single corrupted byte —
+  went into the session file as written. Swift refuses to decode a file containing
+  one, so the session disappeared from the menu bar and the island until its next
+  clean write. In a permission request it was worse: the card never appeared and the
+  agent sat there for the full ten minutes waiting for an answer nobody could give.
+  Every value now passes through the check on the way out, in all eight writers.
+
+- **On Linux, three things the app knew and the `agentbar` CLI did not.** A quiet
+  Antigravity session never ended there — Antigravity sends no terminal event, and
+  only the app had the watchdog that turns a session quiet for 90 seconds into
+  *done* — so it animated for ever and never reached `agentbar history`. A decision
+  answered after its session row was gone lost the directory it was made in, which
+  is what scopes "allowed 23× here". And `agentbar doctor` said nothing about a
+  rules file that will not parse, which is the one failure that looks exactly like
+  everything working. All three now match the app, and the two halves are compared
+  by their own tables rather than by reading them side by side.
+
+- **A cloud row cannot ask for permission.** `docs/protocol.md` has always said a
+  cloud writer must use *question* rather than *permission*, so that nothing offers
+  an Allow with no waiting hook behind it. The code trusted every writer to have
+  read that; now the poller rewrites it where the row is built and the app checks
+  before it types anything. Codex made it real — it has both keystroke approval and
+  cloud tasks, so an Allow on such a row would have sent a Return to whatever window
+  happened to be in front.
+
 ## 1.27.2 - 2026-09-17
 
 ### Fixed
