@@ -151,6 +151,26 @@ mislead the next reader.
 - **The two watchers' file-format parsing** is tested only through the live-app
   suites, because their inputs are what the third-party apps write.
 
+## Keeping the two halves honest
+
+`Scripts/cli/agentbar` is a transliteration of the app with no shared source, so the
+cheapest bug in this repo is one half drifting from the other while both stay green.
+Two suites catch behaviour; what they cannot catch is a table that grew on one side
+only. That is compared by extracting the tables and diffing them, which takes a
+minute and has found three real bugs:
+
+- the event wired per agent (`claude`, `codex`, `copilot`, `cursor`, `gemini`/`qwen`,
+  `antigravity`), with its script, argument and timeout
+- the multiplexer list the decision shape is built from
+- every pruning window — `state.d` 24 h, `requests.d` 660 s, `answers.d` 60 s
+- what counts as a session ending, and what a weight has to contain to exist
+- the ids `doctor` reports, against `Diagnostics.run`
+
+Three ids legitimately differ and are meant to: `app.accessibility` and
+`app.singleInstance` are macOS notions with no Linux counterpart, and
+`frontend.present` asks whether a frontend is running, which the app already knows
+about itself. Everything else matching is the contract.
+
 ## What was checked by hand, against the running app
 
 A suite proves the logic; it does not prove that the app anybody installed is
