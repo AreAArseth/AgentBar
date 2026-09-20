@@ -554,6 +554,55 @@ printf '{"sessionId":"s9","agent":"claude","toolName":"Bash","display":"Bash: gi
 "$CLI" approve >/dev/null
 check "and falls back to the session's cwd" 'grep -q "\"cwd\":\"$HOME/proj\"" "$HOME/.agentbar/decisions.jsonl"'
 
+# --- a session whose whole cost is cached input still has a weight ---------------
+# Every other reader — this file's own Claude one, and both of the app's — keeps a
+# weight whose only non-zero number is cache reads. Codex's here dropped it, so the
+# same rollout produced a weight in the app and none in the CLI. Nothing is shown
+# either way (cache reads are stored, never displayed), which is exactly why it
+# could sit in `history.jsonl` unnoticed and disagree with the other half.
+fresh_home
+export CODEX_HOME="$HOME/.codex"
+mkdir -p "$CODEX_HOME/sessions/2026/09/17"
+printf '{"timestamp":"2026-09-17T10:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":4000,"cached_input_tokens":4000,"output_tokens":0,"cache_write_input_tokens":0}}}}\n' \
+  > "$CODEX_HOME/sessions/2026/09/17/rollout-2026-09-17T10-00-00-cacheonly.jsonl"
+printf '{"agent":"codex","state":"tool","started":true,"ts":%s,"pid":%s,"cwd":"/tmp/x","project":"X","sessionId":"codex-cacheonly"}' "$(date +%s)" "$$" \
+  > "$HOME/.agentbar/state.d/codex-cacheonly.json"
+"$CLI" status >/dev/null 2>&1
+rm -f "$HOME/.agentbar/state.d/codex-cacheonly.json"
+"$CLI" status >/dev/null 2>&1
+check "a cache-only codex weight is kept" 'grep -q "\"cacheRead\":4000" "$HOME/.agentbar/history.jsonl"'
+check "and its input is not double-counted" 'grep -q "\"in\":0" "$HOME/.agentbar/history.jsonl"'
+unset CODEX_HOME
+
+# --- a quiet Antigravity session decays, here as well as in the app --------------
+# Antigravity 2.3.x fires only PostToolUse: there is no terminal event at all, so a
+# working session that has gone quiet would animate for ever and never reach the
+# history. The app's watchdog turns it into `done` after 90s and marks the row as a
+# guess rather than a reported finish. This half had no watchdog, so on Linux the
+# same session never ended.
+fresh_home
+OLD=$(( $(date +%s) - 120 ))
+printf '{"agent":"antigravity","state":"tool","label":"x","project":"proj","cwd":"","sessionId":"ag1","pid":%s,"started":true,"ts":%s}' \
+  "$$" "$OLD" > "$HOME/.agentbar/state.d/ag1.json"
+check "a quiet antigravity row reads as done" '"$CLI" status --json | grep -q "\"state\": *\"done\""'
+check "and not as still working"              '! "$CLI" status --json | grep -q "\"state\": *\"tool\""'
+"$CLI" status >/dev/null 2>&1
+rm -f "$HOME/.agentbar/state.d/ag1.json"
+"$CLI" status >/dev/null 2>&1
+check "it reaches the history as a guess"     'grep -q "\"decayed\":true" "$HOME/.agentbar/history.jsonl"'
+
+# Ninety seconds is the window, and a session inside it is simply working.
+fresh_home
+printf '{"agent":"antigravity","state":"tool","label":"x","project":"proj","cwd":"","sessionId":"ag2","pid":%s,"started":true,"ts":%s}' \
+  "$$" "$(date +%s)" > "$HOME/.agentbar/state.d/ag2.json"
+check "a fresh antigravity row still works"   '"$CLI" status --json | grep -q "\"state\": *\"tool\""'
+
+# And the watchdog is Antigravity's alone: every other agent reports its own ending.
+fresh_home
+printf '{"agent":"claude","state":"tool","label":"x","project":"proj","cwd":"","sessionId":"cl1","pid":%s,"started":true,"ts":%s}' \
+  "$$" "$OLD" > "$HOME/.agentbar/state.d/cl1.json"
+check "a quiet claude row is left alone"      '"$CLI" status --json | grep -q "\"state\": *\"tool\""'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

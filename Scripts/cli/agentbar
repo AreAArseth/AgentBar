@@ -76,6 +76,16 @@ function sessions() {
     if (dead || stale) { try { fs.rmSync(p, { force: true }); } catch {} continue; }
     if (!s.started) continue;
     s.id = f.slice(0, -".json".length);
+    // Antigravity emits no terminal event (2.3.x fires only PostToolUse), so a
+    // working session that has gone quiet decays to done instead of running for
+    // ever — and the row says it was a watchdog's guess, not a reported finish.
+    // Mirrors SessionStore.swift; without it the same session ends in the app and
+    // never ends here.
+    if (s.agent === "antigravity" && (s.state === "thinking" || s.state === "tool")
+        && s.ts > 0 && now() - s.ts > 90) {
+      s.state = "done";
+      s.decayed = true;
+    }
     out.push(s);
   }
   out.sort((a, b) => ((PRIORITY[b.state] || 0) - (PRIORITY[a.state] || 0)) || ((b.ts || 0) - (a.ts || 0)));
@@ -123,7 +133,8 @@ function recordHistory(ss) {
         v: 1, agent: s.agent || "", sessionId: id, project: s.project || "",
         cwd: s.cwd || "", label: s.label || "", prompt: s.prompt || "",
         model: s.model || "", startedAt: Math.floor(s.started_at || 0),
-        endedAt: Math.floor(s.ts || now()), state: s.state || "", decayed: false,
+        endedAt: Math.floor(s.ts || now()), state: s.state || "",
+        decayed: s.decayed === true,
       };
       // Both optional, both omitted rather than zeroed: a reader has to be able to
       // tell "nobody measured this" from "this cost nothing".
@@ -477,7 +488,11 @@ function codexWeight(sessionId) {
             cacheWrite: t.cache_write_input_tokens || 0, cacheRead: cached,
             src: "codex-rollout" };
   }
-  return out && (out.in || out.out || out.cacheWrite) ? out : null;
+  // Cache reads count towards "there is a reading here", the same way they do in
+  // claudeWeight above and in both of the app's readers. They are never *shown* —
+  // weightTotal leaves them out — but a session whose whole cost was cached input
+  // has been read, and saying so is not the same as saying it cost nothing.
+  return out && (out.in || out.out || out.cacheWrite || out.cacheRead) ? out : null;
 }
 
 function sessionWeight(agent, sessionId, cwd) {
