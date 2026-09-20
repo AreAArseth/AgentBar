@@ -1317,6 +1317,31 @@ function doctor(json) {
     }
   }
 
+  // A rules file that will not parse is the one failure that is invisible by
+  // design: nothing fires, every prompt comes back, and that is exactly what a
+  // working AgentBar looks like. The app reports it in its own Diagnostics, and
+  // this is where somebody wondering why their rule stopped working will look —
+  // including on macOS, where this command is what gets pasted into a bug report.
+  {
+    const loaded = readRules();
+    if (loaded.state === "none") {
+      add("rules.file", "Rules", "skipped", "None written — every prompt comes to you.");
+    } else if (loaded.state === "invalid") {
+      add("rules.file", "Rules", "fail", `${loaded.why}. No rule is being applied.`,
+          "Fix ~/.agentbar/rules.json, or move it aside and write the rules again. "
+          + "Nothing is applied while any of it is wrong.");
+    } else {
+      const titles = { on: "answering", watch: "watching", off: "off" };
+      const counts = ["on", "watch", "off"]
+        .map((m) => [titles[m], loaded.rules.filter((r) => (r.mode || "on") === m).length])
+        .filter(([, n]) => n > 0)
+        .map(([t, n]) => `${n} ${t}`);
+      add("rules.file", "Rules", "ok",
+          (counts.length ? counts.join(", ") : "none")
+          + " — applied by the AgentBar app; this command only lists them.");
+    }
+  }
+
   const stale = [];
   for (const [name, dir, maxAge] of [["state.d", stateDir, 86400], ["requests.d", reqDir, 660], ["answers.d", ansDir, 60]]) {
     let files = []; try { files = fs.readdirSync(dir); } catch {}

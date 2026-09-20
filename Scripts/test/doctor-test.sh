@@ -139,6 +139,27 @@ DCFG="$HOME/.codex/config.toml"
 printf '\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
 check "codex hooks accepted passes"     '[ "$(status_of codex.hooks)" = ok ]'
 
+# --- the rules file, reported the way the app reports it -------------------------
+# A rules file that will not parse is the one failure that is invisible by design:
+# nothing fires, every prompt comes back, and that is exactly what a working
+# AgentBar looks like. The app says so in its own Diagnostics; this half said
+# nothing at all, and `doctor --json` is what people paste into a bug report.
+fresh_home
+check "no rules file is skipped"        '[ "$(status_of rules.file)" = skipped ]'
+
+printf '{"v":1,"rules":[{"id":"r-1","decision":"deny","shape":"bash:curl","mode":"on"},{"id":"r-2","decision":"allow","shape":"bash:git status","cwd":"/repo","mode":"watch"}]}' \
+  > "$HOME/.agentbar/rules.json"
+check "a readable rules file is ok"     '[ "$(status_of rules.file)" = ok ]'
+check "and it counts them by mode"      '"$CLI" doctor | grep -q "1 answering, 1 watching"'
+
+printf '{"v":1,"rules":[{"id":"r-1","decision":"allow","shape":"bash:git status","mode":"on"}]}' \
+  > "$HOME/.agentbar/rules.json"
+check "an approval with no directory fails" '[ "$(status_of rules.file)" = fail ]'
+
+printf 'not json at all' > "$HOME/.agentbar/rules.json"
+check "junk fails rather than passes"   '[ "$(status_of rules.file)" = fail ]'
+check "and says nothing is applied"     '"$CLI" doctor | grep -q "No rule is being applied"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

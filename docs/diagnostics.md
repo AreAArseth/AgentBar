@@ -74,6 +74,9 @@ Repeated for each entry in the integration table, `<id>` being the agent id.
 | `agent.<id>.interpreter` | the node path *inside that config* still exists, emitted only when it does not |
 | `agent.<id>.lastSeen` | when this agent last reported, from `history.jsonl`. **No record is `ok`**, not a warning — history only starts when a frontend starts keeping it, so every agent is blank on a freshly updated machine and flagging that would bury the one row that matters under eight that don't. Wired and silent for 14 days *is* a warning: that is the shape of a broken integration every other check passes |
 | `claude.configDir` | the `~/.agentbar/claude-config-dir` hint agrees with the live `CLAUDE_CONFIG_DIR` |
+| `codex.hooks` | Codex has accepted its hooks. Codex runs none until a human says yes, and an unaccepted hook is skipped in silence — so the wired row, which the older `notify` key alone satisfies, cannot tell you. `warn` until the answer lands in `[hooks.state]` |
+| `copilot.exec` | Copilot's hook runs node directly. A `bash` wrapper makes the hook's parent a shell that exits at once — and that pid is what prunes dead rows, so every Copilot row would vanish on the next refresh |
+
 Some rows carry a **Fix it** button as well as a sentence — only where the repair is
 AgentBar's own to make: re-installing the hooks (wiring, a node path that moved, the
 script copies), creating the `~/.agentbar` directories, and clearing files past their
@@ -84,8 +87,6 @@ Beside them sits **Test an approval**, which is not a check at all: it raises a 
 approval through the real hook and waits for you to answer it. Every other row can
 pass while the thing it describes has never once run.
 
-| `codex.hooks` | Codex has accepted its hooks. Codex runs none until a human says yes, and an unaccepted hook is skipped in silence — so the wired row, which the older `notify` key alone satisfies, cannot tell you. `warn` until the answer lands in `[hooks.state]` |
-| `copilot.exec` | Copilot's hook runs node directly. A `bash` wrapper makes the hook's parent a shell that exits at once — and that pid is what prunes dead rows, so every Copilot row would vanish on the next refresh |
 
 Where each agent lives, and what says it is ours:
 
@@ -106,7 +107,7 @@ Where each agent lives, and what says it is ours:
 |---|---|
 | `orphans` | nothing in `state.d` / `requests.d` / `answers.d` is past its pruning window. Warn only — frontends skip them |
 | `frontend.present` | somebody can answer a blocking hook: the app on macOS (`pgrep -x AgentBar`), a fresh `watcher.json` heartbeat anywhere. CLI only; the app knows this about itself |
-| `rules.file` | `~/.agentbar/rules.json` parses and every rule in it is valid. **`fail` when it does not**, naming the rule — this is the one failure in the app that is invisible by design: no rule fires, every prompt comes back, and that is indistinguishable from AgentBar working normally. `skipped` when there is no file, which is most people. The detail counts the rules by mode (answering / watching / off). macOS only for now, because only the app applies rules |
+| `rules.file` | `~/.agentbar/rules.json` parses and every rule in it is valid. **`fail` when it does not**, naming the rule — this is the one failure in the app that is invisible by design: no rule fires, every prompt comes back, and that is indistinguishable from AgentBar working normally. `skipped` when there is no file, which is most people. The detail counts the rules by mode (answering / watching / off). Reported by both halves, and the CLI's wording says the app is what applies them — a `doctor --json` pasted into a bug report is often the only thing anybody sees |
 
 ### macOS only
 
