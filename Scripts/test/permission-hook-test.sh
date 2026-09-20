@@ -986,6 +986,78 @@ AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=1 "$NODE" "$HOOK" \
 check "hostile: the row it leaves still parses" \
   '"$NODE" -e "JSON.parse(require(\"fs\").readFileSync(process.env.HOME + \"/.agentbar/state.d/h7.json\", \"utf8\"))"'
 
+# --- 33. The quiet hooks, handed the same nonsense --------------------------------
+# update.js and lifecycle.js never block anybody, so their failure is silent: a row
+# that does not appear, or — worse — a state file Swift refuses to decode, which
+# hides the session from every frontend until the next clean write. A lone high
+# surrogate does exactly that: JSON.stringify escapes one happily and
+# JSONSerialization rejects the whole file, which is why sliceSafe exists.
+LIFECYCLE="Scripts/hooks/claude/lifecycle.js"
+# A state file nothing can read is the failure being hunted, so the check is the
+# decoded string, not the bytes: the file is valid UTF-8 either way.
+# Every string in a written file must survive a UTF-8 encode: python refuses a lone
+# surrogate, which is the same refusal Swift's JSONSerialization makes — and an
+# unreadable file is the failure being hunted. Same idiom as the request check
+# further up, and as `utf16_clean` in the bridge suite.
+utf8_clean() {
+  python3 -c '
+import json, sys, os
+def walk(v):
+    if isinstance(v, str): v.encode("utf-8")
+    elif isinstance(v, dict):
+        for x in v.values(): walk(x)
+    elif isinstance(v, list):
+        for x in v: walk(x)
+d = sys.argv[1]
+for name in os.listdir(d):
+    with open(os.path.join(d, name)) as fh: walk(json.load(fh))
+' "$1"
+}
+readable='utf8_clean "$HOME/.agentbar/state.d"'
+
+quiet() {   # quiet <name> <script> <verb> <json>
+  fresh_home
+  local code=0
+  printf '%s' "$4" | "$NODE" "$2" "$3" >/dev/null 2>&1 || code=$?
+  check "quiet: $1 exits 0"      "[ $code -eq 0 ]"
+  check "quiet: $1 stays readable" "$readable"
+}
+
+BIGP=$("$NODE" -e 'process.stdout.write("B".repeat(200000))')
+quiet "a prompt longer than a book" "$UPDATE" prompt \
+  "{\"session_id\":\"q1\",\"prompt\":\"$BIGP\"}"
+quiet "a lone surrogate in the prompt" "$UPDATE" prompt \
+  '{"session_id":"q2","prompt":"fix \ud800 this"}'
+quiet "a lone surrogate in the label" "$UPDATE" pre \
+  '{"session_id":"q3","tool_name":"Bash","tool_input":{"command":"echo \ud800"}}'
+quiet "a tool input that is an array" "$UPDATE" pre \
+  '{"session_id":"q4","tool_name":"Bash","tool_input":[1,2,3]}'
+quiet "every field null" "$UPDATE" post \
+  '{"session_id":null,"tool_name":null,"tool_input":null,"cwd":null}'
+quiet "a session id shaped like a path" "$LIFECYCLE" start \
+  '{"session_id":"../../../../tmp/pwned","cwd":"/tmp"}'
+quiet "nothing at all on stdin" "$LIFECYCLE" start ''
+
+# And a malformed event must not cost a row that was already there: losing the
+# session is the same outcome as never writing it, arrived at more expensively.
+fresh_home
+printf '{"session_id":"keepme","cwd":"/tmp/proj","prompt":"real work"}' | "$NODE" "$UPDATE" prompt
+printf 'not json at all' | "$NODE" "$UPDATE" pre >/dev/null 2>&1
+check "quiet: junk leaves the row alone" 'grep -q "\"prompt\":\"real work\"" "$HOME/.agentbar/state.d/keepme.json"'
+
+# The request file is the worse half of the same failure: unreadable, no card ever
+# appears and the hook waits out its whole ten minutes for an answer nobody can give.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" \
+  <<<'{"hook_event_name":"PermissionRequest","session_id":"sg1","prompt_id":"p1","tool_name":"Bash","tool_input":{"command":"echo \ud800 hi"}}' >"$HOME/out.json" &
+hookpid=$!
+wait_req
+check "a request with a lone surrogate is readable" \
+  'utf8_clean "$HOME/.agentbar/requests.d"'
+check "and it still carries the command" 'grep -q "echo" "$HOME/.agentbar/requests.d/$REQ"'
+printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

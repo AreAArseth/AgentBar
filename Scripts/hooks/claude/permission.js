@@ -49,7 +49,7 @@ const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0
 const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
 const writeAtomic = (file, obj) => {
   const tmp = file + "." + process.pid + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(obj));
+  fs.writeFileSync(tmp, JSON.stringify(obj, paired));
   fs.renameSync(tmp, file);
 };
 // "Somebody can answer": the macOS app (pgrep), or the cross-platform CLI's
@@ -75,6 +75,14 @@ const canonical = (v) => {
   return JSON.stringify(v);
 };
 
+// A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
+// JSONSerialization reject the whole file, and an unreadable state file hides the
+// session from every frontend until the next clean write. It cannot be caught after
+// stringify, which escapes it into six harmless-looking characters, so it is caught
+// on the values on the way out.
+const paired = (k, v) => (typeof v === "string"
+  ? v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+  : v);
 // Never end a cut on a lone high surrogate. JSON.stringify happily escapes one,
 // but Swift's JSONSerialization refuses the whole file — and an unreadable
 // request blocks the approval while the hook waits for an answer no frontend

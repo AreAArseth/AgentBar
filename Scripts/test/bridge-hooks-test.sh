@@ -328,6 +328,26 @@ printf '{"session_id":"shim4"}' \
   | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/codex/hook.js lifecycle.js end
 check "shim: lifecycle ends the row"    '[ ! -e "$HOME/.agentbar/state.d/codex-shim4.json" ]'
 
+# --- a lone surrogate that ARRIVED that way, not one a cut made ------------------
+# The cut has been guarded since the bridges were written. What went through
+# untouched was a surrogate already unpaired in the payload: it reaches the file as
+# an escape Swift's JSONSerialization refuses, and the session disappears from every
+# frontend until the next clean write. Now every value is paired on the way out.
+fresh_home
+"$NODE" -e 'process.stdout.write(JSON.stringify({hook_event_name:"sessionStart",conversation_id:"cur9",prompt:"fix \ud800 this"}))' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/cursor/cursor.js
+check "cursor keeps a lone surrogate out" 'utf16_clean "$HOME/.agentbar/state.d/cur9.json" prompt'
+check "and still wrote the row"           '[ -e "$HOME/.agentbar/state.d/cur9.json" ]'
+
+fresh_home
+"$NODE" -e 'process.stdout.write(JSON.stringify({hook_event_name:"SessionStart",session_id:"gem9",prompt:"fix \ud800 this"}))' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/gemini/gemini.js
+check "gemini keeps one out too"          'utf16_clean "$HOME/.agentbar/state.d/gem9.json" prompt'
+
+fresh_home
+"$NODE" Scripts/hooks/codex/notify.js "$("$NODE" -e 'process.stdout.write(JSON.stringify({type:"agent-turn-complete","thread-id":"ntf9",cwd:"/tmp","last-assistant-message":"done \ud800 here"}))')"
+check "notify keeps one out as well"      'utf16_clean "$HOME/.agentbar/state.d/codex-ntf9.json" recap || utf16_clean "$HOME/.agentbar/state.d/codex-ntf9.json" label'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

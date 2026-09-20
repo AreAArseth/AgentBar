@@ -37,6 +37,14 @@ const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 6
 // nothing else changes shape.
 const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
 const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
+// A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
+// JSONSerialization reject the whole file, and an unreadable state file hides the
+// session from every frontend until the next clean write. It cannot be caught after
+// stringify, which escapes it into six harmless-looking characters, so it is caught
+// on the values on the way out.
+const paired = (k, v) => (typeof v === "string"
+  ? v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+  : v);
 // Never end a cut on a lone high surrogate: JSON.stringify escapes one happily,
 // but Swift's JSONSerialization rejects the whole file — and an unreadable state
 // file hides the session from every frontend for the rest of the turn.
@@ -225,7 +233,7 @@ function run() {
   try {
     fs.mkdirSync(stateDir, { recursive: true });
     const tmp = statePath + "." + process.pid + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(out));
+    fs.writeFileSync(tmp, JSON.stringify(out, paired));
     fs.renameSync(tmp, statePath);
   } catch (e) { warn("state write " + statePath, e); }
   process.exit(0);

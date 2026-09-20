@@ -34,7 +34,15 @@ const running = () => {
     return Date.now() / 1000 - w.ts < 60;
   } catch { return false; }
 };
-const writeAtomic = (f, o) => { const t = f + "." + process.pid + ".tmp"; fs.writeFileSync(t, JSON.stringify(o)); fs.renameSync(t, f); };
+// A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
+// JSONSerialization reject the whole file, and an unreadable state file hides the
+// session from every frontend until the next clean write. It cannot be caught after
+// stringify, which escapes it into six harmless-looking characters, so it is caught
+// on the values on the way out.
+const paired = (k, v) => (typeof v === "string"
+  ? v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+  : v);
+const writeAtomic = (f, o) => { const t = f + "." + process.pid + ".tmp"; fs.writeFileSync(t, JSON.stringify(o, paired)); fs.renameSync(t, f); };
 
 let _isApp;
 const isApp = () => {

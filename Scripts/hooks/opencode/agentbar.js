@@ -14,6 +14,14 @@ const base = path.join(os.homedir(), ".agentbar");
 const stateDir = path.join(base, "state.d");
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
+// A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
+// JSONSerialization reject the whole file, and an unreadable state file hides the
+// session from every frontend until the next clean write. It cannot be caught after
+// stringify, which escapes it into six harmless-looking characters, so it is caught
+// on the values on the way out.
+const paired = (k, v) => (typeof v === "string"
+  ? v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+  : v);
 // Never end a cut on a lone high surrogate: JSON.stringify escapes one happily,
 // but Swift's JSONSerialization rejects the whole file — and an unreadable state
 // file hides the session from every frontend until the next clean write.
@@ -25,7 +33,7 @@ const sliceSafe = (s, n) => {
 const oneLine = (s) => sliceSafe(String(s).replace(/\s+/g, " ").trim(), 120);
 const writeAtomic = (file, obj) => {
   const tmp = file + "." + process.pid + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(obj));
+  fs.writeFileSync(tmp, JSON.stringify(obj, paired));
   fs.renameSync(tmp, file);
 };
 // The macOS app, or the CLI's watch/waybar heartbeat (any platform).
