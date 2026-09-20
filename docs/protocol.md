@@ -460,3 +460,10 @@ remote approval is a rendezvous with a blocking local hook, and no such hook
 exists for a cloud session. Use `question` (not `permission`) when a cloud
 session waits on its user, so frontends never offer a keystroke approval that
 has nowhere to land.
+
+That is a MUST on writers, and anybody may write a row — so a frontend SHOULD
+refuse to aim a keystroke at a row carrying `entrypoint: "cloud"` whatever its
+`state` says, rather than trust every writer to have read this paragraph. Both of
+AgentBar's halves do: the poller rewrites `permission` to `question` as it builds
+the row, and the app checks the entrypoint before it types anything
+(`AgentActions.mayKeystroke`).

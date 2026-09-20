@@ -173,6 +173,25 @@ test("toProtocolRow: cloud invariants — cwd empty, entrypoint cloud, ts frozen
   assert.equal(suspended.ts, NOW - 900); // frozen too: ts = when it last worked (sort key)
 });
 
+test("toProtocolRow: a cloud run may never ask for permission", () => {
+  // The rule is in docs/protocol.md and in devin.js's own comment, and until now it
+  // lived only in the adapters' discipline: this function copied `state` through.
+  // A row that says `permission` offers an Allow with no blocked hook behind it —
+  // and for an agent with approveKeys that means typing into whatever terminal
+  // happens to be in front. It is the one state a machine that is not this one
+  // does not get to claim.
+  const row = toProtocolRow({ id: "t1", state: "permission", label: "x" },
+                            { agentId: "codex", prefix: "codex-cloud-" }, 1000, 42);
+  assert.equal(row.state, "question");
+
+  // Everything else passes through untouched.
+  for (const state of ["thinking", "question", "done", "error", "idle"]) {
+    assert.equal(
+      toProtocolRow({ id: "t", state }, { agentId: "devin", prefix: "d-" }, 1000, 42).state,
+      state);
+  }
+});
+
 test("safeId: sanitizes and stays unique past 64 chars", () => {
   assert.equal(safeId("cloud-codex-task_e_69dd"), "cloud-codex-task_e_69dd");
   assert.equal(safeId("we/ird id!"), "we-ird-id-");

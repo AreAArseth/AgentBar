@@ -201,11 +201,25 @@ enum AgentActions {
         return written
     }
 
+    /// Whether a keystroke may be aimed at this session at all.
+    ///
+    /// A keystroke lands in a terminal **on this machine**. A row carrying
+    /// `entrypoint: "cloud"` describes a run on somebody else's, so there is no tab
+    /// to aim at and the keys would go to whatever window happens to be in front —
+    /// with `approveKeys` that is a Return typed into a stranger's prompt. `focus`
+    /// has always checked this first; the inline strip did not, and `docs/protocol.md`
+    /// lets **anybody** write a row, so the poller's own discipline is not the place
+    /// to rely on.
+    static func mayKeystroke(_ session: Session) -> Bool {
+        session.entrypoint != "cloud" && Agent.byID(session.agentID).approveKeys != nil
+    }
+
     /// Inline strip on keystroke-backed permission rows (Antigravity, Codex, Copilot).
     static func keystroke(_ behavior: String, session: Session) {
         switch behavior {
         case "allow":
-            guard let keys = Agent.byID(session.agentID).approveKeys else { return }
+            guard mayKeystroke(session),
+                  let keys = Agent.byID(session.agentID).approveKeys else { return }
             guard KeystrokeApprover.trusted else {
                 KeystrokeApprover.requestAccess()
                 return

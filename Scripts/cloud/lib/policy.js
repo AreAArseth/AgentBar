@@ -33,9 +33,16 @@ const tsFrozen = (state) => isTerminal(state) || state === "idle";
 // Assemble the state.d row. cwd stays empty (no local checkout — a non-empty cwd
 // would advertise the wrong git branch) and pid is the poller's own, so the rows
 // die with the poller.
+// The one state a run on somebody else's machine may not claim. A `permission` row
+// offers an Allow with no blocked hook behind it, and for an agent that has
+// approveKeys that means typing into whatever terminal happens to be in front.
+// Every adapter maps to `question` already — this is the boundary saying so, so
+// that the rule survives the next adapter and the next vendor status string.
+const cloudState = (state) => (state === "permission" ? "question" : state);
+
 const toProtocolRow = (run, { agentId, prefix }, now, pid) => ({
   agent: agentId,
-  state: run.state,
+  state: cloudState(run.state),
   label: oneLine(run.label, 80),
   project: oneLine(run.project, 40),
   cwd: "",
@@ -44,7 +51,7 @@ const toProtocolRow = (run, { agentId, prefix }, now, pid) => ({
   term_program: "",
   pid,
   started: true,
-  ts: tsFrozen(run.state) ? Math.min(run.updated_at || now, now) : now,
+  ts: tsFrozen(cloudState(run.state)) ? Math.min(run.updated_at || now, now) : now,
   ...(run.started_at ? { started_at: run.started_at } : {}),
   ...(run.prompt ? { prompt: oneLine(run.prompt, 120) } : {}),
   ...(run.recap ? { recap: oneLine(run.recap, 160) } : {}),
