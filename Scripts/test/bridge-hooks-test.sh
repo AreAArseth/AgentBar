@@ -348,6 +348,39 @@ fresh_home
 "$NODE" Scripts/hooks/codex/notify.js "$("$NODE" -e 'process.stdout.write(JSON.stringify({type:"agent-turn-complete","thread-id":"ntf9",cwd:"/tmp","last-assistant-message":"done \ud800 here"}))')"
 check "notify keeps one out as well"      'utf16_clean "$HOME/.agentbar/state.d/codex-ntf9.json" recap || utf16_clean "$HOME/.agentbar/state.d/codex-ntf9.json" label'
 
+# --- antigravity, handed payloads nobody sane would send -------------------------
+# The stakes here are the opposite way round from every other bridge: agy reads
+# silence, a crash, or any stdout that is not a valid decision as **deny**. So for
+# each of these the allow has to come out anyway — a status bridge is never the
+# reason a tool call was refused — and whatever row it leaves has to be readable.
+anti_hostile() {   # anti_hostile <name> <json>
+  fresh_home
+  local out
+  out="$(printf '%s' "$2" | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/antigravity/antigravity.js PreToolUse 2>/dev/null; echo "|$?")"
+  check "anti: $1 still allows" '[ "$out" = "{\"decision\":\"allow\"}|0" ]'
+}
+
+BIGA=$("$NODE" -e 'process.stdout.write("A".repeat(200000))')
+anti_hostile "a tool name longer than a book" \
+  "{\"conversationId\":\"h1\",\"toolCall\":{\"name\":\"$BIGA\"}}"
+anti_hostile "a conversation id shaped like a path" \
+  '{"conversationId":"../../../../tmp/pwned","toolCall":{"name":"edit_file"}}'
+anti_hostile "a lone surrogate in the tool name" \
+  '{"conversationId":"h3","toolCall":{"name":"edit \ud800 file"}}'
+anti_hostile "workspacePaths that is a string" \
+  '{"conversationId":"h4","workspacePaths":"/tmp/proj","toolCall":{"name":"edit_file"}}'
+anti_hostile "a toolCall that is an array" \
+  '{"conversationId":"h5","toolCall":[1,2,3]}'
+anti_hostile "every field null" \
+  '{"conversationId":null,"workspacePaths":null,"toolCall":null}'
+anti_hostile "an empty document" '{}'
+
+# And the row it wrote for the surrogate case is one a frontend can read.
+fresh_home
+printf '{"conversationId":"h6","workspacePaths":["/tmp/proj"],"toolCall":{"name":"edit \ud800 file"}}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/antigravity/antigravity.js PreToolUse >/dev/null
+check "anti: the row it leaves is readable" 'utf16_clean "$HOME/.agentbar/state.d/h6.json" label'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

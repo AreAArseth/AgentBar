@@ -204,4 +204,61 @@ import Testing
     func agentsWithNothingOnDiskReportNothing(_ agent: String) {
         #expect(WeightReader.read(agent: agent, sessionId: "x", cwd: "/tmp") == nil)
     }
+
+    // MARK: - Numbers and lines out of somebody else's file
+
+    /// These files are written by the agents, not by AgentBar, and a transcript is
+    /// appended to while this reads it. So the only two acceptable answers to
+    /// anything in here are a sane number and no number — never a crash, and never
+    /// a number that came from the wrong field.
+    @Test func aTokenCountTooBigForAnIntIsNoCountAtAll() throws {
+        _ = try transcript("big", lines: [
+            #"{"type":"assistant","timestamp":"2026-09-16T12:00:00.000Z","message":{"id":"m1","usage":"#
+                + #"{"input_tokens":1e19,"output_tokens":20}}}"#,
+        ])
+        let w = WeightReader.claude(sessionId: "big", cwd: "/tmp/AgentBar", home: dir)
+        // The output survives; the impossible input is simply not a number this
+        // reads. What must not happen is a trap on the way past it.
+        #expect(w?.output == 20)
+        #expect(w?.input == 0)
+    }
+
+    @Test func aRolloutFullOfNonsenseIsReadOrRefused() {
+        for text in [
+            #"{"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1e19,"output_tokens":5}}}}"#,
+            #"{"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":"lots"}}}}"#,
+            #"{"payload":{"type":"token_count","info":{"total_token_usage":[1,2,3]}}}"#,
+            #"{"payload":{"type":"token_count","info":null}}"#,
+            "token_count but not JSON at all",
+            "",
+        ] {
+            // Either a weight or nil; the point is that it returns.
+            let w = WeightReader.codexRollout(text)
+            #expect(w == nil || w!.output >= 0)
+        }
+    }
+
+    /// Cached input is subtracted from input, and a rollout claiming more cache than
+    /// input must floor at zero rather than report a negative count nobody can read.
+    @Test func moreCacheThanInputFloorsAtZero() throws {
+        let w = try #require(WeightReader.codexRollout(
+            #"{"payload":{"type":"token_count","info":{"total_token_usage":"#
+            + #"{"input_tokens":10,"cached_input_tokens":99,"output_tokens":7}}}}"#))
+        #expect(w.input == 0)
+        #expect(w.cacheRead == 99)
+        #expect(w.output == 7)
+    }
+
+    /// A line torn by a crash mid-append costs that line and nothing else — the
+    /// lines around it still count.
+    @Test func aTornLineCostsOnlyItself() throws {
+        _ = try transcript("torn", lines: [
+            assistantLine(id: "m1", input: 10, output: 20),
+            #"{"type":"assistant","message":{"id":"m2","usage":{"input_tok"#,
+            assistantLine(id: "m3", input: 1, output: 2),
+        ])
+        let w = try #require(WeightReader.claude(sessionId: "torn", cwd: "/tmp/AgentBar", home: dir))
+        #expect(w.input == 11)
+        #expect(w.output == 22)
+    }
 }
