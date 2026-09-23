@@ -1,0 +1,76 @@
+# Provenance for the file people actually download.
+#
+# `ci.yml` builds the universal bundle and attests it, but that bundle is ad-hoc
+# signed: the release asset is the same bundle signed locally with "AgentBar Local
+# Signing" (the certificate TCC grants are keyed to, which never leaves that
+# keychain) and zipped again, so its digest is new and the CI attestation says
+# nothing about it. This job closes that gap without moving the certificate: it
+# takes the published asset and the CI build of the tagged commit, proves with
+# Scripts/dev/verify-release.sh that they differ in the signature and nothing else,
+# and only then attests the published asset.
+#
+#   gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar
+#
+# then answers for the download itself. A release whose check fails gets no
+# attestation, and the failed run is the notice.
+name: Release provenance
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify and attest (e.g. v1.28.1)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-provenance-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    name: Verify and attest the release asset
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Reading another run's artifact.
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The script that judges the release comes from main, not from the tag:
+          # a release cut before this job existed has no copy of it.
+          ref: main
+      - name: Find the CI build of the tagged commit
+        run: |
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" -q .sha)"
+          RUN="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
+                   --event push --status success --limit 1 --json databaseId -q '.[0].databaseId')"
+          if [ -z "$RUN" ]; then
+            echo "::error::no successful push run of ci.yml for $TAG ($SHA)"
+            exit 1
+          fi
+          echo "$TAG is $SHA, built by run $RUN"
+          echo "CI_RUN=$RUN" >> "$GITHUB_ENV"
+      - name: Download the CI bundle and the release asset
+        run: |
+          mkdir ci rel
+          gh run download "$CI_RUN" -R "$GITHUB_REPOSITORY" -n AgentBar-app-universal -D ci
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p AgentBar.app.zip -D rel
+          shasum -a 256 ci/AgentBar.app.zip rel/AgentBar.app.zip
+      - name: Check the release is the CI build, re-signed
+        run: ./Scripts/dev/verify-release.sh ci/AgentBar.app.zip rel/AgentBar.app.zip
+      - name: Attest the release asset
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: rel/AgentBar.app.zip

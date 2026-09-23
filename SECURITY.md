@@ -116,3 +116,23 @@ towards asking, never towards allowing.
   Accessibility permission and a per-prompt click on an explicitly labeled item.
 
 Reports that break any of these guarantees are exactly what we want to hear about.
+
+## Verifying a download
+
+The app is signed with the project's own certificate, not Apple's, so its
+signature proves the bundle was not changed after signing and nothing about where
+it came from. Provenance answers that part. From 1.28.1 on, every release asset is
+attested after a check that it is exactly the bundle CI built from the tagged
+commit, with the signature replaced and nothing else:
+
+```bash
+gh release download -R michalstrnadel/AgentBar -p AgentBar.app.zip   # latest; or name a tag
+gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar
+```
+
+A passing check says this zip is the one `release-provenance.yml` verified against
+the CI build of that tag — which files, which commit, which run — and that anyone
+can read that code. It does not say the code is safe; that is what reading it, and
+the CodeQL and SBOM results beside it, are for. The comparison itself is
+`Scripts/dev/verify-release.sh`, and it can be run by hand on a CI artifact and a
+release asset.

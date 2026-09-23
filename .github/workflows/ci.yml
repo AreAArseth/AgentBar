@@ -105,11 +105,16 @@ jobs:
           subject-path: AgentBar.app.zip
           sbom-path: AgentBar.spdx.json
       # Says, verifiably, that this exact zip came out of this workflow at this
-      # commit. `gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar`
-      # checks it, and it answers a question this project cannot answer any other
-      # way: the release is signed with a certificate that is not Apple's, so the
+      # commit. It answers a question this project cannot answer any other way:
+      # the release is signed with a certificate that is not Apple's, so the
       # signature proves the bundle was not altered after signing and nothing
       # more. Provenance is what ties it back to a commit anybody can read.
+      #
+      # This zip is not the one people download — the release is this bundle
+      # re-signed, so its digest differs. `release-provenance.yml` checks the two
+      # differ only in the signature and attests the published asset, which is
+      # what `gh attestation verify AgentBar.app.zip -R michalstrnadel/AgentBar`
+      # finds for a downloaded copy.
       #
       # Only on push: a pull request from a fork cannot mint the token, and a step
       # that fails for everyone outside the repo is a broken gate, not a strict one.

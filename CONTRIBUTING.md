@@ -161,11 +161,11 @@ universal bundle, and it is signed locally.
 2. Commit as `chore: release X.Y.Z — …` and push. Wait for CI to go green.
 3. Download the bundle CI built and verified, then sign it here:
    ```bash
-   RID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+   RID=$(gh run list --workflow ci.yml --limit 1 --json databaseId -q '.[0].databaseId')
    gh run download "$RID" -n AgentBar-app-universal -D /tmp/rel
    cd /tmp/rel && ditto -xk AgentBar.app.zip .
    codesign --force --deep -s "AgentBar Local Signing" AgentBar.app
-   rm AgentBar.app.zip
+   mkdir ci && mv AgentBar.app.zip ci/
    ditto -c -k --sequesterRsrc --keepParent AgentBar.app AgentBar.app.zip
    ```
    `ditto`, not `zip`: a plain zip of a `.app` loses symlinks and resource forks.
@@ -175,7 +175,11 @@ universal bundle, and it is signed locally.
    codesign -dvvv AgentBar.app 2>&1 | grep Authority   # AgentBar Local Signing
    lipo -archs AgentBar.app/Contents/MacOS/AgentBar    # x86_64 arm64
    /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" AgentBar.app/Contents/Info.plist
+   Scripts/dev/verify-release.sh /tmp/rel/ci/AgentBar.app.zip AgentBar.app.zip
    ```
+   The last line proves the asset is the CI build with a new signature and
+   nothing else — the same check `release-provenance.yml` runs on the published
+   asset before attesting it.
 5. `gh release create vX.Y.Z AgentBar.app.zip --title "…" --notes-file …`. The
    asset **must** be named `AgentBar.app.zip` and the tag `vX.Y.Z`: `UpdateChecker`
    looks up exactly that name under `releases/latest` and strips the leading `v`
@@ -184,3 +188,11 @@ universal bundle, and it is signed locally.
    set `sha256` to the output of `shasum -a 256 AgentBar.app.zip`, push, then
    verify with `brew audit --cask michalstrnadel/tap/agentbar` (and
    `brew style` on the tap checkout).
+7. Publishing the release starts `release-provenance.yml`. Wait for it, then check
+   the download answers for itself:
+   ```bash
+   gh release download vX.Y.Z -p AgentBar.app.zip -D /tmp/check
+   gh attestation verify /tmp/check/AgentBar.app.zip -R michalstrnadel/AgentBar
+   ```
+   A failed run means the asset is not the CI build re-signed; it gets no
+   attestation, and it should not stay published.
