@@ -7,7 +7,7 @@ shipped with the plan, and Phase 3 (content parity) is now complete: item 1
 `docs/protocol.md`, rendered on the island hero, 1.13.0). Of Phase 4 (polish),
 sounds (1.11.0) and the precise terminal jump (1.12.0) shipped, and the menu
 rows carry agent marks and elapsed time now (1.13.0); the full custom-NSView
-row pass is the one item still open. The usage/quota entry under *Explicitly not doing* was
+row pass shipped in 1.29.0 (`SessionRowView`), which closes Phase 4. The usage/quota entry under *Explicitly not doing* was
 re-opened on different terms and shipped in 1.12.0 — see the note there.
 See *As built* for where the shipped app differs from this draft; everything
 below the fold is the original 2026-07-28 draft, kept because its survey of the
@@ -265,9 +265,10 @@ Ordered by value per unit of work.
 - **Menu-bar mode visual pass.** — partly done: session rows carry the agent's
   menu mark (`item.image`, same glyphs as the Open submenu) and elapsed time in
   the dimmed suffix — inside the attributed-string rows, so the never-shrink
-  `updateInPlace` logic is untouched. The full custom-`NSView` row rewrite this
-  item proposed remains open, with the same caveat: it interacts with
-  `updateInPlace` — budget time for it, or accept full repopulate for view rows.
+  `updateInPlace` logic is untouched. — **done** (1.29.0, `SessionRowView.swift`):
+  the rows are drawn views with the time and agent in aligned columns, and
+  `updateInPlace` refreshes them through `update(_:)` / `showEnded(_:)` instead of
+  a new title, so the never-shrink rule holds without a repopulate.
 
 ## Explicitly not doing
 

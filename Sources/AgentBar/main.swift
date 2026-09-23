@@ -161,6 +161,15 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-usage"),
         to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
 }
 
+// Session rows as the menu draws them, every state, light and dark. See
+// SessionRowView.renderForVerification.
+if let i = CommandLine.arguments.firstIndex(of: "--render-menu-rows"),
+   CommandLine.arguments.indices.contains(i + 1) {
+    _ = NSApplication.shared
+    exit(SessionRowView.renderForVerification(
+        to: URL(fileURLWithPath: CommandLine.arguments[i + 1])) ? 0 : 1)
+}
+
 // The settings sheet as a picture, every section at once. See
 // SettingsWindow.renderForVerification.
 if let i = CommandLine.arguments.firstIndex(of: "--render-settings"),

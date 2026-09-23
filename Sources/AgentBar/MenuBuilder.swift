@@ -28,11 +28,12 @@ enum MenuBuilder {
                                       keyEquivalent: "")
                 item.target = controller
                 item.representedObject = s
-                item.attributedTitle = rowTitle(s)
-                item.toolTip = rowToolTip(s)
-                // The same mark the Open submenu uses — every row says WHO at a
-                // glance, and the section keeps one consistent icon gutter.
-                item.image = menuMark(for: Agent.byID(s.agentID))
+                // Drawn, not typeset: the same mark the Open submenu uses, and the
+                // time and agent in aligned columns. `title` stays for type-select.
+                let row = SessionRowView(session: s, mark: menuMark(for: Agent.byID(s.agentID)))
+                row.toolTip = rowToolTip(s)
+                item.view = row
+                item.title = SessionRowView.plainTitle(row.content)
                 let sessionRequests = requests.filter { $0.sessionId == s.id }
                 // Cloud rows get no approval affordances: there is no local hook a
                 // keystroke or answer file could reach — the plain row (which opens
@@ -376,60 +377,6 @@ enum MenuBuilder {
         return item
     }
 
-    /// "● project · branch   AGENT" — dot colored by state, agent tag dimmed.
-    private static func rowTitle(_ s: Session) -> NSAttributedString {
-        let agent = Agent.byID(s.agentID)
-        let dotColor: NSColor
-        switch s.state {
-        case .permission:      dotColor = IconRenderer.amberDot
-        case .question:        dotColor = IconRenderer.questionDot
-        case .thinking, .tool: dotColor = agent.brand
-        case .error:           dotColor = .systemRed
-        case .idle, .done:     dotColor = .tertiaryLabelColor
-        }
-
-        let title = NSMutableAttributedString()
-        title.append(NSAttributedString(string: "● ", attributes: [
-            .foregroundColor: dotColor,
-            .font: NSFont.menuFont(ofSize: 11),
-        ]))
-        var name = s.project.isEmpty ? "session" : s.project
-        if let branch = s.gitBranch { name += " · \(branch)" }
-        title.append(NSAttributedString(string: name, attributes: [
-            .font: NSFont.menuFont(ofSize: 0),
-        ]))
-        var sub: String
-        switch s.state {
-        case .permission: sub = "  needs approval"
-        case .error:      sub = s.label.isEmpty ? "  failed" : "  failed — \(s.label)"
-        default:          sub = s.label.isEmpty ? "" : "  \(s.label)"
-        }
-        // Done rows say WHAT finished. 60 chars keeps the menu from ballooning;
-        // the tooltip carries the full line.
-        if sub.isEmpty, s.state == .done || s.state == .idle, !s.recap.isEmpty {
-            sub = "  " + String(s.recap.prefix(60)) + (s.recap.count > 60 ? "…" : "")
-        }
-        if !sub.isEmpty {
-            title.append(NSAttributedString(string: sub, attributes: [
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .font: NSFont.menuFont(ofSize: 11),
-            ]))
-        }
-        // How long the session has been going — same signal the island chips carry.
-        // Accurate as of the render; a menu stays open too briefly to need ticking.
-        if let e = s.elapsed {
-            title.append(NSAttributedString(string: "  \(e)", attributes: [
-                .foregroundColor: NSColor.tertiaryLabelColor,
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
-            ]))
-        }
-        title.append(NSAttributedString(string: "   \(agent.name.uppercased())", attributes: [
-            .foregroundColor: NSColor.tertiaryLabelColor,
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
-        ]))
-        return title
-    }
-
     /// cwd, plus the last turn's recap when the writer carries one.
     private static func rowToolTip(_ s: Session) -> String {
         s.recap.isEmpty ? s.cwd
@@ -486,7 +433,7 @@ enum MenuBuilder {
         })
     }()
 
-    private static func menuMark(for agent: Agent) -> NSImage {
+    static func menuMark(for agent: Agent) -> NSImage {
         menuMarks[agent.id] ?? trimmedTemplate(for: agent)
     }
 
@@ -722,14 +669,16 @@ enum MenuBuilder {
             if let s = item.representedObject as? Session {
                 if let updated = live[s.id] {
                     item.representedObject = updated
-                    item.attributedTitle = rowTitle(updated)
-                    item.toolTip = rowToolTip(updated)
+                    let row = item.view as? SessionRowView
+                    row?.update(updated)
+                    row?.toolTip = rowToolTip(updated)
+                    if let row { item.title = SessionRowView.plainTitle(row.content) }
                     // Keystroke fallback appears/disappears with the permission state.
                     let hasStrip = requests.contains { $0.sessionId == updated.id }
                     item.submenu = (updated.state == .permission && !hasStrip)
                         ? keystrokeSubmenu(for: updated, controller: controller) : nil
                 } else {
-                    item.attributedTitle = endedRowTitle(s)
+                    (item.view as? SessionRowView)?.showEnded(s)
                     item.submenu = nil
                 }
             } else if item.identifier?.rawValue == "updateRow" {
@@ -782,32 +731,6 @@ enum MenuBuilder {
             (sub as? NSControl)?.isEnabled = false
             disableControls(in: sub)
         }
-    }
-
-    /// Row for a session that ended while the menu was open: dimmed, tagged, still
-    /// clickable (focuses the terminal it lived in).
-    private static func endedRowTitle(_ s: Session) -> NSAttributedString {
-        let agent = Agent.byID(s.agentID)
-        let title = NSMutableAttributedString()
-        title.append(NSAttributedString(string: "● ", attributes: [
-            .foregroundColor: NSColor.quaternaryLabelColor,
-            .font: NSFont.menuFont(ofSize: 11),
-        ]))
-        var name = s.project.isEmpty ? "session" : s.project
-        if let branch = s.gitBranch { name += " · \(branch)" }
-        title.append(NSAttributedString(string: name, attributes: [
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .font: NSFont.menuFont(ofSize: 0),
-        ]))
-        title.append(NSAttributedString(string: "  ended", attributes: [
-            .foregroundColor: NSColor.tertiaryLabelColor,
-            .font: NSFont.menuFont(ofSize: 11),
-        ]))
-        title.append(NSAttributedString(string: "   \(agent.name.uppercased())", attributes: [
-            .foregroundColor: NSColor.tertiaryLabelColor,
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
-        ]))
-        return title
     }
 
     /// Claude-look button strip for agents whose approval lives in their own UI
