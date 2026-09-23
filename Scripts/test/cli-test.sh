@@ -178,6 +178,16 @@ check "approve --always carries rule"  'grep -q "\"behavior\":\"always\"" "$HOME
 rm -f "$HOME/.agentbar/answers.d/r1.json"
 "$CLI" deny >/dev/null
 check "deny writes deny answer"        'grep -q "\"behavior\":\"deny\"" "$HOME/.agentbar/answers.d/r1.json"'
+rm -f "$HOME/.agentbar/answers.d/r1.json"
+OUT="$("$CLI" deny --note "use pnpm
+here" 2>&1)"
+check "deny --note carries the note"   'grep -q "\"message\":\"use pnpm here\"" "$HOME/.agentbar/answers.d/r1.json"'
+check "deny --note echoes what it said" 'echo "$OUT" | grep -q "told it: \"use pnpm here\""'
+rm -f "$HOME/.agentbar/answers.d/r1.json"
+"$CLI" deny -m "   " >/dev/null
+check "a blank note is no note"        '! grep -q message "$HOME/.agentbar/answers.d/r1.json"'
+rm -f "$HOME/.agentbar/answers.d/r1.json"
+check "a note on approve is refused"   '! "$CLI" approve --note "x" >/dev/null 2>&1 && [ ! -f "$HOME/.agentbar/answers.d/r1.json" ]'
 check "dead-hook request pruned"       'seed_request dead 999999; "$CLI" requests >/dev/null; [ ! -f "$HOME/.agentbar/requests.d/dead.json" ]'
 
 # --- questions: rendering, queue priority, the answer command
@@ -466,6 +476,10 @@ check "rules --json separates the two"      '"$CLI" rules --json | grep -q "\"wo
 # A typo in mode must not be read as "on".
 printf '{"v":1,"rules":[{"id":"r-x","decision":"deny","shape":"bash:curl","mode":"yes"}]}' > "$HOME/.agentbar/rules.json"
 check "an unreadable mode voids the file"   '"$CLI" rules | grep -q "mode is not on, watch or off"'
+printf '{"v":1,"rules":[{"id":"r-t","decision":"deny","shape":"bash:npm","tell":"use pnpm"}]}' > "$HOME/.agentbar/rules.json"
+check "a denial lists what it tells"         '"$CLI" rules | grep -q "tells it: \"use pnpm\""'
+printf '{"v":1,"rules":[{"id":"r-t","decision":"allow","shape":"bash:npm","cwd":"/r","tell":"x"}]}' > "$HOME/.agentbar/rules.json"
+check "an approval that tells voids the file" '"$CLI" rules | grep -q "only a denial says anything"'
 
 # --- the Codex hooks block: the real integration, beside the older notify key ----
 fresh_home

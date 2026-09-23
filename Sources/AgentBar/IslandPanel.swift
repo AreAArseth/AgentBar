@@ -24,8 +24,14 @@ final class IslandPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
     }
 
-    /// Never key: the point of the island is that it doesn't interrupt.
-    override var canBecomeKey: Bool { false }
+    /// Key only while a note is being typed next to Deny — the one moment the
+    /// island needs the keyboard, and one the user started with a click. The panel
+    /// is non-activating, so even then the terminal stays the active app and gets
+    /// its keys back the moment the note is sent or dropped.
+    var acceptsKeys = false
+
+    /// Otherwise never key: the point of the island is that it doesn't interrupt.
+    override var canBecomeKey: Bool { acceptsKeys }
     override var canBecomeMain: Bool { false }
 }
 

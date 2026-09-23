@@ -181,6 +181,7 @@ Answer (frontend → hook):
 ```json
 { "behavior": "allow", "rule": { }, "hookPid": 12399 }
 { "behavior": "answer", "answers": [["JWT"]], "hookPid": 12399 }
+{ "behavior": "deny", "message": "use pnpm in this repo, not npm", "hookPid": 12399 }
 ```
 `behavior`: `allow` | `always` | `deny` | `defer` | `answer`. `rule` only with
 `always`, and the hook accepts it **only** if it structurally equals one of the
@@ -195,6 +196,18 @@ a `kind:"plan"` one: a frontend that speaks only the older verbs must leave the
 question answerable rather than silently deferring it while showing "allowed". `defer` (or junk) makes the hook exit silently, falling
 back to the agent's normal terminal prompt (for questions: the wizard, which is
 already on screen).
+
+`message` is OPTIONAL and only means something with `deny`: what the human wants
+done instead. It is the one way a permission hook can steer an agent rather than
+stop it — the hook returns it inside the denial, and the agent reads it as the
+tool's result. The hook flattens it to one line (control characters and runs of
+whitespace become one space), trims it, caps it at 500 characters, and wraps it in
+one sentence of its own ("The user denied this tool call and said: …; do not retry
+the same call"). On a `kind:"plan"` request it is the feedback the plan goes back
+with, after the keep-planning message. A `message` that is not a non-empty string
+is ignored and the denial goes out bare, exactly as it did before the field
+existed; on any other verb it is ignored. Older hooks ignore it too, which is
+harmless: the refusal still refuses.
 
 `hookPid` SHOULD echo the request's own `hookPid`. Request names repeat across
 the tools of one turn, so a successor hook can be polling the same file name the
@@ -380,7 +393,8 @@ avoids: **answering without asking.**
       "agent": "",                 // "" = any agent
       "shape": "bash:git status",  // exactly the decisions.jsonl key, same normalisation
       "cwd": "/Users/me/AgentBar", // "" = anywhere, DENIALS ONLY
-      "note": "read-only",
+      "note": "read-only",         // the person's own memo; never sent anywhere
+      "tell": "",                  // OPTIONAL, deny only: said to the agent on every refusal
       "mode": "watch"           // on | watch | off; absent means "on"
     }
   ]
@@ -405,6 +419,12 @@ Normative, and the reason each one is here:
   reading it — you find out whether it matched what you pictured by watching it
   not answer for a week, which is what everything else that enforces anything
   does before it enforces.
+- `tell` is what a **denying** rule says to the agent when it refuses — written to
+  the answer as its `message`. It is a field of its own rather than a reuse of
+  `note`, because `note` was always private and a memo must not start arriving in
+  an agent's context because the format grew. A reader MUST refuse a file in which
+  an approving rule carries a non-empty `tell`: an approval has nothing to explain.
+  Readers that predate it ignore it, and the rule still refuses.
 - The file carries **no counters**. What a rule has done is read back from
   `decisions.jsonl` by its `id`, so intent and record never disagree.
 - **A file that does not parse, or that contains one invalid rule, means no rule is

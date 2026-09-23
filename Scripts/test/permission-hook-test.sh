@@ -1090,6 +1090,64 @@ check "and it still carries the command" 'grep -q "echo" "$HOME/.agentbar/reques
 printf '{"behavior":"allow"}' > "$HOME/.agentbar/answers.d/$REQ"
 wait "$hookpid"
 
+# Deny with a note: the one channel that steers rather than stops. The note goes
+# out as the deny message, flattened to one line and capped; a note that isn't a
+# string — or is only whitespace — leaves the bare deny exactly as it always was.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":"use pnpm here,\\nnot npm"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "note: still a deny"              'grep -q "\"behavior\":\"deny\"" "$HOME/out.json"'
+check "note: carried as the message"    'grep -q "said: \\\\\"use pnpm here, not npm\\\\\"" "$HOME/out.json"'
+check "note: tells it not to retry"     'grep -q "Do not retry" "$HOME/out.json"'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":"   "}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "note: blank note = bare deny"    '! grep -q "message" "$HOME/out.json"'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":{"x":1}}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "note: non-string note = bare deny" '! grep -q "message" "$HOME/out.json"'
+
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+LONG="$(printf 'x%.0s' $(seq 900))"
+printf '{"behavior":"deny","message":"%s"}' "$LONG" > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "note: capped at 500"             '[ "$(grep -o "x*…" "$HOME/out.json" | head -1 | wc -m | tr -d " ")" -le 502 ]'
+
+# A plan sent back with feedback keeps planning AND carries what to change.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$PLAN_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":"split step 2 into two commits"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "plan note: keeps planning"       'grep -q "keep planning" "$HOME/out.json"'
+check "plan note: feedback carried"     'grep -q "split step 2 into two commits" "$HOME/out.json"'
+
+# Copilot's contract is {behavior, message, interrupt}: the note rides bare.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+  "$NODE" "$HOOK" <<<"$COPILOT_EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":"not on main"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "copilot note: bare deny + message" 'grep -q "^{\"behavior\":\"deny\",\"message\":\".*not on main" "$HOME/out.json"'
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -151,6 +151,7 @@ enum AgentActions {
         default:
             return ack(remember(a.behavior, a,
                                 reportFailedAnswer(AnswerWriter.write(behavior: a.behavior,
+                                                                      message: a.note,
                                                                       for: a.request))))
         }
     }

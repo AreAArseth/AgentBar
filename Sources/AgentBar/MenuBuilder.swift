@@ -797,10 +797,13 @@ final class ApprovalAction: NSObject {
     let request: ApprovalRequest
     let behavior: String   // "allow" | "always" | "deny" | "defer"
     let session: Session
-    init(request: ApprovalRequest, behavior: String, session: Session) {
+    /// What to do instead, typed next to Deny. Ignored on every other verb.
+    let note: String?
+    init(request: ApprovalRequest, behavior: String, session: Session, note: String? = nil) {
         self.request = request
         self.behavior = behavior
         self.session = session
+        self.note = note
     }
 }
 

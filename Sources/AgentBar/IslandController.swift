@@ -49,6 +49,11 @@ final class IslandController: NSObject {
     /// What the last layout pass drew, so a mode change can animate differently
     /// from a same-shape refresh.
     private var lastLaidMode: Mode?
+    /// The request whose card has its note field open, if any. While set, the
+    /// panel takes keys, stays open when the pointer leaves, and does not re-set its
+    /// rows: `setRows` detaches every view, and a detached field loses its caret and
+    /// whatever was half typed into it.
+    private var composing: String?
 
     private static let expandedWidth: CGFloat = 460
     /// Deliberately small. The collapsed island is a glance, not a panel — anything
@@ -197,6 +202,11 @@ final class IslandController: NSObject {
         questionSelections = questionSelections.filter { live.contains($0.key) }
         questionSteps = questionSteps.filter { live.contains($0.key) }
         approvalCards = approvalCards.filter { live.contains($0.key) }
+        // Answered in the terminal, timed out, or replaced under the same name while
+        // a note was being typed: the note has nothing left to go with.
+        if let c = composing, requestIdentity[c] == nil || approvalCards[c] == nil {
+            endComposing()
+        }
         rebuild(animated: true)
     }
 
@@ -258,7 +268,7 @@ final class IslandController: NSObject {
         // the opposite of the point. The pill says what is waiting; hovering acts.
         // (`islandExpandDebug` holds it open, for screenshots and layout work.)
         let held = UserDefaults.standard.bool(forKey: "islandExpandDebug")
-        mode = (wantsExpanded || held) ? .expanded : .collapsed
+        mode = (wantsExpanded || held || composing != nil) ? .expanded : .collapsed
         // The collapsed pill is click-through: it floats over whatever the frontmost
         // window keeps at its top edge (tab strips, toolbars), and a pill that eats
         // those clicks is worse than no pill. Only the open panel takes the mouse.
@@ -268,8 +278,11 @@ final class IslandController: NSObject {
 
     // MARK: - Layout
 
-    private func layout(animated: Bool = false) {
+    private func layout(animated: Bool = false, force: Bool = false) {
         guard let screen = IslandGeometry.screen else { return }
+        // Held still under the caret. Store ticks keep arriving while a note is
+        // typed; they are picked up the moment it is sent or dropped.
+        if composing != nil, mode == .expanded, lastLaidMode == .expanded, !force { return }
         content.flushTop = IslandGeometry.notch(on: screen) != nil
         let modeChanged = mode != lastLaidMode
         let target: NSRect
@@ -392,8 +405,8 @@ final class IslandController: NSObject {
                 // The repo the count is scoped to: the same command is routine in
                 // one checkout and the opposite in another.
                 cwd: s.cwd,
-                width: Self.expandedWidth - IslandContentView.hPad * 2 - Self.cardIndent
-            ) { [weak self] behavior in
+                width: Self.expandedWidth - IslandContentView.hPad * 2 - Self.cardIndent,
+                onChoose: { [weak self] behavior in
                 // "rule" is not an answer to this request — it opens the sheet and
                 // leaves the card pending. Handled before the answer path so a
                 // dropped-answer beep can never fire for a click that answered
@@ -413,7 +426,18 @@ final class IslandController: NSObject {
                 guard AgentActions.answer(ApprovalAction(request: r, behavior: behavior, session: s))
                 else { return }
                 self?.flashAnswer(behavior, plan: r.isPlanRequest)
-            })
+            }, onDenyNote: { [weak self] text in
+                guard let self else { return }
+                self.endComposing(relayout: false)
+                let noted = DenyNote.clean(text) != nil
+                guard AgentActions.answer(ApprovalAction(request: r, behavior: "deny", session: s,
+                                                         note: text))
+                else { self.rebuild(animated: true); return }
+                self.flashAnswer(noted ? "denyNote" : "deny", plan: r.isPlanRequest)
+            }, onCompose: { [weak self] on in
+                guard let self else { return }
+                if on { self.beginComposing(r.fileName) } else { self.endComposing() }
+            }))
             approvalCards[r.fileName] = view
             out.append(view)
         }
@@ -494,7 +518,11 @@ final class IslandController: NSObject {
         case "deny" where plan:
             // Sending a plan back is a neutral outcome, not a refusal.
             flash = ("✎ Planning on", NSColor.white.withAlphaComponent(0.85))
+        case "denyNote" where plan:
+            flash = ("✎ Sent back", NSColor.white.withAlphaComponent(0.85))
         case "deny":   flash = ("✕ Denied", NSColor(srgbRed: 1, green: 0.45, blue: 0.42, alpha: 1))
+        // Still a refusal, but one that told the agent where to go instead.
+        case "denyNote": flash = ("✕ Denied · told it", NSColor(srgbRed: 1, green: 0.45, blue: 0.42, alpha: 1))
         default:       flash = nil
         }
         rebuild(animated: true)
@@ -635,6 +663,43 @@ final class IslandController: NSObject {
 
     // MARK: - Interaction
 
+    // MARK: - A note being typed
+
+    private func beginComposing(_ fileName: String) {
+        // One note at a time: opening a second card's field closes the first.
+        if let other = composing, other != fileName,
+           let card = approvalCards[other].flatMap(Self.approvalView(in:)) {
+            card.setComposing(false, notify: false)
+        }
+        composing = fileName
+        collapseWork?.cancel()
+        panel.acceptsKeys = true
+        // One last layout with the note row showing, so the panel grows to it —
+        // then rows hold still until the note is done.
+        layout(animated: true, force: true)
+        panel.makeKey()
+    }
+
+    private func endComposing(relayout: Bool = true) {
+        guard let c = composing else { return }
+        composing = nil
+        if let card = approvalCards[c].flatMap(Self.approvalView(in:)), card.composing {
+            card.setComposing(false, notify: false)
+        }
+        panel.makeFirstResponder(nil)
+        panel.acceptsKeys = false
+        panel.resignKey()
+        // The pointer may have left long ago; the grace timer that would have
+        // closed the panel was held off while typing.
+        if !hovered { wantsExpanded = false }
+        if relayout { rebuild(animated: true) }
+    }
+
+    /// Cards are cached wrapped in their indent; the approval view is inside.
+    private static func approvalView(in wrapper: NSView) -> IslandApprovalView? {
+        (wrapper as? NSStackView)?.arrangedSubviews.first as? IslandApprovalView
+    }
+
     private func hover(_ inside: Bool) {
         hovered = inside
         collapseWork?.cancel()
@@ -657,7 +722,8 @@ final class IslandController: NSObject {
         // A moment's grace on the way out, so crossing a gap between subviews — or
         // the panel shrinking out from under the pointer — doesn't snap it shut.
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.hovered else { return }
+            // A note half typed is not abandoned by the pointer drifting off.
+            guard let self, !self.hovered, self.composing == nil else { return }
             self.wantsExpanded = false
             self.rebuild(animated: true)
         }

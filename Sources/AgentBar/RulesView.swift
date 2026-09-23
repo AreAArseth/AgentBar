@@ -180,6 +180,7 @@ final class RulesView: NSView {
         let counts = watching ? DecisionLedger.wouldHave(rule: rule.id, in: ledger)
                               : DecisionLedger.firings(rule: rule.id, in: ledger)
         var trail = DecisionLedger.firingLine(counts, wouldHave: watching)
+        if !rule.tell.isEmpty { trail += " · tells it “\(rule.tell)”" }
         if !rule.note.isEmpty { trail += " · " + rule.note }
         let detail = NSTextField(labelWithString: trail)
         detail.font = .systemFont(ofSize: 10.5)

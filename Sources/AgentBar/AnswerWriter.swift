@@ -7,10 +7,17 @@ enum AnswerWriter {
     /// PermissionRequest decision schema; "defer" means fall back to the terminal prompt.
     /// Returns false when the answer never reached disk — the hook keeps waiting,
     /// so the caller must leave the request actionable instead of clearing it.
+    ///
+    /// `message` rides only on a deny: what the human wants done instead ("use pnpm
+    /// here"). The hook hands it to the agent as the denial's reason — the one
+    /// channel a permission hook has for steering rather than stopping — so it is
+    /// dropped on every other verb rather than smuggled into an approval.
     @discardableResult
-    static func write(behavior: String, rule: [String: Any]? = nil, for request: ApprovalRequest) -> Bool {
+    static func write(behavior: String, rule: [String: Any]? = nil, message: String? = nil,
+                      for request: ApprovalRequest) -> Bool {
         var obj: [String: Any] = ["behavior": behavior]
         if let rule { obj["rule"] = rule }
+        if behavior == "deny", let note = DenyNote.clean(message) { obj["message"] = note }
         return write(obj: obj, behavior: behavior, for: request)
     }
 
@@ -50,5 +57,21 @@ enum AnswerWriter {
             NSLog("AgentBar: answer '\(behavior)' not written to \(final.path): \(error)")
             return false
         }
+    }
+}
+
+/// The note a human types next to Deny. One line, trimmed, capped — the hook
+/// applies the same rules again, so this is for what the UI shows, not a guard.
+enum DenyNote {
+    static let maxLength = 500
+
+    /// Nil for nothing worth sending: no note, or only whitespace.
+    static func clean(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let flat = raw.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }
+            .joined()
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !flat.isEmpty else { return nil }
+        return flat.count > maxLength ? String(flat.prefix(maxLength - 1)) + "…" : flat
     }
 }

@@ -93,7 +93,12 @@ final class RuleEngine {
             return false
         }
 
-        guard AnswerWriter.write(behavior: verdict.behavior, for: request) else { return false }
+        // A denying rule may say why, in the person's words — the refusal then
+        // steers the agent instead of leaving it to guess and try the next thing.
+        let tell = verdict.behavior == "deny" ? verdict.rule.tell : ""
+        guard AnswerWriter.write(behavior: verdict.behavior,
+                                 message: tell.isEmpty ? nil : tell, for: request)
+        else { return false }
 
         lock.lock()
         answered.insert(request.identity)

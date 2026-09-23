@@ -253,6 +253,35 @@ enum RenderPreview {
             renderSlab([sized(hero, rowW), wrap], name: "03c-plan-review")
         }
 
+        // Scene 3f: a permission card, then the same card with its note open —
+        // Deny with a note replaces both answer rows with one field and a send.
+        do {
+            let bashReq = makeRequest("hero-perm-p1", [
+                "sessionId": "hero-perm", "agent": "claude", "toolName": "Bash",
+                "display": "Bash: npm install left-pad",
+                "toolInputPretty": "{\"command\": \"npm install left-pad\"}",
+                "context": ["kind": "bash", "command": "npm install left-pad"],
+                "pid": 1, "hookPid": 1, "ts": now, "cwd": "/tmp",
+            ])
+            let hero = IslandRowView(session: heroPermission, mark: mark(for: "claude"),
+                                     style: .hero, onClick: { _ in })
+            let card = IslandApprovalView(request: bashReq, deferTitle: "Answer in terminal",
+                                          width: cardW, onChoose: { _ in })
+            let wrap = NSStackView(views: [card])
+            wrap.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+            renderSlab([sized(hero, rowW), wrap], name: "03f-permission-card")
+
+            let hero2 = IslandRowView(session: heroPermission, mark: mark(for: "claude"),
+                                      style: .hero, onClick: { _ in })
+            let noting = IslandApprovalView(request: bashReq, deferTitle: "Answer in terminal",
+                                            width: cardW, onChoose: { _ in })
+            noting.setComposing(true)
+            noting.noteField.stringValue = "use pnpm in this repo, not npm"
+            let wrap2 = NSStackView(views: [noting])
+            wrap2.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+            renderSlab([sized(hero2, rowW), wrap2], name: "03g-deny-with-note")
+        }
+
         // Scene 3d: a failed turn — red, named, and never a green tick.
         do {
             let failed = makeSession("failed-sess", [

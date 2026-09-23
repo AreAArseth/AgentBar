@@ -555,12 +555,29 @@ final class IslandRowView: NSView {
 /// "Always allow" and handing the prompt back to the terminal stay available but
 /// quiet. Shortcut hints appear only when the global shortcut is actually on, so
 /// the panel never advertises a key that does nothing.
-final class IslandApprovalView: NSView {
+final class IslandApprovalView: NSView, NSTextFieldDelegate {
     private let onChoose: (String) -> Void
+    /// Deny, with what to do instead. Separate from `onChoose` because it carries
+    /// text, and because every other verb must stay unable to.
+    private let onDenyNote: (String) -> Void
+    /// Told when the note field opens (true) and closes (false). The controller
+    /// needs both: while a note is being typed the panel has to take keys, stay
+    /// open when the pointer wanders, and stop rebuilding rows under the caret.
+    private let onCompose: (Bool) -> Void
+
+    private var answerRows: [NSView] = []
+    private var composeRows: [NSView] = []
+    /// Internal rather than private so the render harness can draw it filled in.
+    let noteField = IslandNoteField()
+    private(set) var composing = false
 
     init(request: ApprovalRequest, deferTitle: String, cwd: String = "", width: CGFloat,
-         onChoose: @escaping (String) -> Void) {
+         onChoose: @escaping (String) -> Void,
+         onDenyNote: @escaping (String) -> Void = { _ in },
+         onCompose: @escaping (Bool) -> Void = { _ in }) {
         self.onChoose = onChoose
+        self.onDenyNote = onDenyNote
+        self.onCompose = onCompose
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -646,11 +663,36 @@ final class IslandApprovalView: NSView {
                 + "time it fires the approval history names it."
             secondary.append(rule)
         }
+        // Refusing with a reason is the one way to steer rather than stop: the note
+        // reaches the agent as the denial's message. For a plan it is the feedback
+        // the plan goes back with.
+        let noteLink = Self.link(plan != nil ? "Say what to change…" : "Deny with a note…",
+                                 target: self, action: #selector(composeClicked))
+        noteLink.toolTip = plan != nil
+            ? "Sends the plan back with your feedback, and Claude keeps planning"
+            : "Refuses, and tells the agent what to do instead"
+        secondary.insert(noteLink, at: 0)
         secondary.append(Self.link(deferTitle, target: self, action: #selector(deferClicked)))
         let secondaryRow = NSStackView(views: secondary)
         secondaryRow.orientation = .horizontal
         secondaryRow.spacing = 14
         rows.append(secondaryRow)
+        answerRows = [main, secondaryRow]
+
+        // The note row replaces both answer rows while it is open, so the card
+        // never shows two ways to deny at once.
+        noteField.placeholder = plan != nil ? "What should change in the plan?"
+                                            : "What should it do instead?"
+        noteField.field.delegate = self
+        let send = Self.button(plan != nil ? "Send back" : "Deny & tell it", hint: "↩",
+                               prominent: true, target: self, action: #selector(sendNote))
+        send.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        let cancel = Self.link("Cancel", target: self, action: #selector(cancelNote))
+        let composeButtons = NSStackView(views: [cancel, NSView(), send])
+        composeButtons.orientation = .horizontal
+        composeButtons.spacing = 8
+        composeRows = [noteField, composeButtons]
+        for v in composeRows { v.isHidden = true; rows.append(v) }
 
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
@@ -665,9 +707,66 @@ final class IslandApprovalView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             widthAnchor.constraint(equalToConstant: width),
             main.widthAnchor.constraint(equalToConstant: width),
+            noteField.widthAnchor.constraint(equalToConstant: width),
+            composeButtons.widthAnchor.constraint(equalToConstant: width),
         ])
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // MARK: - The note
+
+    @objc private func composeClicked() { setComposing(true) }
+
+    @objc private func cancelNote() { setComposing(false) }
+
+    @objc private func sendNote() {
+        let text = noteField.stringValue
+        setComposing(false, notify: false)
+        onDenyNote(text)
+    }
+
+    /// `notify: false` when the note was sent: the answer path collapses the island
+    /// itself, and telling the controller "composing ended" first would rebuild the
+    /// card once for nothing in between.
+    func setComposing(_ on: Bool, notify: Bool = true) {
+        guard on != composing else { return }
+        composing = on
+        for v in answerRows { v.isHidden = on }
+        for v in composeRows { v.isHidden = !on }
+        if !on { noteField.stringValue = "" }
+        if notify || on { onCompose(on) }
+        if on {
+            // After the controller has re-laid the panel and made it key; focusing
+            // before that lands the caret in a window that cannot take it yet.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.window?.makeFirstResponder(self.noteField.field)
+            }
+        }
+    }
+
+    /// Return sends and Escape backs out — the two keys anybody reaches for in a
+    /// one-line field, and the only two this one answers to.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            sendNote(); return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            cancelNote(); return true
+        default:
+            return false
+        }
+    }
+
+    func control(_ control: NSControl, textShouldBeginEditing fieldEditor: NSText) -> Bool {
+        // A note is prose, but it is prose about commands: `--force` must not
+        // arrive as an em dash.
+        if let editor = fieldEditor as? NSTextView {
+            editor.isAutomaticDashSubstitutionEnabled = false
+            editor.isAutomaticQuoteSubstitutionEnabled = false
+        }
+        return true
+    }
 
     @objc private func allowClicked() { onChoose("allow") }
     @objc private func denyClicked() { onChoose("deny") }
@@ -1228,6 +1327,58 @@ final class IslandOptionButton: NSView {
 /// becomes key, and AppKit swallows the first click into an inactive window as an
 /// "activate me" click — so without this, Allow does nothing until the second try.
 final class IslandButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// The one text field on the island: the note that goes with a denial. Drawn for
+/// the panel's black rather than the system's light field, and hosted in its own
+/// rounded box — a bare field's alignment insets make it overhang the rows above.
+final class IslandNoteField: NSView {
+    let field = NSTextField()
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        layer?.cornerRadius = 6
+        field.isBezeled = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 12)
+        field.textColor = .white
+        field.maximumNumberOfLines = 1
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 26),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    var stringValue: String {
+        get { field.stringValue }
+        set { field.stringValue = newValue }
+    }
+
+    var placeholder: String = "" {
+        didSet {
+            field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.35),
+            ])
+        }
+    }
+
+    /// A click anywhere on the box, not only on the glyphs, starts typing.
+    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(field) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

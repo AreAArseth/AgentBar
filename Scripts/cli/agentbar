@@ -7,7 +7,7 @@
 //   agentbar requests [--json]      pending approvals with inline detail
 //   agentbar rules [--json]         the rules you wrote (listed here, applied by the app)
 //   agentbar approve [n] [--always] answer the newest (or n-th) pending request
-//   agentbar deny [n]
+//   agentbar deny [n] [--note TEXT]  refuse, optionally telling the agent what to do instead
 //   agentbar watch [-i SEC]         live view; keys: a allow · A always · d deny ·
 //                                   f defer (terminal prompt) · 1-9 answer a
 //                                   question · q quit. Holds the watcher heartbeat,
@@ -345,9 +345,14 @@ function readDecisions() {
   return out;
 }
 
-function answer(r, behavior) {
+function answer(r, behavior, note) {
   fs.mkdirSync(ansDir, { recursive: true });
   const obj = { behavior };
+  // What to do instead, on a deny only: the hook hands it to the agent as the
+  // denial's reason. Same flattening the hook applies, so what is echoed here is
+  // what the agent reads.
+  const cleaned = behavior === "deny" ? cleanNote(note) : "";
+  if (cleaned) obj.message = cleaned;
   // "always" only sticks when the hook can match it to a rule Claude itself
   // suggested; without a suggestion it degrades to a plain one-shot allow there.
   if (behavior === "always" && r.ruleSuggestion) obj.rule = r.ruleSuggestion;
@@ -628,6 +633,8 @@ function readRules() {
     // answering. Same refusal the app makes.
     if (r.mode !== undefined && !["on", "watch", "off"].includes(r.mode))
       return { state: "invalid", why: `rule ${r.id}: mode is not on, watch or off`, rules: [] };
+    if (r.decision === "allow" && typeof r.tell === "string" && r.tell.trim())
+      return { state: "invalid", why: `rule ${r.id}: approves and carries tell; only a denial says anything`, rules: [] };
   }
   return { state: "rules", rules: o.rules };
 }
@@ -680,6 +687,7 @@ function printRules(json) {
       : dim(mode === "watch" ? "nothing matched yet" : "never fired");
     const state = mode === "on" ? "" : dim(` (${mode})`);
     console.log(`${verb} ${bold(r.shape.padEnd(26))} ${where.padEnd(18)} ${count}${state}`);
+    if (r.tell) console.log(dim(`      tells it: "${r.tell}"`));
   }
   if (watching) {
     console.log("\n" + dim(`${watching} watching: answering nothing, writing down what it would have done.`));
@@ -1012,7 +1020,27 @@ function printRequests(json) {
   });
 }
 
+// One line, no control characters, at most 500 — the rules permission.js applies.
+function cleanNote(v) {
+  if (typeof v !== "string") return "";
+  const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return s.length > 500 ? s.slice(0, 499) + "…" : s;
+}
+
 function decide(behavior, argv) {
+  // `--note TEXT` / `-m TEXT` / `--note=TEXT`, pulled out before the index is
+  // looked for so a note that happens to be a number is not read as one.
+  let note = "";
+  argv = argv.slice();
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--note" || a === "-m") { note = argv[i + 1] || ""; argv.splice(i, 2); i--; }
+    else if (a.startsWith("--note=")) { note = a.slice(7); argv.splice(i, 1); i--; }
+  }
+  if (note && behavior !== "deny") {
+    console.error("A note goes with a denial: `agentbar deny --note \"...\"`.");
+    process.exit(1);
+  }
   const explicit = argv.find((a) => /^\d+$/.test(a));
   const n = parseInt(explicit || "1", 10);
   const always = argv.includes("--always");
@@ -1033,11 +1061,12 @@ function decide(behavior, argv) {
     console.error("Plans are approved in the session's own dialog — the hook can't carry the mode choice. Use `agentbar deny` to keep planning, or answer in the terminal.");
     process.exit(1);
   }
-  answer(r, behavior === "allow" && always ? "always" : behavior);
+  answer(r, behavior === "allow" && always ? "always" : behavior, note);
   const verb = behavior === "deny"
     ? ((r.context || {}).kind === "plan" ? yellow("✎ keep planning") : red("✕ denied"))
     : green("✓ " + (always ? "always allowed" : "allowed"));
   console.log(`${verb}  ${r.display || r.toolName}`);
+  if (cleanNote(note)) console.log(dim(`   told it: "${cleanNote(note)}"`));
 }
 
 // A single single-select question's options, when request r is one — the shape
@@ -1761,7 +1790,7 @@ switch (cmd) {
   agentbar [status] [--json]      live sessions
   agentbar requests [--json]      pending approvals with detail
   agentbar approve [n] [--always] answer newest (or n-th) permission
-  agentbar deny [n]
+  agentbar deny [n] [--note TEXT]  refuse; the note tells the agent what to do instead
   agentbar answer [n] <label|num>... answer a pending question by option
   agentbar watch [-i SEC]         live view + keys (a allow/A always/d deny/f defer/1-9 answer/q quit);
                                   enables remote approval

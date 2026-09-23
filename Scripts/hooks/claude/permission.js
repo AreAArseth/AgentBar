@@ -163,6 +163,29 @@ function validAnswers(answers, questions) {
 // the wizard is dismissed, and the model continues with the answer (verified on
 // Claude Code 2.1.234 — an answer given in the terminal first wins the race and the
 // late deny is ignored cleanly).
+// A note the human typed next to Deny — "use pnpm here", "not on main". It is the
+// only way a PermissionRequest hook can steer an agent rather than just stop it:
+// the deny message lands as the tool result, which the model reads. One line,
+// no control characters, capped; anything that isn't a non-empty string means
+// there is no note and the denial goes out exactly as it always has.
+const NOTE_MAX = 500;
+function cleanNote(v) {
+  if (typeof v !== "string") return "";
+  const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return s.length > NOTE_MAX ? sliceSafe(s, NOTE_MAX - 1) + "…" : s;
+}
+
+function denyMessage(note) {
+  return 'The user denied this tool call (via AgentBar) and said: "' + note + '". ' +
+    "Do not retry the same call; follow the user's instruction instead.";
+}
+
+function planMessage(note) {
+  const base = "The user reviewed this plan and wants it refined before any " +
+    "changes are made. Stay in plan mode and keep planning.";
+  return note ? base + ' Their feedback: "' + note + '"' : base;
+}
+
 function answerMessage(questions, answers) {
   if (questions.length === 1)
     return 'User answered "' + answers[0].join('", "') + '" (via AgentBar). ' +
@@ -454,9 +477,7 @@ function run() {
           if (isPlan && b === "deny") {
             // "Keep planning": without the message the model reads a bare tool
             // denial as "stop" and ends the turn instead of refining the plan.
-            respond({ behavior: "deny", message:
-              "The user reviewed this plan and wants it refined before any " +
-              "changes are made. Stay in plan mode and keep planning." });
+            respond({ behavior: "deny", message: planMessage(cleanNote(a.message)) });
             process.exit(0);
           }
           if (b === "allow" || b === "always") {
@@ -471,7 +492,10 @@ function run() {
             if (isSuggested) decision.updatedPermissions = [a.rule];
             respond(decision);
           } else if (b === "deny") {
-            respond({ behavior: "deny" });
+            // A bare deny stays bare: Claude Code and Copilot word their own
+            // refusal, and a denial without a note has always gone out that way.
+            const note = cleanNote(a.message);
+            respond(note ? { behavior: "deny", message: denyMessage(note) } : { behavior: "deny" });
           }
           process.exit(0); // "defer"/junk: silent exit -> terminal prompt
         } else if (++ticks % 20 === 0 &&

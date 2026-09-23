@@ -47,6 +47,13 @@ enum RulesStore {
         /// legal only for a denial — see `validate`.
         var cwd = ""
         var note = ""
+        /// What a **denying** rule says to the agent when it refuses — "use pnpm in
+        /// this repo". `note` is the person's own memo and never leaves the file;
+        /// this one is sent, which is why it is a separate field and not a reuse:
+        /// a note written as a reminder to yourself must not start arriving in an
+        /// agent's context because a release changed what the field meant.
+        /// Legal only on a denial — an approval has nothing to explain.
+        var tell = ""
         var mode = Mode.on
 
         /// Off, watching, or answering. The middle one is the whole reason this is
@@ -81,16 +88,17 @@ enum RulesStore {
 
         var json: [String: Any] {
             ["id": id, "created": Int(created), "decision": decision, "agent": agent,
-             "shape": shape, "cwd": cwd, "note": note, "mode": mode.rawValue]
+             "shape": shape, "cwd": cwd, "note": note, "tell": tell, "mode": mode.rawValue]
         }
 
         init() {}
 
         init(id: String, decision: String, shape: String, cwd: String = "",
-             agent: String = "", note: String = "", mode: Mode = .on,
+             agent: String = "", note: String = "", tell: String = "", mode: Mode = .on,
              created: TimeInterval = Date().timeIntervalSince1970) {
             self.id = id; self.decision = decision; self.shape = shape; self.cwd = cwd
-            self.agent = agent; self.note = note; self.mode = mode; self.created = created
+            self.agent = agent; self.note = note; self.tell = tell; self.mode = mode
+            self.created = created
         }
 
         init?(json o: [String: Any]) {
@@ -103,6 +111,7 @@ enum RulesStore {
             agent = o["agent"] as? String ?? ""
             cwd = o["cwd"] as? String ?? ""
             note = o["note"] as? String ?? ""
+            tell = o["tell"] as? String ?? ""
             // An unreadable `mode` is not defaulted to `on`: a file somebody edited
             // by hand and got wrong must not silently start answering. `validate`
             // turns this into a refusal of the whole file.
@@ -182,6 +191,9 @@ enum RulesStore {
         }
         if !r.cwd.isEmpty && !r.cwd.hasPrefix("/") {
             return "\(where_) has a `cwd` that is not an absolute path."
+        }
+        if r.isAllow && !r.tell.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "\(where_) approves and carries `tell`; only a denial says anything to the agent."
         }
         if let bad = r.badMode {
             return "\(where_) says `mode: \(bad)`; it must be \"on\", \"watch\" or \"off\"."

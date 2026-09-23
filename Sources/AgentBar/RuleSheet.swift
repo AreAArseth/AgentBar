@@ -20,6 +20,7 @@ final class RuleSheet: NSObject {
         var shape = ""
         var cwd = ""
         var note = ""
+        var tell = ""
         var mode = RulesStore.Rule.Mode.watch
         /// What the request said, so the sheet can show the exact line the person
         /// was looking at rather than only its shape.
@@ -33,6 +34,7 @@ final class RuleSheet: NSObject {
             shape = rule.shape
             cwd = rule.cwd
             note = rule.note
+            tell = rule.tell
             mode = rule.mode
         }
 
@@ -62,6 +64,9 @@ final class RuleSheet: NSObject {
     private let place = NSPopUpButton()
     private let mode = NSPopUpButton()
     private let note = NSTextField()
+    private let tell = NSTextField()
+    /// The "Tell it" row, shown only for a denial: an approval has nothing to explain.
+    private var tellRow: NSView!
     private let tryField = NSTextField()
     private let tryResult = NSTextField(wrappingLabelWithString: "")
     private let consequence = NSTextField(wrappingLabelWithString: "")
@@ -130,6 +135,13 @@ final class RuleSheet: NSObject {
         note.font = .systemFont(ofSize: 12)
         note.stringValue = prefill.note
 
+        tell.placeholderString = "What to do instead — sent to the agent (optional)"
+        tell.font = .systemFont(ofSize: 12)
+        tell.stringValue = prefill.tell
+        tell.delegate = self
+        tell.toolTip = "Goes to the agent with every refusal, so it changes course instead "
+            + "of guessing — \"use pnpm in this repo\". Unlike the note, this leaves the file."
+
         tryField.placeholderString = "git push --force origin main"
         tryField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         tryField.delegate = self
@@ -155,10 +167,12 @@ final class RuleSheet: NSObject {
         buttons.orientation = .horizontal
         buttons.spacing = 10
 
+        tellRow = labelled("Tell it", tell)
+
         let form = NSStackView(views: [
             title, blurb,
             labelled("Answer", kind), labelled("When", shape), labelled("In", place),
-            labelled("Mode", mode), labelled("Note", note),
+            labelled("Mode", mode), tellRow, labelled("Note", note),
             separator(), consequence,
             labelled("Try it", tryField), tryResult,
             buttons,
@@ -341,11 +355,13 @@ final class RuleSheet: NSObject {
         case .watch: prefix = "**Watching, so it answers nothing yet.** Once you turn it on: "
         case .off:   prefix = "**Off, so it does nothing.** Turned on, it would: "
         }
+        tellRow?.isHidden = !isDeny
         if isDeny {
+            let said = DenyNote.clean(tell.stringValue).map { " It tells the agent “\($0)”." } ?? ""
             consequence.stringValue = prefix.replacingOccurrences(of: "**", with: "")
-                + "Refuses \(subject) \(here), every time, without asking. A refusal is never "
-                + "narrowed and never needs to be — the worst it can cost you is a prompt you "
-                + "have to answer somewhere else."
+                + "Refuses \(subject) \(here), every time, without asking.\(said) A refusal is "
+                + "never narrowed and never needs to be — the worst it can cost you is a prompt "
+                + "you have to answer somewhere else."
         } else {
             consequence.stringValue = prefix.replacingOccurrences(of: "**", with: "")
                 + "Answers \(subject) \(here) the moment it is asked.\n\n"
@@ -427,6 +443,7 @@ final class RuleSheet: NSObject {
                                    decision: isDeny ? "deny" : "allow",
                                    shape: typedShape, cwd: dir,
                                    note: note.stringValue.trimmingCharacters(in: .whitespaces),
+                                   tell: isDeny ? (DenyNote.clean(tell.stringValue) ?? "") : "",
                                    mode: selectedMode)
         // The same validation the file gets, before the file gets it — a rule that
         // would refuse the whole file on the next launch must not be written now.

@@ -25,6 +25,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static let plainCategory = "agentbar.plain"
     private static let allowAction = "agentbar.allow"
     private static let denyAction = "agentbar.deny"
+    /// Deny, with a line typed on the banner itself: what to do instead. The one
+    /// thing a banner can carry besides a verb, and the reason it is worth having —
+    /// a refusal that says why steers the agent rather than stopping it.
+    private static let denyNoteAction = "agentbar.denyNote"
 
     /// Set by the app delegate so a tapped banner can find its request and session.
     var requests: (() -> [ApprovalRequest])?
@@ -139,8 +143,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [])
         let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny",
                                         options: [.destructive])
+        let denyNote = UNTextInputNotificationAction(
+            identifier: Self.denyNoteAction, title: "Deny with a note…", options: [.destructive],
+            textInputButtonTitle: "Deny", textInputPlaceholder: "What should it do instead?")
         center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.approvalCategory, actions: [allow, deny],
+            UNNotificationCategory(identifier: Self.approvalCategory,
+                                   actions: [allow, deny, denyNote],
                                    intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: Self.plainCategory, actions: [],
                                    intentIdentifiers: [], options: []),
@@ -434,9 +442,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         deliveredRequests.remove(requestId)
 
         let behavior: String?
+        var note: String?
         switch response.actionIdentifier {
         case Self.allowAction: behavior = "allow"
         case Self.denyAction: behavior = "deny"
+        case Self.denyNoteAction:
+            behavior = "deny"
+            note = (response as? UNTextInputNotificationResponse)?.userText
         default: behavior = nil          // the banner itself was clicked
         }
 
@@ -458,6 +470,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard let request = (requests?() ?? []).first(where: { $0.fileName == requestId }),
               let session = live.first(where: { $0.id == request.sessionId })
         else { return }
-        AgentActions.answer(ApprovalAction(request: request, behavior: behavior, session: session))
+        AgentActions.answer(ApprovalAction(request: request, behavior: behavior, session: session,
+                                           note: note))
     }
 }
