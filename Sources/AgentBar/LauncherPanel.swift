@@ -35,6 +35,13 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
     /// rather than from the person. The hint says so for as long as the panel is
     /// open: choosing another project does not make the prompt theirs.
     private var fromLink = false
+    /// False while a link-filled panel has not been confirmed. The field is focused
+    /// either way; what changes is what the first Return does. A page that opened
+    /// the link can also tell you to "press Enter to continue", so for a link the
+    /// first Return only arms the panel — and only once it has been on screen long
+    /// enough to be read. Editing the prompt arms it too: then it is your prompt.
+    private var armed = true
+    private var shownAt = Date.distantPast
 
     // MARK: - Showing
 
@@ -77,10 +84,15 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         if let id = prefill?.agent, let i = agents.firstIndex(where: { $0.id == id }) {
             chosenAgent = i
         }
+        // A link arriving while the panel is open with something typed in it must
+        // not replace what the person wrote.
+        let keepTyped = panel?.isVisible == true && !(field?.stringValue.isEmpty ?? true)
         fromLink = prefill != nil
+        armed = !fromLink
+        shownAt = Date()
         if panel == nil { build() }
         rebuildRows()
-        field.stringValue = prefill?.prompt ?? ""
+        if !keepTyped { field.stringValue = prefill?.prompt ?? "" }
         syncHint()
         centreOnActiveScreen()
         NSApp.activate(ignoringOtherApps: true)
@@ -128,6 +140,7 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         field.focusRingType = .none
         field.target = self
         field.action = #selector(startFromField)
+        field.delegate = self
 
         projectRow = row()
         agentRow = row()
@@ -219,7 +232,10 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         }
         // Said before anything else, because it is the thing to check first: a
         // prompt the person did not type is one they have to read.
-        if fromLink { text = "From a link — read it before ⏎ · " + text }
+        if fromLink {
+            text = armed ? "From a link · " + text
+                         : "From a link — read it, then ⏎ twice · " + text
+        }
         hint.stringValue = text + " · esc closes"
     }
 
@@ -237,7 +253,17 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         panel?.makeFirstResponder(field)
     }
 
-    @objc private func startFromField() { start() }
+    @objc private func startFromField() {
+        guard armed else {
+            // The first Return confirms you have seen it; a second, deliberate one
+            // starts it. A Return inside the first second is the one that was
+            // already on its way when the panel appeared, and does nothing.
+            if Date().timeIntervalSince(shownAt) > 1 { armed = true }
+            syncHint()
+            return
+        }
+        start()
+    }
 
     func start() {
         guard agents.indices.contains(chosenAgent),
@@ -290,5 +316,15 @@ final class KeyPanel: NSPanel {
     /// escape, and without it the key beeps at a window with nothing to cancel.
     override func cancelOperation(_ sender: Any?) {
         LauncherPanel.shared.close()
+    }
+}
+
+extension LauncherPanel: NSTextFieldDelegate {
+    /// Typing into a link-filled prompt makes it yours: it no longer needs the
+    /// extra confirmation a prompt you did not write does.
+    func controlTextDidChange(_ obj: Notification) {
+        guard fromLink, !armed else { return }
+        armed = true
+        syncHint()
     }
 }

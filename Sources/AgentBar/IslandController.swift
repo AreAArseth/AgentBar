@@ -54,6 +54,8 @@ final class IslandController: NSObject {
     /// rows: `setRows` detaches every view, and a detached field loses its caret and
     /// whatever was half typed into it.
     private var composing: String?
+    /// The app that had the keyboard when a note was opened.
+    private var keysCameFrom: NSRunningApplication?
 
     private static let expandedWidth: CGFloat = 460
     /// Deliberately small. The collapsed island is a glance, not a panel — anything
@@ -226,7 +228,9 @@ final class IslandController: NSObject {
     /// (hide-when-empty, most likely) — re-evaluate now, not on the next tick.
     /// Cached approval cards bake shortcut hints in, so they rebuild too.
     func settingsChanged() {
-        approvalCards = [:]
+        // Every card but the one with a note being typed in it: that one is on
+        // screen, held still, and throwing it away would lose the note.
+        approvalCards = approvalCards.filter { $0.key == composing }
         rebuild(animated: true)
     }
 
@@ -672,6 +676,8 @@ final class IslandController: NSObject {
             card.setComposing(false, notify: false)
         }
         composing = fileName
+        let front = NSWorkspace.shared.frontmostApplication
+        keysCameFrom = front?.processIdentifier == getpid() ? nil : front
         collapseWork?.cancel()
         panel.acceptsKeys = true
         // One last layout with the note row showing, so the panel grows to it —
@@ -689,9 +695,15 @@ final class IslandController: NSObject {
         panel.makeFirstResponder(nil)
         panel.acceptsKeys = false
         panel.resignKey()
-        // The pointer may have left long ago; the grace timer that would have
-        // closed the panel was held off while typing.
-        if !hovered { wantsExpanded = false }
+        // Open exactly as far as the pointer says: it may have left long ago (the
+        // grace timer was held off while typing), or still be on the panel after
+        // an answer elsewhere asked it to close.
+        wantsExpanded = hovered
+        // Keys go back to the app that had them. The panel never activated this
+        // app, so that app is still frontmost; activating it again is what hands
+        // the key window back rather than leaving keys addressed to the island.
+        if let app = keysCameFrom, !app.isTerminated { app.activate() }
+        keysCameFrom = nil
         if relayout { rebuild(animated: true) }
     }
 

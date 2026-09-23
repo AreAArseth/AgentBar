@@ -23,9 +23,13 @@ may be allowed to do:
   a setting, or runs a command. There is no link for any of that, and there will not
   be one: rule 3 in `CLAUDE.md` (AgentBar answers nothing by itself) would mean
   little if a link could answer on your behalf.
-- `new-task` stops **one keypress short**. It opens the launcher filled in, the hint
-  line says *From a link — read it before ⏎*, and nothing starts until you press
-  Return.
+- `new-task` stops **two keypresses short**. It opens the launcher filled in, the
+  hint line says *From a link — read it, then ⏎ twice*, and the first Return only
+  confirms you have seen it (and does nothing at all in the first second, when it is
+  more likely a Return that was already on its way). A page that opened the link can
+  also say "press Enter to continue"; one Return is not enough to run its prompt.
+  Editing the prompt makes it yours, and then one Return starts it as usual. A link
+  arriving while you are typing in the launcher never replaces what you typed.
 - A link AgentBar does not recognise exactly — an unknown command, a stray path, a
   user or port in the URL, a key given twice, a `cwd` that is not an absolute
   existing directory, a prompt over 2,000 characters — **does nothing**. No alert and
@@ -38,13 +42,16 @@ may be allowed to do:
 |---|---|
 | `agentbar://focus` | Jumps to the session that most needs you: one waiting on a permission, else one asking a question, else the working session that moved last. Nothing waiting, nothing happens. |
 | `agentbar://focus?session=<id>` | Jumps to that session (the id is its file name in `~/.agentbar/state.d/`, without `.json`). An id that is not on screen does nothing. |
-| `agentbar://new-task?cwd=<path>&agent=<id>&prompt=<text>` | Opens the launcher with that project, agent and prompt chosen. Every parameter is optional. You still press Return. |
+| `agentbar://new-task?cwd=<path>&agent=<id>&prompt=<text>` | Opens the launcher with that project, agent and prompt chosen. Every parameter is optional. Return twice to start (once if you edit the prompt). |
 | `agentbar://settings` | Opens Settings. |
 | `agentbar://settings/<page>` | Opens Settings on a page: `general`, `notifications`, `shortcuts`, `usage`, `approvals`, `rules`, `diagnostics`. |
 | `agentbar://welcome` | Opens the welcome window. |
 
 Details that matter:
 
+- **Focus only ever picks a session on this Mac.** A cloud or ssh-mirrored row
+  would open the `url` its writer chose, so a link skips them, even when one is the
+  only session waiting.
 - **Focus brings the session's terminal forward and changes nothing else.** A row
   click on a waiting session also hands the prompt back to its terminal; a link does
   not, because any page can open one and a link must not move a pending decision.
@@ -87,7 +94,7 @@ For a task launcher, put an **Ask for Input** (text) action first, then a **URL
 Encode** action on its result, then **Text** with
 `agentbar://new-task?cwd=/Users/you/Projects/app&agent=claude&prompt=` followed by
 the encoded result, and **Open URLs** on that. AgentBar shows the launcher with the
-prompt in it; press Return to start.
+prompt in it; press Return twice to start.
 
 ## Raycast
 

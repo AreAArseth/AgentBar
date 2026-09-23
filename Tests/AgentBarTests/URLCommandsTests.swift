@@ -151,10 +151,11 @@ import Testing
 
     // MARK: - Which session needs you
 
-    private func session(_ state: String, ts: TimeInterval) throws -> Session {
+    private func session(_ state: String, ts: TimeInterval, entrypoint: String = "cli") throws -> Session {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
         let url = dir.appendingPathComponent("url-\(state)-\(Int(ts))-\(UUID().uuidString).json")
-        let o: [String: Any] = ["agent": "claude", "state": state, "ts": ts, "project": "p"]
+        let o: [String: Any] = ["agent": "claude", "state": state, "ts": ts, "project": "p",
+                                "entrypoint": entrypoint, "url": "ssh://somewhere"]
         try JSONSerialization.data(withJSONObject: o).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         return try #require(Session(fileURL: url))
@@ -180,5 +181,15 @@ import Testing
         #expect(URLCommands.mostNeeded([try session("done", ts: 1), try session("idle", ts: 2),
                                         try session("error", ts: 3)]) == nil)
         #expect(URLCommands.mostNeeded([]) == nil)
+    }
+
+    /// Focusing a cloud row opens a URL its writer chose — a remote host over ssh
+    /// among them — so a link never picks one, even when it is the only one waiting.
+    @Test func aLinkNeverJumpsToACloudRow() throws {
+        let remote = try session("question", ts: 300, entrypoint: "cloud")
+        let local = try session("thinking", ts: 100)
+        #expect(URLCommands.mostNeeded([remote, local])?.id == local.id)
+        #expect(URLCommands.mostNeeded([remote]) == nil)
+        #expect(URLCommands.linkable([remote, local]).map(\.id) == [local.id])
     }
 }

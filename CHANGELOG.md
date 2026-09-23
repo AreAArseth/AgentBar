@@ -60,7 +60,10 @@ All notable changes to AgentBar are documented here. This project follows
   open those windows. Any web page can open a link, so the scheme is a list of what it
   may *show*: no host approves, denies, answers, defers, writes a rule, changes a
   setting or runs anything, a `cwd` must be a plain absolute directory, and an
-  over-long prompt refuses the link rather than being cut. See `docs/url-scheme.md`.
+  over-long prompt refuses the link rather than being cut. A link-filled launcher
+  takes Return twice (a page can say "press Enter"), and `focus` never jumps to a
+  cloud or ssh row, whose click would open a URL somebody else wrote. See
+  `docs/url-scheme.md`.
 - **A row with an impossible time can no longer crash the app.** Anybody may write
   `state.d`, and a `started_at` of `1e300` reached an `Int(_:)` that traps on it —
   on every poll, so a relaunch did not help. Times are checked where a row is read.

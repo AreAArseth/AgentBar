@@ -1378,7 +1378,13 @@ final class IslandNoteField: NSView {
     }
 
     /// A click anywhere on the box, not only on the glyphs, starts typing.
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(field) }
+    override func mouseDown(with event: NSEvent) {
+        // A plain view does not make a panel with `becomesKeyOnlyIfNeeded` key,
+        // so after a click elsewhere the caret would show while keys went on to
+        // the terminal.
+        window?.makeKey()
+        window?.makeFirstResponder(field)
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

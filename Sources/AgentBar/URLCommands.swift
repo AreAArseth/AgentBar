@@ -230,12 +230,20 @@ enum URLCommands {
     /// idle session is never "the one that needs you" — a link that jumps to
     /// yesterday's terminal is a link that did nothing useful and moved your focus.
     static func mostNeeded(_ sessions: [Session]) -> Session? {
-        sessions.filter { $0.state == .permission || $0.state == .question || $0.state.isWorking }
+        linkable(sessions)
+            .filter { $0.state == .permission || $0.state == .question || $0.state.isWorking }
             .max { a, b in
                 // Working sessions all share one rank; within a rank, newest wins.
                 let (ra, rb) = (rank(a), rank(b))
                 return ra != rb ? ra < rb : a.ts < b.ts
             }
+    }
+
+    /// What a link may jump to: local sessions only. Focusing a cloud row opens its
+    /// `url` — a string whoever wrote the row chose, a remote host over ssh
+    /// included — so a link that could reach one is a link that launches things.
+    static func linkable(_ sessions: [Session]) -> [Session] {
+        sessions.filter { $0.entrypoint != "cloud" }
     }
 
     private static func rank(_ s: Session) -> Int {
@@ -286,7 +294,7 @@ enum URLCommands {
     private static func run(_ command: Command) {
         switch command {
         case .focus(let id):
-            let all = sessions()
+            let all = linkable(sessions())
             let target = id.map { id in all.first { $0.id == id } } ?? mostNeeded(all)
             // A row click without its hand-off. A click hands a waiting prompt back
             // to its terminal (`defer`); a link does not, because any web page can
