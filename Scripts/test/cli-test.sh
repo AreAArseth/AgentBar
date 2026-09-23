@@ -187,6 +187,9 @@ rm -f "$HOME/.agentbar/answers.d/r1.json"
 "$CLI" deny -m "   " >/dev/null
 check "a blank note is no note"        '! grep -q message "$HOME/.agentbar/answers.d/r1.json"'
 rm -f "$HOME/.agentbar/answers.d/r1.json"
+"$CLI" deny --note "$(printf 'x%.0s' $(seq 498))😀tail" >/dev/null
+check "a long note never ends on half an emoji" '! grep -qi "\\\\ud83d" "$HOME/.agentbar/answers.d/r1.json"'
+rm -f "$HOME/.agentbar/answers.d/r1.json"
 check "a note on approve is refused"   '! "$CLI" approve --note "x" >/dev/null 2>&1 && [ ! -f "$HOME/.agentbar/answers.d/r1.json" ]'
 check "dead-hook request pruned"       'seed_request dead 999999; "$CLI" requests >/dev/null; [ ! -f "$HOME/.agentbar/requests.d/dead.json" ]'
 

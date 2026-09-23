@@ -51,7 +51,9 @@ All notable changes to AgentBar are documented here. This project follows
   else's, and a host name that could be read as an ssh option never reaches `ssh`.
   Read-only on purpose: a remote session waiting on permission says *Waiting on you
   on gpu* and is answered where it runs, because no hook on this Mac is blocked
-  behind it. Off until hosts are listed.
+  behind it. Off until you switch it on and list hosts. A remote host is not
+  trusted with a number either: its times are clamped, its rows capped at fifty, and
+  a host that misses a poll keeps its rows for a minute before they go.
 - **`agentbar://` links, for Shortcuts, Raycast, Alfred and scripts.** `focus` jumps
   to the session that needs you (or `?session=<id>`), `new-task?cwd=…&agent=…&prompt=…`
   fills the launcher in and waits for your Return, `settings/<page>` and `welcome`
@@ -59,6 +61,9 @@ All notable changes to AgentBar are documented here. This project follows
   may *show*: no host approves, denies, answers, defers, writes a rule, changes a
   setting or runs anything, a `cwd` must be a plain absolute directory, and an
   over-long prompt refuses the link rather than being cut. See `docs/url-scheme.md`.
+- **A row with an impossible time can no longer crash the app.** Anybody may write
+  `state.d`, and a `started_at` of `1e300` reached an `Int(_:)` that traps on it —
+  on every poll, so a relaunch did not help. Times are checked where a row is read.
 - **Your own sounds.** Put `permission`, `question`, `done` or `ack` — `.aiff`, `.wav`,
   `.caf`, `.mp3` or `.m4a` — in `~/.agentbar/sounds/` and it replaces that cue, at
   the same volume and with the same rules about when anything plays. A file over

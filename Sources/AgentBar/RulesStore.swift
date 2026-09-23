@@ -192,7 +192,7 @@ enum RulesStore {
         if !r.cwd.isEmpty && !r.cwd.hasPrefix("/") {
             return "\(where_) has a `cwd` that is not an absolute path."
         }
-        if r.isAllow && !r.tell.trimmingCharacters(in: .whitespaces).isEmpty {
+        if r.isAllow && !r.tell.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "\(where_) approves and carries `tell`; only a denial says anything to the agent."
         }
         if let bad = r.badMode {

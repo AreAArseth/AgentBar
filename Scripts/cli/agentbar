@@ -687,7 +687,7 @@ function printRules(json) {
       : dim(mode === "watch" ? "nothing matched yet" : "never fired");
     const state = mode === "on" ? "" : dim(` (${mode})`);
     console.log(`${verb} ${bold(r.shape.padEnd(26))} ${where.padEnd(18)} ${count}${state}`);
-    if (r.tell) console.log(dim(`      tells it: "${r.tell}"`));
+    if (typeof r.tell === "string" && r.tell.trim()) console.log(dim(`      tells it: "${r.tell}"`));
   }
   if (watching) {
     console.log("\n" + dim(`${watching} watching: answering nothing, writing down what it would have done.`));
@@ -1023,8 +1023,15 @@ function printRequests(json) {
 // One line, no control characters, at most 500 — the rules permission.js applies.
 function cleanNote(v) {
   if (typeof v !== "string") return "";
-  const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  return s.length > 500 ? s.slice(0, 499) + "…" : s;
+  const s = v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (s.length <= 500) return s;
+  // Never end the cut on half of an emoji: a lone surrogate makes the answer
+  // unparseable to a host whose JSON reader refuses one.
+  let cut = s.slice(0, 499);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut + "…";
 }
 
 function decide(behavior, argv) {

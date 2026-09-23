@@ -17,7 +17,7 @@ const os = require("os");
 const path = require("path");
 
 const config = require("./lib/config");
-const { writeRow, readRow, reconcile } = require("./lib/state");
+const { writeRow, readRow, reconcile, listIds } = require("./lib/state");
 const { keepRow, toProtocolRow } = require("./lib/policy");
 
 const ADAPTERS = [
@@ -32,13 +32,11 @@ const FIX_URLS = {
   cursor: "https://cursor.com/dashboard",
   devin: "https://app.devin.ai/settings",
   codex: "https://chatgpt.com/codex",
-  ssh: "",
 };
 const FIX_LABELS = {
   cursor: "Cursor: check API key (cloud.json)",
   devin: "Devin: check API key (cloud.json)",
   codex: "Codex: run `codex login`",
-  ssh: "SSH: no host answered (cloud.json)",
 };
 
 const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
@@ -49,7 +47,7 @@ const now = () => Math.floor(Date.now() / 1000);
 const pollVendor = async (v) => {
   const cfg = v.cfg;
   const raw = await v.adapter.fetchRaw(cfg);
-  const { rows, warnings } = v.adapter.normalize(raw, cfg, now());
+  const { rows, warnings, keepPrefixes = [] } = v.adapter.normalize(raw, cfg, now());
   for (const w of warnings) if (!v.warned.has(w)) { v.warned.add(w); log(`${v.adapter.vendor}: ${w}`); }
 
   const t = now();
@@ -67,7 +65,10 @@ const pollVendor = async (v) => {
     if (prev && JSON.stringify(prev) === JSON.stringify(row)) continue;
     writeRow(stateDir, row);
   }
-  reconcile(stateDir, v.adapter.prefix, written);
+  // A host that missed this poll but is still within its grace keeps its rows
+  // as they were (ssh); every other adapter passes nothing here.
+  const graced = keepPrefixes.flatMap((p) => listIds(stateDir, p));
+  reconcile(stateDir, v.adapter.prefix, written.concat(graced));
   if (v.failures > 0) log(`${v.adapter.vendor}: recovered`);
   v.failures = 0;
 };
@@ -116,8 +117,10 @@ const main = async () => {
   }
   // Same for ssh switched on with nowhere to go.
   for (const v of vendors) {
-    if (v.cfg.enabled && "hosts" in v.cfg && !(v.cfg.hosts || []).length) {
-      log(`${v.adapter.vendor}: no hosts in ~/.agentbar/cloud.json — skipping`);
+    // hostsOf, not the raw list: hosts that are all malformed are no hosts, and
+    // a vendor with nowhere to go must not grow a "polling failed" row.
+    if (v.cfg.enabled && v.adapter.hostsOf && !v.adapter.hostsOf(v.cfg).length) {
+      log(`${v.adapter.vendor}: no valid hosts in ~/.agentbar/cloud.json — skipping`);
       v.cfg.enabled = false;
     }
   }

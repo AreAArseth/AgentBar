@@ -171,7 +171,10 @@ function validAnswers(answers, questions) {
 const NOTE_MAX = 500;
 function cleanNote(v) {
   if (typeof v !== "string") return "";
-  const s = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  // Lone surrogates out too: a frontend that cut a note mid-emoji must not make
+  // the decision unparseable to a host whose JSON reader refuses them (Codex's
+  // serde does) — a Deny that silently failed to land is the worst outcome here.
+  const s = paired("", v).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return s.length > NOTE_MAX ? sliceSafe(s, NOTE_MAX - 1) + "…" : s;
 }
 

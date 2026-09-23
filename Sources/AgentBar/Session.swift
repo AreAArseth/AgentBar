@@ -70,13 +70,25 @@ struct Session {
         // crash loop that outlives every relaunch.
         pid         = max(0, Int32(exactly: o["pid"] as? Int ?? 0) ?? 0)
         started     = o["started"] as? Bool ?? true
-        ts          = o["ts"] as? TimeInterval ?? 0
-        startedAt   = o["started_at"] as? TimeInterval ?? 0
+        ts          = Self.plausibleTime(o["ts"])
+        startedAt   = Self.plausibleTime(o["started_at"])
         prompt      = o["prompt"] as? String ?? ""
         model       = o["model"] as? String ?? ""
         recap       = o["recap"] as? String ?? ""
         activity    = (o["activity"] as? [String] ?? []).prefix(5).map { String($0.prefix(40)) }
         url         = o["url"] as? String ?? ""
+    }
+
+    /// A Unix time a row may carry, or 0. `state.d` is a folder anybody may write
+    /// to — the cloud poller mirrors rows from other machines into it — and every
+    /// later `Int(_:)` of a time traps on a Double outside Int's range. `1e300` in
+    /// one file would crash the app on every poll, and the writer rewrites it
+    /// every fifteen seconds, so the crash outlives a relaunch. Checked once here,
+    /// where it enters, rather than at each of the places it is converted.
+    static func plausibleTime(_ raw: Any?) -> TimeInterval {
+        guard let v = (raw as? NSNumber)?.doubleValue, v.isFinite, v > 0, v < 32_503_680_000
+        else { return 0 }                                   // year 3000
+        return v
     }
 
     /// "‹1m" / "28m" / "3h" / "2d" — how long the session has been going.

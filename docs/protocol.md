@@ -203,8 +203,8 @@ done instead. It is the one way a permission hook can steer an agent rather than
 stop it — the hook returns it inside the denial, and the agent reads it as the
 tool's result. The hook flattens it to one line (control characters and runs of
 whitespace become one space), trims it, caps it at 500 characters, and wraps it in
-one sentence of its own ("The user denied this tool call and said: …; do not retry
-the same call"). On a `kind:"plan"` request it is the feedback the plan goes back
+its own words: `The user denied this tool call (via AgentBar) and said: "…". Do not
+retry the same call; follow the user's instruction instead.` On a `kind:"plan"` request it is the feedback the plan goes back
 with, after the keep-planning message. A `message` that is not a non-empty string
 is ignored and the denial goes out bare, exactly as it did before the field
 existed; on any other verb it is ignored. Older hooks ignore it too, which is

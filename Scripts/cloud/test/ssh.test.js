@@ -27,7 +27,7 @@ test("ssh: off by default", () => {
   assert.equal(DEFAULTS.ssh.enabled, false);
 });
 
-const out = (...rows) => rows.map((r) => JSON.stringify(r) + "\n\x1e\n").join("");
+const out = (...rows) => rows.map((r) => "\x1e\n" + JSON.stringify(r) + "\n").join("");
 
 test("ssh: rows keep their agent, name their host, and a wait is never a permission", () => {
   const raw = [{ host: "me@devbox", name: "devbox", out: out(
@@ -68,8 +68,10 @@ test("ssh: the remote script prints live rows and drops dead ones", async () => 
   fs.writeFileSync(path.join(d, "live.json"), JSON.stringify({ agent: "claude", state: "thinking", sessionId: "live", pid: process.pid, started: true, ts: NOW }));
   fs.writeFileSync(path.join(d, "dead.json"), JSON.stringify({ agent: "claude", state: "thinking", sessionId: "dead", pid: 999999, started: true, ts: NOW }));
   // Stand-in ssh: drop the options and the host, run the command with HOME set.
+  // Its login shell is tcsh, and its rc prints a banner — the two things a real
+  // host does that a plain `sh -c` stand-in would hide.
   const fake = path.join(home, "fake-ssh");
-  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\nHOME="${home}" exec sh -c "$1"\n`);
+  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\necho "Welcome to devbox"\nHOME="${home}" exec /bin/tcsh -c "$*"\n`);
   fs.chmodSync(fake, 0o755);
   try {
     const raw = await ssh.fetchRaw({ bin: fake, hosts: ["devbox"] });
@@ -78,4 +80,41 @@ test("ssh: the remote script prints live rows and drops dead ones", async () => 
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("ssh: a remote host cannot hand this Mac an absurd time", () => {
+  const { rows } = ssh.normalize([{ host: "h", name: "h", out: out(
+    { agent: "claude", state: "error", sessionId: "a", pid: 1, started: true, ts: -1e300, started_at: 1e300 },
+    { agent: "claude", state: "done", sessionId: "b", pid: 1, started: true, ts: NOW + 99999, started_at: NOW - 60 },
+  ) }], DEFAULTS.ssh, NOW);
+  const a = toProtocolRow(rows[0], ssh, NOW, 1);
+  assert.equal(a.started_at, undefined);
+  assert.ok(a.ts > 0 && a.ts <= NOW);
+  const b = toProtocolRow(rows[1], ssh, NOW, 1);
+  assert.equal(b.started_at, NOW - 60);
+  assert.ok(b.ts <= NOW, "a time in the future is not taken");
+});
+
+test("ssh: a long host name is shortened, a bad one is reported", () => {
+  const dropped = [];
+  const hosts = ssh.hostsOf({ hosts: ["build-server-01.eu-west.internal.example.com", "-x"] }, dropped);
+  assert.deepEqual(hosts, [{ host: "build-server-01.eu-west.internal.example.com", name: "build-server-01" }]);
+  assert.equal(dropped.length, 1);
+});
+
+test("ssh: a host that missed a poll keeps its rows for a while", () => {
+  const { rows, keepPrefixes } = ssh.normalize([{ host: "a", name: "a", error: "timeout", keep: true }],
+                                               DEFAULTS.ssh, NOW);
+  assert.equal(rows.length, 0);
+  assert.deepEqual(keepPrefixes, ["ssh-a-"]);
+  const gone = ssh.normalize([{ host: "a", name: "a", error: "timeout", keep: false }], DEFAULTS.ssh, NOW);
+  assert.deepEqual(gone.keepPrefixes, []);
+});
+
+test("ssh: rows per host are capped", () => {
+  const many = Array.from({ length: 80 }, (_, i) =>
+    ({ agent: "claude", state: "thinking", sessionId: "s" + i, pid: 1, started: true, ts: NOW }));
+  const { rows, warnings } = ssh.normalize([{ host: "h", name: "h", out: out(...many) }], DEFAULTS.ssh, NOW);
+  assert.equal(rows.length, 50);
+  assert.match(warnings[0], /more than 50/);
 });

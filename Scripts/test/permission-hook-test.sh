@@ -1128,6 +1128,15 @@ printf '{"behavior":"deny","message":"%s"}' "$LONG" > "$HOME/.agentbar/answers.d
 wait "$hookpid"
 check "note: capped at 500"             '[ "$(grep -o "x*…" "$HOME/out.json" | head -1 | wc -m | tr -d " ")" -le 502 ]'
 
+# A note cut mid-emoji by some frontend: the half surrogate never reaches the host.
+fresh_home
+AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$EVENT" >"$HOME/out.json" &
+hookpid=$!
+wait_req
+printf '{"behavior":"deny","message":"stop \\ud83d here"}' > "$HOME/.agentbar/answers.d/$REQ"
+wait "$hookpid"
+check "note: a lone surrogate is dropped" '! grep -qi "ud83d" "$HOME/out.json" && grep -q "stop here" "$HOME/out.json"'
+
 # A plan sent back with feedback keeps planning AND carries what to change.
 fresh_home
 AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" <<<"$PLAN_EVENT" >"$HOME/out.json" &
