@@ -3,6 +3,68 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Deny with a note — refuse, and say what to do instead.** A permission hook has
+  exactly one way to steer an agent rather than stop it: the reason that goes with a
+  denial, which the agent reads as the tool's result. AgentBar never used it, so every
+  Deny said *no* and left the agent to guess, usually by trying the next thing. Now
+  **Deny with a note…** on the island card opens one line — *"use pnpm here, not npm"*,
+  *"not on main"* — and **Deny & tell it** (or Return) sends it. The notification
+  banner carries the same field, and the CLI takes `agentbar deny --note "…"`. On a
+  plan review the link reads **Say what to change…** and the note is the feedback the
+  plan goes back with; Claude keeps planning. The note is flattened to one line and
+  capped at 500 characters by the hook itself; a blank one is no note, and a bare
+  Deny goes out exactly as it always did. Claude Code and Copilot CLI document the
+  field; Codex shares Claude's envelope and has not been checked against a live
+  prompt.
+
+  **Rules can say it too.** A denying rule gains **Tell it** in its sheet — `tell` in
+  `rules.json` — and every refusal it makes carries that line. It is a new field on
+  purpose rather than the existing *Note*: that one was always your private memo, and
+  a reminder written to yourself must not start arriving in an agent's context
+  because the format grew. An approving rule that carries one voids the file; an
+  approval has nothing to explain.
+- **Jump back into tmux, kitty, Ghostty and your editor.** A row click selected the
+  exact tab in iTerm2, Terminal and WezTerm and only brought everything else forward
+  by name. Now:
+  - **tmux** — the pane whose tty is the agent's is selected, its window too, the
+    client that should show it is switched to it, and the terminal running that
+    client comes forward with its own tab selected. iTerm2's `-CC` gateway is never
+    taken for a screen.
+  - **kitty** (with remote control switched on), **Ghostty** (when exactly one of its
+    terminals sits in the session's folder) and **VS Code, Cursor and Zed** (handed the
+    session's folder, which focuses the window that has it open) get a best effort.
+  - **Everything else** comes forward as the app the agent really runs in, found by
+    walking its parent processes, instead of the one `TERM_PROGRAM` names — which for
+    Cursor's terminal was VS Code.
+
+  Keystroke approvals reach tmux as well, but only when both the pane select and the
+  outer tab select report a hit; kitty, Ghostty and the editors are never typed into.
+- **Agents on your own machines, over ssh.** The cloud poller gains an `ssh` adapter:
+  list hosts in `~/.agentbar/cloud.json` and their sessions — written there by the
+  Linux CLI's hooks — appear in the bar as `gpu: my-repo`, a click opening
+  `ssh://gpu`. Every host is read with `BatchMode=yes`, only rows whose agent is still
+  alive on that host come back, a host that is asleep costs its own rows and nobody
+  else's, and a host name that could be read as an ssh option never reaches `ssh`.
+  Read-only on purpose: a remote session waiting on permission says *Waiting on you
+  on gpu* and is answered where it runs, because no hook on this Mac is blocked
+  behind it. Off until hosts are listed.
+- **`agentbar://` links, for Shortcuts, Raycast, Alfred and scripts.** `focus` jumps
+  to the session that needs you (or `?session=<id>`), `new-task?cwd=…&agent=…&prompt=…`
+  fills the launcher in and waits for your Return, `settings/<page>` and `welcome`
+  open those windows. Any web page can open a link, so the scheme is a list of what it
+  may *show*: no host approves, denies, answers, defers, writes a rule, changes a
+  setting or runs anything, a `cwd` must be a plain absolute directory, and an
+  over-long prompt refuses the link rather than being cut. See `docs/url-scheme.md`.
+- **Your own sounds.** Put `permission`, `question`, `done` or `ack` — `.aiff`, `.wav`,
+  `.caf`, `.mp3` or `.m4a` — in `~/.agentbar/sounds/` and it replaces that cue, at
+  the same volume and with the same rules about when anything plays. A file over
+  2 MB or 3 seconds is skipped and the built-in cue plays instead. **Settings ▸
+  General ▸ Open folder…** makes the folder and says which cues are yours.
+
 ## 1.29.0 - 2026-09-23
 
 ### Added

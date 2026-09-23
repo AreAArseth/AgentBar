@@ -282,6 +282,15 @@ enum RenderPreview {
             renderSlab([sized(hero2, rowW), wrap2], name: "03g-deny-with-note")
         }
 
+        // Scene 3h: the rule sheet for a denial that tells the agent why.
+        do {
+            var prefill = RuleSheet.Prefill(decision: "deny", shape: "bash:npm", cwd: "",
+                                            display: "Bash: npm install left-pad")
+            prefill.tell = "use pnpm in this repo, not npm"
+            let url = URL(fileURLWithPath: outDir).appendingPathComponent("03h-rule-sheet-tell.png")
+            _ = RuleSheet.renderForVerification(to: url, prefill: prefill, trying: "npm install")
+        }
+
         // Scene 3d: a failed turn — red, named, and never a green tick.
         do {
             let failed = makeSession("failed-sess", [

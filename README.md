@@ -179,6 +179,12 @@ don't use. Hooks are snapshotted per session — start a new agent session after
   terminal switch. The terminal wizard stays live the whole time — whoever answers
   first wins. Multi-question calls become a one-question-at-a-time wizard on the
   island: each tap records and slides to the next, with Back and a 2/4 mark.
+- **Deny with a note** — refuse and say what to do instead: *"use pnpm here, not
+  npm"*. Type it on the island card (**Deny with a note…**), on the notification
+  banner, or `agentbar deny --note "…"`; the agent reads it as the reason and changes
+  course rather than trying the next thing. On a plan it is the feedback the plan
+  goes back with. A denying rule can carry one too (**Tell it**), so a refusal you
+  wrote down once explains itself every time it fires.
 - **Plan review** — when Claude finishes planning, the full plan renders on the
   island as formatted Markdown (scrollable when long). **Keep planning** sends
   Claude back to refine it without touching the terminal; **Approve plan** jumps
@@ -201,8 +207,11 @@ don't use. Hooks are snapshotted per session — start a new agent session after
 - **A failure looks like one** — a turn that errors out shows red and named
   instead of a green "Done", and never plays the finish chime.
 - **Precise jump-back** — clicking a session row selects the exact terminal tab
-  or split pane the session runs in (iTerm2, Terminal.app, WezTerm — by tty),
-  not just the app.
+  or split pane the session runs in: iTerm2, Terminal.app, WezTerm and **tmux**
+  (pane, window and client — then the terminal hosting it) by tty; kitty (with
+  remote control on), Ghostty and the VS Code, Cursor or Zed window best effort.
+  Anything else comes forward as the app the agent actually runs in, found by its
+  process ancestry rather than guessed from `TERM_PROGRAM`.
 - **Turn recaps** — a finished session's row says *what* finished: one line of the
   agent's closing words under "Done", not just a green dot.
 - **Activity breadcrumb** — while a session works, the island hero shows its last
@@ -211,7 +220,13 @@ don't use. Hooks are snapshotted per session — start a new agent session after
 - **Sound cues (opt-in)** — four tiny synthesized retro-console motifs: needs
   approval, question, done, and an answer-confirm tick. Generated in code (no audio
   files), silent while your screen is locked, off until you flip them on in Settings
-  or the menu.
+  or the menu. **Or your own:** drop `permission`, `question`, `done` or `ack`
+  (`.wav`, `.aiff`, `.caf`, `.mp3`, `.m4a`, up to 2 MB and 3 s) into
+  `~/.agentbar/sounds/` — Settings ▸ General ▸ **Open folder…**.
+- **Shortcuts, Raycast, Alfred** — `open agentbar://focus` jumps to the session
+  waiting on you; `agentbar://new-task?cwd=…&agent=…&prompt=…` fills the launcher in
+  (Return is still yours). No link can approve, deny or answer anything. See
+  [docs/url-scheme.md](docs/url-scheme.md).
 - **Built-in updates** — a quiet daily check of GitHub Releases plus **Check for
   Updates…** in the menu; one click installs the new version and relaunches.
 - **Linux too** — the [`agentbar` CLI](#linux-cli) is a full peer of the menu bar app:
@@ -434,6 +449,12 @@ rides the `codex` CLI's existing login. Vendors fail independently — one expir
 key collapses that vendor to a single clickable "check API key" row and never
 touches the others. Setup, config, and lifecycle rules: [Scripts/cloud/README.md](Scripts/cloud/README.md).
 
+**Your own machines, too.** The same poller can read a devbox or a GPU server over
+`ssh` (off until you list hosts in `cloud.json`): the host runs AgentBar's hooks via
+the Linux CLI, and its sessions appear here as `gpu: my-repo`, a click opening
+`ssh://gpu`. Read-only — a remote session waiting on permission says so and is
+answered where it runs.
+
 ## Dynamic Island
 
 Instead of (or alongside) the menu bar item, AgentBar can live as a pill just under
@@ -531,8 +552,9 @@ nothing and Diagnostics says so; AgentBar will not sign that acceptance for you.
 Agents with no decision hook still offer *Approve in terminal (sends keystroke)*,
 and so do Codex sessions that were running before the hooks were accepted —
 AgentBar brings the session's own tab forward and presses the approval key. It waits for that tab to be confirmed by tty and sends nothing if it
-can't be found, so a keystroke never lands in a tab it couldn't verify; on
-terminals with no tab targeting (Warp, Ghostty, kitty) it falls back to the app.
+can't be found, so a keystroke never lands in a tab it couldn't verify — in tmux
+that means both the pane and the outer terminal's tab; on terminals with no tab
+targeting (Warp, Ghostty, kitty) it falls back to the app and types nothing.
 Best-effort by design, and it needs the Accessibility permission (the menu item
 offers to open System Settings until it's granted).
 
