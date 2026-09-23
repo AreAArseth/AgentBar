@@ -64,6 +64,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        and no entry in System Settings to turn on. Declaring it here bought nothing
        and cost the whole Notifications feature. -->
   <key>NSAppleEventsUsageDescription</key><string>AgentBar selects the exact terminal tab a session runs in when you jump to it.</string>
+  <!-- The folder prompts: reading .git/HEAD and the working tree of a project an
+       agent works in (the branch on a row, what a session changed) is what asks.
+       Without these the system dialog explains nothing, and it is the first thing
+       a new install shows. -->
+  <key>NSDocumentsFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
   <key>NSHumanReadableCopyright</key><string>© 2026 Michal Strnadel. MIT licensed.</string>
 </dict>
 </plist>

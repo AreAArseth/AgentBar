@@ -350,7 +350,7 @@ final class IslandController: NSObject {
         if visible.count > Self.maxRows {
             out.append(more(visible.count - Self.maxRows))
         }
-        if visible.isEmpty { out.append(emptyRow()) }
+        if visible.isEmpty { out.append(emptyRow(width: rowW)) }
         return out
     }
 
@@ -516,11 +516,23 @@ final class IslandController: NSObject {
         return l
     }
 
-    private func emptyRow() -> NSView {
-        let l = NSTextField(labelWithString: "No active sessions")
+    private func emptyRow(width: CGFloat) -> NSView {
+        let firstRun = EmptyState.firstRun
+        let l = NSTextField(labelWithString: EmptyState.title(firstRun: firstRun))
         l.font = .systemFont(ofSize: 12)
         l.textColor = NSColor.white.withAlphaComponent(0.45)
-        return l
+        guard let hint = EmptyState.hint(firstRun: firstRun) else { return l }
+        let h = NSTextField(wrappingLabelWithString: hint)
+        h.font = .systemFont(ofSize: 11)
+        h.textColor = NSColor.white.withAlphaComponent(0.35)
+        h.preferredMaxLayoutWidth = width
+        let stack = NSStackView(views: [l, h])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return stack
     }
 
     /// In Island-only mode the menu bar mark is gone, so the panel carries the way

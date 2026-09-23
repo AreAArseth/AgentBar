@@ -9,9 +9,19 @@ enum MenuBuilder {
         // Sessions
         menu.addItem(header("Sessions"))
         if sessions.isEmpty {
-            let none = NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: "")
+            let firstRun = EmptyState.firstRun
+            let none = NSMenuItem(title: EmptyState.title(firstRun: firstRun), action: nil, keyEquivalent: "")
             none.isEnabled = false
             menu.addItem(none)
+            if let hint = EmptyState.hint(firstRun: firstRun) {
+                let line = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                line.isEnabled = false
+                line.attributedTitle = NSAttributedString(string: wrapped(hint, width: 46), attributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ])
+                menu.addItem(line)
+            }
         } else {
             for s in sessions {
                 let item = NSMenuItem(title: "", action: #selector(StatusItemController.sessionRowClicked(_:)),
@@ -343,6 +353,20 @@ enum MenuBuilder {
 
     private static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+    }
+
+    /// Greedy word wrap for a disabled menu line: an NSMenuItem title never wraps
+    /// by itself, it widens the whole menu to fit.
+    static func wrapped(_ text: String, width: Int) -> String {
+        var lines: [String] = [], line = ""
+        for word in text.split(separator: " ") {
+            if !line.isEmpty, line.count + 1 + word.count > width {
+                lines.append(line); line = ""
+            }
+            line += (line.isEmpty ? "" : " ") + word
+        }
+        if !line.isEmpty { lines.append(line) }
+        return lines.joined(separator: "\n")
     }
 
     private static func header(_ title: String) -> NSMenuItem {

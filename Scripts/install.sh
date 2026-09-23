@@ -93,7 +93,11 @@ main() {
 
   echo
   echo "✓ AgentBar installed to $DEST/AgentBar.app and launched."
-  echo "  Hooks install automatically. Start a NEW agent session to see it in the bar."
+  echo "  Hooks install automatically. Start a NEW agent session to see it in the bar:"
+  echo "  sessions already open started before AgentBar was watching."
+  echo "  If your projects live in Documents, Desktop or Downloads, macOS asks once"
+  echo "  whether AgentBar may read them — that is for the git branch on each row."
+  echo "  Uninstall: https://github.com/michalstrnadel/AgentBar#uninstall"
 }
 
 main "$@"

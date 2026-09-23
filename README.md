@@ -261,7 +261,15 @@ x86_64 half won't link without one. `--native` builds for your Mac alone, which 
 all you need to run it yourself.
 
 First launch installs hooks automatically for every supported tool you have —
-see the [agent table](#agent-support). New agent sessions appear in the bar from then on.
+see the [agent table](#agent-support). New agent sessions appear in the bar from then on;
+ones already open started before the hooks and stay out of it until you start another.
+
+**What you'll see the first time:** Homebrew and the one-liner clear the download
+quarantine, so macOS opens the app without its "cannot verify" warning — that one
+appears only for a zip downloaded by hand (see [Troubleshooting](#troubleshooting)).
+If your projects live in Documents, Desktop or Downloads, macOS asks once whether
+AgentBar may read them; that is for the git branch and changes shown on each row,
+and nothing leaves your Mac.
 
 **Updating:** the app checks GitHub Releases daily and offers new versions in the menu
 (**Check for Updates…** works any time). Homebrew users can keep using
@@ -572,12 +580,15 @@ run on Linux and macOS — see [docs/testing.md](docs/testing.md).
   into your existing notify chain manually.
 - **Keystroke approval does nothing** — grant AgentBar the Accessibility permission
   (the menu item offers to open System Settings).
-- **macOS says it "cannot verify AgentBar is free of malware"** — the app is ad-hoc
-  signed, not notarized. Don't click *Move to Trash*; click *Done*, then either
-  right-click the app ▸ Open, or run
+- **macOS says it "cannot verify AgentBar is free of malware"** — the app is signed
+  with the project's own certificate, not notarized by Apple. Don't click *Move to
+  Trash*; click *Done*, then open **System Settings ▸ Privacy & Security**, scroll to
+  the line about AgentBar and click **Open Anyway** (macOS 15 and later; on macOS 14
+  and earlier, right-click the app ▸ Open works too). Or run
   `xattr -dr com.apple.quarantine /Applications/AgentBar.app` and open it again.
-  The install script and the Homebrew cask do this for you; the dialog mainly
-  appears after downloading the zip manually from Releases.
+  The install script and the Homebrew cask do this for you; the dialog appears only
+  after downloading the zip by hand from Releases. To check that zip first, see
+  [Verifying a download](SECURITY.md#verifying-a-download).
 - **`brew outdated` reports an old AgentBar version** — the in-app updater swaps
   `/Applications/AgentBar.app` without telling Homebrew, so brew's install record
   lags behind after an in-app update. Run `brew upgrade --cask agentbar` to

@@ -338,6 +338,12 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         wiredLabel.stringValue = names.isEmpty
             ? "Setting up hooks…"
             : "Hooks wired up for: " + names.joined(separator: ", ")
+                + ". New sessions show up from now on; ones already open started before the hooks."
+        // The line can grow after the window is up (the install pass reports late),
+        // so the window re-fits rather than clipping it.
+        if let w = window, let content = w.contentView {
+            w.setContentSize(NSSize(width: Self.contentWidth, height: content.fittingSize.height))
+        }
     }
 
     @objc private func pickMode(_ sender: NSButton) {
