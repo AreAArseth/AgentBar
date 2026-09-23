@@ -45,8 +45,9 @@ open "build/AgentBar.app"
    it appears only on a deliberate keypress, a menu click, or an `agentbar://new-task`
    link (Shortcuts, Raycast — see `URLCommands`; a link only fills it in, Return is
    still yours), and it closes the instant it loses focus. No link may approve,
-   deny, answer, defer, write a rule or change a setting: any web page can open one. A surface that can appear without being asked for, or
-   that stays once you look away, does not belong here.
+   deny, answer, defer, write a rule or change a setting: any web page can open one.
+   A surface that can appear without being asked for, or that stays once you look
+   away, does not belong here.
    `RuleSheet` is a sheet on Settings, not a fourth surface: it is modal to a window
    the user already opened and it closes when it is answered.
 3. **AgentBar answers nothing by itself — only what the user wrote down.** For six

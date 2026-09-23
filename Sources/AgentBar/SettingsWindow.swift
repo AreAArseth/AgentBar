@@ -79,6 +79,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private var volumeSlider: NSSlider!
     private var testButton: NSButton!
     private var volumeRow: NSStackView!
+    private var soundFolderButton: NSButton!
+    private var soundPackStatus: NSTextField!
     private var hideIslandBox: NSSwitch!
     private var diagnostics: DiagnosticsView!
     private var claudeQuotaBox: NSSwitch!
@@ -271,6 +273,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         volumeRow.alignment = .centerY
         volumeRow.spacing = 8
         volumeRow.setCustomSpacing(12, after: volumeRow.arrangedSubviews[2])
+        soundFolderButton = SettingsChrome.smallButton("Open folder…", target: self,
+                                                       action: #selector(openSoundFolder))
+        soundFolderButton.toolTip = "~/.agentbar/sounds — a file named permission, question, "
+            + "done or ack replaces that cue. Up to 2 MB and 3 seconds."
+        soundPackStatus = SettingsChrome.caption("")
 
         hideIslandBox = SettingsChrome.toggle(target: self, action: #selector(toggleHideIsland))
 
@@ -394,6 +401,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
                                        + "question, or finishes. Never while one is working.",
                                        control: soundsBox),
                     SettingsChrome.customRow(volumeRow),
+                    // Quiet on purpose: one row and one line, in the card it
+                    // belongs to, rather than a section of its own for something
+                    // most people never touch.
+                    SettingsChrome.row("Your own sounds", control: soundFolderButton),
+                    SettingsChrome.noteRow(soundPackStatus),
                 ]),
                 SettingsChrome.card([
                     SettingsChrome.row("Hide the island when nothing is running",
@@ -594,6 +606,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         diagnostics.refresh()
         syncRecorderState()
         syncSoundControls()
+        syncSoundPack()
     }
 
     @objc private func toggleLauncher() {
@@ -882,6 +895,33 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         SoundCenter.shared.preview()
     }
 
+    /// Creates the folder if it is not there yet and opens it in Finder. That is
+    /// all it does: what goes in it is the person's, and the line under the button
+    /// says what AgentBar made of it the next time this window comes forward.
+    @objc private func openSoundFolder() {
+        let dir = SoundPack.directory
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            if let window { NSAlert(error: error).beginSheetModal(for: window) }
+            return
+        }
+        NSWorkspace.shared.open(dir)
+    }
+
+    /// Which cues are the user's, and which files were passed over and why. Re-read
+    /// whenever the window comes forward, because the change it reports is made in
+    /// Finder, behind this window's back.
+    private func syncSoundPack() {
+        let sentence = SoundPack.summary(SoundPack.listing())
+        guard soundPackStatus.stringValue != sentence else { return }
+        soundPackStatus.stringValue = sentence
+        // Same as the quota line: a longer sentence is a taller label, and the row
+        // follows what was measured.
+        soundPackStatus.fittedHeight?.constant = SettingsChrome.measure(
+            soundPackStatus, width: SettingsChrome.cardWidth - SettingsChrome.rowInset * 2)
+    }
+
     @objc private func toggleHideIsland() {
         UserDefaults.standard.set(hideIslandBox.state == .on, forKey: "hideIslandWhenEmpty")
         onChange?()
@@ -911,6 +951,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     /// still-armed recorder would leave the hotkeys suspended forever. End it now.
     func windowDidResignKey(_ notification: Notification) {
         cancelCaptures()
+    }
+
+    /// Back from Finder with a file dropped in: say what it did.
+    func windowDidBecomeKey(_ notification: Notification) {
+        syncSoundPack()
     }
 
     private func speakerGlyph(_ symbol: String) -> NSImageView {

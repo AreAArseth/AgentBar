@@ -6,9 +6,18 @@ import AVFoundation
 /// AVAudioEngine that is torn down again between cues. Off by default (a status
 /// app must not start beeping after an update); silent while the screen is
 /// locked; edges only, so a burst of ticks never becomes a drum roll.
+///
+/// Any cue can be replaced by a file of the user's own in `~/.agentbar/sounds/`
+/// (see `SoundPack`, which owns the names and the ceilings). Only *which sound*
+/// changes: every rule above — when a cue fires, the cooldown, the lock, the
+/// volume, the engine going away when idle — applies to a custom file exactly as
+/// it does to a synthesized one, because both arrive here as the same kind of
+/// buffer and go down the same path.
 final class SoundCenter {
     static let shared = SoundCenter()
 
+    /// The raw values are also the file names a custom sound is found under —
+    /// renaming a case renames somebody's file out from under them. See `SoundPack`.
     enum Cue: String, CaseIterable { case permission, question, done, ack }
 
     // MARK: - Settings (UserDefaults-backed, read live on every play)
@@ -76,8 +85,17 @@ final class SoundCenter {
     // MARK: - State
 
     private var buffers: [Cue: AVAudioPCMBuffer] = [:]
+    /// A user's file per cue, with the listing entry it was loaded from — a file
+    /// replaced, resized or removed no longer matches and is read again. A file
+    /// that was refused is remembered too, so a too-long `done.mp3` is judged once
+    /// per change rather than on every turn.
+    private var custom: [Cue: (entry: SoundPack.Entry, buffer: AVAudioPCMBuffer?)] = [:]
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
+    /// The layout the player was connected at. A custom file is whatever the user
+    /// had — stereo, 48 kHz — and a buffer scheduled on a player connected at
+    /// another layout is an exception, not a sound.
+    private var connected: AVAudioFormat?
     private let audioQueue = DispatchQueue(label: "agentbar.soundcenter")
     /// Previous state per session id, for edge detection. `primed` guards the
     /// launch snapshot: sessions that already exist when the app starts are old
@@ -176,7 +194,7 @@ final class SoundCenter {
     // MARK: - Engine
 
     private func ensureEngine(format: AVAudioFormat) -> AVAudioPlayerNode? {
-        if let player, engine?.isRunning == true { return player }
+        if let player, engine?.isRunning == true, connected == format { return player }
         teardownEngine()
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
@@ -188,6 +206,7 @@ final class SoundCenter {
         }
         self.engine = engine
         self.player = player
+        connected = format
         return player
     }
 
@@ -196,6 +215,7 @@ final class SoundCenter {
         engine?.stop()
         player = nil
         engine = nil
+        connected = nil
     }
 
     /// The app shouldn't hold the audio device between cues; 10s after the last
@@ -211,7 +231,29 @@ final class SoundCenter {
 
     // MARK: - Buffers
 
+    /// On the audio queue, per play: the user's file when there is one that may be
+    /// played, the synthesized cue otherwise. Listing a folder of a handful of files
+    /// is cheaper than any way of watching it, and cues are seconds apart at the
+    /// very least.
     private func buffer(for cue: Cue) -> AVAudioPCMBuffer? {
+        if case .file(let entry)? = SoundPack.resolve(SoundPack.listing())[cue] {
+            if let cached = custom[cue], cached.entry == entry {
+                if let b = cached.buffer { return b }
+            } else {
+                let url = SoundPack.directory.appendingPathComponent(entry.name)
+                switch SoundPack.load(url) {
+                case .success(let b):
+                    custom[cue] = (entry, b)
+                    return b
+                case .failure(let refusal):
+                    NSLog("AgentBar: not playing %@ (%@); using the built-in cue",
+                          entry.name, refusal.words)
+                    custom[cue] = (entry, nil)
+                }
+            }
+        } else {
+            custom[cue] = nil
+        }
         if let b = buffers[cue] { return b }
         let b = Self.buildBuffer(for: cue)
         buffers[cue] = b
