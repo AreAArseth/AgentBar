@@ -1,21 +1,9 @@
-// Renders the AgentBar app icon (1024x1024 master PNG).
-// Ivory squircle framing a "screen" washed in the four agent hues, and on it the
-// island as an object: a glossy charcoal slab with four glass lamps — one lit (the
-// session that needs you), three waiting.
-//
-// Everything that shows the icon is derived from this master, so after a change:
-//   swift Scripts/appicon.swift /tmp/icon_1024.png
-//   Resources/AppIcon.icns      iconutil over a 16…512@2x iconset (sips -z)
-//   docs/assets/app-icon.png    256x256
-//   docs/assets/social-preview.png, demo-claude-codex.gif, demo-island.gif
-//                               the generators in Scripts/demo/ (their headers)
-//   demo-claude-codex-x.gif, demo-claude-codex.mp4
-//                               ffmpeg from demo-claude-codex.gif at 1200x640
-//   docs/assets/welcome-appearance.png   a screenshot of WelcomeWindow
+// Renders the two 2026-09-23 app icon concepts at 1024x1024.
+// Usage: swift generator.swift <lamps|ask> <out.png>
+// `lamps` shipped and lives on as Scripts/appicon.swift; `ask` is kept here.
 import AppKit
-
 let S: CGFloat = 1024
-let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "icon_1024.png"
+let variant = CommandLine.arguments[1], out = CommandLine.arguments[2]
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 let ctx = CGContext(data: nil, width: Int(S), height: Int(S), bitsPerComponent: 8, bytesPerRow: 0,
                     space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -54,6 +42,7 @@ blob(CGPoint(x: 520, y: 420), 360, 0xFFF4EA, 0.55)   // light centre
 // top gloss
 let gl = CGGradient(colorsSpace: srgb, colors: [rgb(0xFFFFFF, 0.28), rgb(0xFFFFFF, 0)] as CFArray, locations: [0, 1])!
 ctx.drawLinearGradient(gl, start: CGPoint(x: 512, y: screen.maxY), end: CGPoint(x: 512, y: screen.midY), options: [])
+
 
 func circle(_ c: CGPoint, _ r: CGFloat) -> CGRect { CGRect(x: c.x - r, y: c.y - r, width: 2*r, height: 2*r) }
 func radial(_ c: CGPoint, _ r: CGFloat, _ cols: [CGColor], _ locs: [CGFloat], focus: CGPoint? = nil) {
@@ -102,22 +91,49 @@ func bloom(_ c: CGPoint, _ r: CGFloat, _ hex: UInt32, _ a: CGFloat) {
     radial(c, r, [rgb(hex, a), rgb(hex, a * 0.35), rgb(hex, 0)], [0, 0.4, 1]); ctx.restoreGState()
 }
 
-// The island as an object: a glossy slab with four glass lamps, one burning.
-let slabR = CGRect(x: 512 - 300, y: 512 - 118, width: 600, height: 236)
-slab(slabR, 118)
-let step: CGFloat = 132, r: CGFloat = 46
-var x = slabR.midX - step * 1.5
-for (i, h) in brand.enumerated() {
-    let c = CGPoint(x: x, y: slabR.midY)
-    if i == 0 { ctx.saveGState(); ctx.addPath(rr(slabR, 118)); ctx.clip(); bloom(c, 105, 0xF08A5E, 0.35); ctx.restoreGState() }
-    lamp(c, i == 0 ? r + 6 : r, h, lit: i == 0); x += step
+switch variant {
+case "lamps":
+    // The island as an object: a glossy slab with four glass lamps, one burning.
+    let slabR = CGRect(x: 512 - 300, y: 512 - 118, width: 600, height: 236)
+    slab(slabR, 118)
+    let step: CGFloat = 132, r: CGFloat = 46
+    var x = slabR.midX - step * 1.5
+    for (i, h) in brand.enumerated() {
+        let c = CGPoint(x: x, y: slabR.midY)
+        if i == 0 { ctx.saveGState(); ctx.addPath(rr(slabR, 118)); ctx.clip(); bloom(c, 105, 0xF08A5E, 0.35); ctx.restoreGState() }
+        lamp(c, i == 0 ? r + 6 : r, h, lit: i == 0); x += step
+    }
+    // glow spilling onto the screen below the slab
+    bloom(CGPoint(x: slabR.minX + 102, y: slabR.minY - 20), 220, 0xF6A27E, 0.35)
+case "ask":
+    // The island opened: an agent asking, and the two answers.
+    let card = CGRect(x: screen.minX + 56, y: 300, width: screen.width - 112, height: screen.maxY - 300 - 40)
+    slab(card, 110)
+    let head = CGPoint(x: card.minX + 118, y: card.maxY - 112)
+    ctx.saveGState(); ctx.addPath(rr(card, 110)); ctx.clip(); bloom(head, 110, 0xF08A5E, 0.3); ctx.restoreGState()
+    lamp(head, 44, brand[0], lit: true)
+    for (i, (w, a)) in [(CGFloat(250), CGFloat(0.92)), (170, 0.4)].enumerated() {
+        ctx.addPath(rr(CGRect(x: head.x + 76, y: head.y + 8 - CGFloat(i) * 62, width: w, height: 30), 15)); ctx.setFillColor(rgb(0xFBF8F2, a)); ctx.fillPath()
+    }
+    // buttons
+    let bw = (card.width - 64 * 2 - 36) / 2, by = card.minY + 58, bh: CGFloat = 116
+    let allow = CGRect(x: card.minX + 64, y: by, width: bw, height: bh)
+    let deny = CGRect(x: allow.maxX + 36, y: by, width: bw, height: bh)
+    ctx.saveGState(); ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 14, color: rgb(0x000000, 0.4))
+    ctx.addPath(rr(allow, bh/2)); ctx.setFillColor(rgb(0x10A37F)); ctx.fillPath(); ctx.restoreGState()
+    ctx.saveGState(); ctx.addPath(rr(allow, bh/2)); ctx.clip()
+    linear(CGPoint(x: 0, y: allow.maxY), CGPoint(x: 0, y: allow.minY), [rgb(0x3FD1A6), rgb(0x10A37F), rgb(0x0B7D61)], [0, 0.5, 1]); ctx.restoreGState()
+    ctx.addPath(rr(deny, bh/2)); ctx.setFillColor(rgb(0xFFFFFF, 0.12)); ctx.fillPath()
+    // check and cross
+    ctx.setLineCap(.round); ctx.setLineJoin(.round); ctx.setLineWidth(22)
+    let ac = CGPoint(x: allow.midX, y: allow.midY)
+    ctx.move(to: CGPoint(x: ac.x - 34, y: ac.y + 2)); ctx.addLine(to: CGPoint(x: ac.x - 8, y: ac.y - 24)); ctx.addLine(to: CGPoint(x: ac.x + 38, y: ac.y + 26))
+    ctx.setStrokeColor(rgb(0xFFFFFF)); ctx.strokePath()
+    let dc = CGPoint(x: deny.midX, y: deny.midY)
+    ctx.move(to: CGPoint(x: dc.x - 24, y: dc.y - 24)); ctx.addLine(to: CGPoint(x: dc.x + 24, y: dc.y + 24))
+    ctx.move(to: CGPoint(x: dc.x - 24, y: dc.y + 24)); ctx.addLine(to: CGPoint(x: dc.x + 24, y: dc.y - 24))
+    ctx.setStrokeColor(rgb(0xFBF8F2, 0.75)); ctx.strokePath()
+default: break
 }
-// glow spilling onto the screen below the slab
-bloom(CGPoint(x: slabR.minX + 102, y: slabR.minY - 20), 220, 0xF6A27E, 0.35)
-ctx.restoreGState() // ends the screen clip
-
-// ---- Write PNG ----
-let img = ctx.makeImage()!
-let rep = NSBitmapImageRep(cgImage: img)
-try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
-print("wrote \(out)")
+ctx.restoreGState()
+try! NSBitmapImageRep(cgImage: ctx.makeImage()!).representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))

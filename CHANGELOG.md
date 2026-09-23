@@ -3,6 +3,17 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **New app icon.** The prompt chevron is gone. The island is now the object: a
+  glossy charcoal slab with four glass lamps, one per agent, and Claude's is lit,
+  set on a screen washed in the same four colours inside the ivory frame. The
+  README, the social banner, the demo GIFs and video, and the welcome screenshot
+  all carry it. The runner-up, the island opened on an Allow/Deny question, is
+  kept in `docs/archive/2026-09-23-app-icon-concepts/`.
+
 ## 1.28.0 - 2026-09-21
 
 ### Added
