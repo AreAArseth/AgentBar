@@ -41,7 +41,8 @@ const tsFrozen = (state) => isTerminal(state) || state === "idle";
 const cloudState = (state) => (state === "permission" ? "question" : state);
 
 const toProtocolRow = (run, { agentId, prefix }, now, pid) => ({
-  agent: agentId,
+  // An adapter that mirrors several agents (ssh) names each row's own.
+  agent: run.agentId || agentId,
   state: cloudState(run.state),
   label: oneLine(run.label, 80),
   project: oneLine(run.project, 40),

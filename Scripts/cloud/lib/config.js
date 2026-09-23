@@ -19,6 +19,11 @@ const DEFAULTS = {
   devin: { enabled: true, apiKey: "", orgId: "", openIn: "app", recentHours: 48,
            showSuspended: true, suspendedHours: 24 },
   codex: { enabled: true, bin: "codex", pollSeconds: 60, recentHours: 48 },
+  // Your own machines, running AgentBar's hooks (`agentbar install-hooks`). Off
+  // until hosts are listed: this is the one adapter that opens connections to
+  // places you named rather than to a vendor. hosts: ["devbox", {"host": "me@gpu",
+  // "name": "gpu"}]. Keys and ports belong in ~/.ssh/config, never here.
+  ssh: { enabled: false, bin: "ssh", hosts: [], pollSeconds: 15, connectTimeout: 5, recentHours: 48 },
 };
 
 const merge = (base, over) => {

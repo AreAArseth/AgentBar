@@ -43,7 +43,8 @@ session becomes two rows. The cap counts the prefix.
   "sessionId": "abc-123",
   "entrypoint": "cli",         // "cli" | "claude-desktop" | "antigravity-app" | "cloud" | "" — which surface hosts it
                                // "claude-desktop" also covers Cowork: the row opens the app, not a terminal
-                               // "cloud" = the session runs on a vendor's infrastructure; the row opens `url`
+                               // "cloud" = the session runs on another machine — a vendor's infrastructure,
+                               // or one of your own hosts mirrored over ssh; the row opens `url`
   "term_program": "WarpTerminal", // $TERM_PROGRAM of the hosting terminal ("" ok)
   "pid": 12345,                // the agent process (hook's ppid) — liveness handle
   "started": true,             // false = session opened but no real activity yet

@@ -33,16 +33,36 @@ Config `~/.agentbar/cloud.json` (chmod 600 — it holds API keys):
                                                // thread when the session isn't synced into the
                                                // Agent Command Center. "web" = app.devin.ai/sessions/<id>
               "recentHours": 48, "showSuspended": false },
-  "codex":  { "enabled": true }                // rides `codex login`, no key needed
+  "codex":  { "enabled": true },               // rides `codex login`, no key needed
+  "ssh":    { "enabled": true,                 // OFF by default — your own machines
+              "hosts": ["devbox", { "host": "me@gpu-box", "name": "gpu" }] }
 }
 ```
+
+### SSH hosts
+
+Agents running on your own machines — a devbox, a GPU server, a Linux laptop —
+show up next to the local ones. Each host needs AgentBar's hooks installed there
+(`agentbar install-hooks`, the Linux CLI); the poller then reads that host's
+`~/.agentbar/state.d` over `ssh` every 15 s, keeping only rows whose agent process
+is still alive **there**. Rows read `gpu: my-repo`; a click opens `ssh://<host>`.
+
+- Uses your `ssh` and `~/.ssh/config` with `BatchMode=yes`: keys or an agent, never a
+  password prompt. Ports, users and jump hosts belong in `~/.ssh/config`.
+- **Read-only.** A remote session waiting on permission shows *Waiting on you on
+  gpu* and is answered where it runs — there is no hook on this Mac blocked behind
+  it, and an Allow here would answer nothing.
+- A host that is down or asleep is logged and simply shows no rows; the others
+  keep working.
+- Host strings are checked before they reach `ssh`'s argv — letters, digits, `.`,
+  `_`, `-`, one `@`, never a leading dash.
 
 Keys may also come from `CURSOR_API_KEY` / `DEVIN_API_KEY` in the launchd
 environment instead of the file.
 
 ## Behavior
 
-- Poll every 30 s (codex 60 s — it shells out to `codex cloud list --json`).
+- Poll every 30 s (codex 60 s — it shells out to `codex cloud list --json`; ssh 15 s).
 - After each **successful** vendor poll the vendor's rows are reconciled to the
   fresh set; a vendor that keeps failing (~5 min) gets its rows replaced by one
   clickable error row. Vendors never affect each other's rows.

@@ -24,6 +24,7 @@ const ADAPTERS = [
   require("./adapters/cursor"),
   require("./adapters/devin"),
   require("./adapters/codex"),
+  require("./adapters/ssh"),
 ];
 
 const MAX_FAILURES = 10; // ~5 min at the default cadence before rows are declared stale
@@ -31,11 +32,13 @@ const FIX_URLS = {
   cursor: "https://cursor.com/dashboard",
   devin: "https://app.devin.ai/settings",
   codex: "https://chatgpt.com/codex",
+  ssh: "",
 };
 const FIX_LABELS = {
   cursor: "Cursor: check API key (cloud.json)",
   devin: "Devin: check API key (cloud.json)",
   codex: "Codex: run `codex login`",
+  ssh: "SSH: no host answered (cloud.json)",
 };
 
 const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
@@ -108,6 +111,13 @@ const main = async () => {
   for (const v of vendors) {
     if (v.cfg.enabled && "apiKey" in v.cfg && !v.cfg.apiKey) {
       log(`${v.adapter.vendor}: no API key in ~/.agentbar/cloud.json — skipping`);
+      v.cfg.enabled = false;
+    }
+  }
+  // Same for ssh switched on with nowhere to go.
+  for (const v of vendors) {
+    if (v.cfg.enabled && "hosts" in v.cfg && !(v.cfg.hosts || []).length) {
+      log(`${v.adapter.vendor}: no hosts in ~/.agentbar/cloud.json — skipping`);
       v.cfg.enabled = false;
     }
   }
