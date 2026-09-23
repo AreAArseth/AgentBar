@@ -779,7 +779,8 @@ const sqliteTool = (() => {
   return null;
 })();
 
-const utcStamp = (d) => d.toISOString().replace(/Z$/, "Z");
+// toISOString is already the UTC text `created_at` holds ("…T10:00:00.000Z").
+const utcStamp = (d) => d.toISOString();
 
 // `created_at` is UTC text, so the local day is turned into a range here rather
 // than matched as a prefix — a prefix takes somebody else's day either side of
