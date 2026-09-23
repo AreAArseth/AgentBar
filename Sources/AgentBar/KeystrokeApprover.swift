@@ -24,28 +24,33 @@ enum KeystrokeApprover {
         _ = AXIsProcessTrustedWithOptions(opts)
     }
 
-    /// `focusFirst: false` when the caller has already brought the session's exact
-    /// tab forward (`TerminalFocus.focus`) — activating the app again would be
-    /// redundant, and the frontmost wait below still guards the keys either way.
-    static func approve(session: Session, keys: [CGKeyCode], focusFirst: Bool = true) {
+    /// `landedIn` is the app `TerminalFocus.focus` reported the session's own tab
+    /// in front of — the caller has already brought that exact tab forward, so
+    /// activating anything again would be redundant, and the frontmost wait below
+    /// still guards the keys either way. It is passed rather than re-derived from
+    /// TERM_PROGRAM because the two can differ: a session in a tmux pane reports
+    /// "tmux", and the app that has to be in front before a key is posted is the
+    /// terminal hosting the tmux client. Nil means nothing was aimed: bring the app
+    /// TERM_PROGRAM names forward and wait for that.
+    static func approve(session: Session, keys: [CGKeyCode], landedIn: String? = nil) {
         let target: String
-        if session.entrypoint == "antigravity-app" {
+        if let landedIn {
+            target = landedIn
+        } else if session.entrypoint == "antigravity-app" {
             // Desktop Antigravity sessions live in the app, not a terminal.
             target = "Antigravity"
-            if focusFirst {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                p.arguments = ["-a", target]
-                do {
-                    try p.run()
-                } catch {
-                    NSLog("AgentBar: could not launch \(target) for approval: \(error.localizedDescription)")
-                    return
-                }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            p.arguments = ["-a", target]
+            do {
+                try p.run()
+            } catch {
+                NSLog("AgentBar: could not launch \(target) for approval: \(error.localizedDescription)")
+                return
             }
         } else {
-            target = AgentActions.terminalAppName(for: session.termProgram)
-            if focusFirst { AgentActions.focusTerminal(named: session.termProgram) }
+            target = TerminalApp.appName(forTermProgram: session.termProgram)
+            AgentActions.focusTerminal(named: session.termProgram)
         }
         waitForFront(target, deadline: Date().addingTimeInterval(activationDeadline)) {
             send(keys, to: target)

@@ -29,22 +29,11 @@ enum AgentActions {
         }
     }
 
-    /// TERM_PROGRAM values map to app names almost verbatim; unknown values are used
-    /// as-is (Ghostty, WezTerm, kitty, …). `KeystrokeApprover` needs the same answer to
-    /// verify what came forward before it types, so the mapping lives here only.
-    static func terminalAppName(for termProgram: String) -> String {
-        switch termProgram {
-        case "Apple_Terminal", "": return "Terminal"
-        case "iTerm.app":          return "iTerm"
-        case "vscode":             return "Visual Studio Code"
-        case "WarpTerminal":       return "Warp"
-        default:                   return termProgram
-        }
-    }
-
-    /// Bring a terminal app to the front.
+    /// Bring a terminal app to the front by the name its TERM_PROGRAM gives —
+    /// the floor under every row click. The mapping itself is
+    /// `TerminalApp.appName(forTermProgram:)`, shared with `KeystrokeApprover`.
     static func focusTerminal(named termProgram: String) {
-        openApp(named: terminalAppName(for: termProgram))
+        openApp(named: TerminalApp.appName(forTermProgram: termProgram))
     }
 
     /// Any state file in `~/.agentbar/state.d` can name a `url`, and the protocol
@@ -119,15 +108,15 @@ enum AgentActions {
             // Only after the tab select actually reports a hit: the app comes
             // forward in ~50ms while the AppleScript round-trip takes hundreds,
             // so posting the key straight away landed it in the wrong tab.
-            TerminalFocus.focus(session: a.session) { targeted in
-                guard targeted else {
+            TerminalFocus.focus(session: a.session) { landedIn in
+                guard let landedIn else {
                     // The tty didn't match any tab (session moved, tab closed):
                     // the user is already looking at the terminal — let them
                     // answer the dialog themselves rather than type into it.
                     reportFailedAnswer(AnswerWriter.write(behavior: "defer", for: a.request))
                     return
                 }
-                KeystrokeApprover.approve(session: a.session, keys: [19]) // "2"
+                KeystrokeApprover.approve(session: a.session, keys: [19], landedIn: landedIn) // "2"
             }
             return ack(true)
         }
@@ -237,15 +226,15 @@ enum AgentActions {
                 KeystrokeApprover.approve(session: session, keys: keys)
                 return
             }
-            TerminalFocus.focus(session: session) { targeted in
-                guard targeted else {
+            TerminalFocus.focus(session: session) { landedIn in
+                guard let landedIn else {
                     // The tty matched no tab — the session moved or its tab is
                     // gone. The terminal is already in front; let the user answer
                     // the prompt rather than type into a stranger's tab.
                     NSLog("AgentBar: session tab not found; approval keystroke not sent")
                     return
                 }
-                KeystrokeApprover.approve(session: session, keys: keys, focusFirst: false)
+                KeystrokeApprover.approve(session: session, keys: keys, landedIn: landedIn)
             }
         case "grant":
             KeystrokeApprover.requestAccess()
