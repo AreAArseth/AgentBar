@@ -122,6 +122,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
+    /// The window on one page — what `agentbar://settings/<page>` opens. `nil`
+    /// leaves it on whichever page it was last on, as `show()` does. Showing a page
+    /// changes nothing on it; every switch there still waits for a click.
+    func show(page: Page?) {
+        show()
+        if let page { select(page) }
+    }
+
     /// The menu quick-toggle flips the same defaults this window shows; a visible
     /// stale checkbox would look like the click didn't land.
     func refreshIfVisible() {

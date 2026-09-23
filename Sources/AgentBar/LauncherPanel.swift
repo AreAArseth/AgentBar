@@ -31,6 +31,10 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
     private var agents: [Agent] = []
     private var chosenProject = 0
     private var chosenAgent = 0
+    /// True while what is in the panel came from an `agentbar://new-task` link
+    /// rather than from the person. The hint says so for as long as the panel is
+    /// open: choosing another project does not make the prompt theirs.
+    private var fromLink = false
 
     // MARK: - Showing
 
@@ -38,7 +42,19 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         if panel?.isVisible == true { close() } else { show() }
     }
 
-    func show() {
+    func show() { show(prefill: nil) }
+
+    /// The launcher, already filled in — what `agentbar://new-task` opens.
+    ///
+    /// Filled in and nothing more: the panel still waits for Return, exactly as if
+    /// the person had typed it all, because the link that filled it may have come
+    /// from any web page (see `URLCommands`). The parser has already refused a
+    /// `cwd` that is not an absolute, existing directory; here a directory that is
+    /// not among the recent projects joins them at the front, so what will run is
+    /// on screen and selected rather than implied. An agent id this machine cannot
+    /// start is dropped and the usual first agent stays chosen — a link naming
+    /// something that is not installed is not a reason to show nothing.
+    func show(prefill: URLCommands.Prefill?) {
         projects = Launcher.recentProjects(sessions: Self.sessions(),
                                            history: HistoryStore.cached())
         agents = Launcher.launchableAgents()
@@ -50,9 +66,21 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         }
         chosenProject = 0
         chosenAgent = 0
+        if let cwd = prefill?.cwd {
+            if let i = projects.firstIndex(where: { $0.cwd == cwd }) {
+                chosenProject = i
+            } else {
+                projects.insert(((cwd as NSString).lastPathComponent, cwd), at: 0)
+                if projects.count > 6 { projects.removeLast() }
+            }
+        }
+        if let id = prefill?.agent, let i = agents.firstIndex(where: { $0.id == id }) {
+            chosenAgent = i
+        }
+        fromLink = prefill != nil
         if panel == nil { build() }
         rebuildRows()
-        field.stringValue = ""
+        field.stringValue = prefill?.prompt ?? ""
         syncHint()
         centreOnActiveScreen()
         NSApp.activate(ignoringOtherApps: true)
@@ -189,6 +217,9 @@ final class LauncherPanel: NSObject, NSWindowDelegate {
         if !agent.takesPrompt {
             text += " — it takes no prompt on the command line, so type it there"
         }
+        // Said before anything else, because it is the thing to check first: a
+        // prompt the person did not type is one they have to read.
+        if fromLink { text = "From a link — read it before ⏎ · " + text }
         hint.stringValue = text + " · esc closes"
     }
 

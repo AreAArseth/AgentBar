@@ -24,9 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AgentActions.currentSessions = { [weak self] in self?.sessions ?? [] }
 
+        URLCommands.sessions = { [weak self] in self?.sessions ?? [] }
         store.onChange = { [weak self] sessions in
             guard let self else { return }
             self.sessions = sessions
+            // A link that launched the app waited for this: before the first poll
+            // there is no session for `agentbar://focus` to find.
+            defer { URLCommands.storesReady() }
             self.mascot.update(sessions: sessions, systemColor: IconColor.system)
             SoundCenter.shared.observe(sessions)
             // Takes the git baseline a session's record is later measured against.
@@ -127,6 +131,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if UserDefaults.standard.bool(forKey: "launcherOnLaunchDebug") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { LauncherPanel.shared.show() }
         }
+    }
+
+    /// `agentbar://` links, from Shortcuts, Raycast, a script — or any web page,
+    /// which is why everything a link can do is decided in `URLCommands` and none
+    /// of it answers, writes or runs anything. AppKit routes the `kAEGetURL` event
+    /// here once `CFBundleURLTypes` declares the scheme (see `Scripts/build.sh`),
+    /// including the one that launched the app.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        URLCommands.handle(urls)
     }
 
     private func applyPresentation() {

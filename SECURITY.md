@@ -73,6 +73,15 @@ guarantees worth knowing when auditing:
   counted by nothing as one); one invalid rule voids the whole file and Diagnostics reports it, because a
   rule that quietly stopped applying looks identical to AgentBar behaving normally.
   See `Sources/AgentBar/RuleEngine.swift`.
+- **The `agentbar://` URL scheme shows things and decides nothing.** Any web page
+  can open such a link, so there is no command that approves, denies, answers, writes
+  a rule, changes a setting or runs anything — only `focus`, `new-task`, `settings`
+  and `welcome`. `new-task` opens the launcher filled in and still waits for Return,
+  with the hint line saying the contents came from a link. Anything the parser does
+  not recognise exactly is dropped without a sound or a dialog; `cwd` must be an
+  absolute, existing, plainly spelled directory and a prompt is capped at 2,000
+  characters, with control and invisible formatting characters taken out. See
+  `Sources/AgentBar/URLCommands.swift` and `docs/url-scheme.md`.
 - **Every failure degrades to the agent's own prompt, never to an approval.** This
   is the one guarantee the rest of the product is built on, so it is written out
   below as a numbered contract rather than a sentence, and each clause is a test

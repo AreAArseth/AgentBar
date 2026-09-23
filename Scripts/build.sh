@@ -71,6 +71,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSDocumentsFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
   <key>NSDesktopFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>AgentBar reads the git branch and changes of the projects your agents work in, to show them next to each session. Nothing leaves this Mac.</string>
+  <!-- agentbar:// for Shortcuts, Raycast and scripts (docs/url-scheme.md). Any web
+       page can open one of these too, so every command shows something and none
+       answers, writes or runs anything — see Sources/AgentBar/URLCommands.swift. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>${BUNDLE_ID}</string>
+      <key>CFBundleURLSchemes</key><array><string>agentbar</string></array>
+    </dict>
+  </array>
   <key>NSHumanReadableCopyright</key><string>© 2026 Michal Strnadel. MIT licensed.</string>
 </dict>
 </plist>
