@@ -19,7 +19,7 @@ for arg in "$@"; do
 done
 
 APP="build/AgentBar.app"
-VERSION="1.28.1"
+VERSION="1.29.0"
 BUNDLE_ID="com.michalstrnadel.agentbar"
 
 rm -rf "$APP"

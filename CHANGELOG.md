@@ -3,6 +3,45 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.29.0 - 2026-09-23
+
+### Added
+
+- **"Compacting…" while Claude summarises its context.** Compaction used to look
+  like more thinking, or like nothing at all after a manual `/compact`. The row now
+  says *Compacting…*, the bar and the island pill hold that one word instead of
+  rotating verbs, and when it ends the row goes back to what it said before: a
+  `/compact` after a finished turn lands on *done* again, recap and all. No new
+  state and no protocol change — it is a label on a working row, the same channel
+  approvals and questions already use for their detail. Takes effect in sessions
+  started after the update.
+- **The download can answer for itself.** CI has attested its build since 1.27.0,
+  but the release is that build signed again here, so `gh attestation verify` on a
+  downloaded zip found nothing. Now, when a release is published, a workflow checks
+  the asset against the CI build of the tagged commit — every file outside the
+  signature byte-identical, each architecture's code the same — and only then
+  attests the asset itself. 1.28.1 has been attested the same way. The signing
+  certificate still never leaves this machine. See *Verifying a download* in
+  `SECURITY.md`.
+
+### Changed
+
+- **Session rows in the menu are drawn, not typeset.** The time and the agent now
+  sit in aligned columns on the right instead of wherever a name happened to end, a
+  long recap is what gives way before the project name does, and the row draws its
+  own highlight. An open menu still refreshes in place and never shrinks.
+- **A first run that says what is going on.** An empty list on a fresh install reads
+  *Waiting for your first session* and says why sessions already open are missing:
+  they began before the hooks. The welcome window and the installer's last lines say
+  the same. An ordinary quiet moment still reads *No active sessions*.
+- **The folder-access prompt explains itself.** When your projects live in
+  Documents, Desktop or Downloads, macOS asks once whether AgentBar may read them; the
+  dialog now says why (the git branch and changes on each row) and that nothing
+  leaves the Mac.
+- **The Gatekeeper warning, as macOS 15 shows it.** The README's troubleshooting now
+  walks through *Open Anyway* in Privacy & Security instead of the right-click that
+  no longer bypasses it, and no longer calls the app ad-hoc signed.
+
 ## 1.28.1 - 2026-09-23
 
 ### Changed
