@@ -20,6 +20,8 @@ the authoritative map of what AgentBar consumes and why. Sources:
 | `PermissionRequest` (`tool_name == "AskUserQuestion"`) | `question` | **blue dot, "❓ \<question\>"** + inline options — answerable from the menu and island | The terminal wizard renders alongside the hook's wait, so blocking costs the terminal nothing; a remote answer returns deny-with-message, which the model reads as the user's answer and the wizard is dismissed (verified on 2.1.234, both race directions). Options that don't decode fall back to mark-state-and-exit. |
 | `PermissionRequest` (`tool_name == "ExitPlanMode"`) | `permission` | **amber dot, "Plan ready for review"** + the plan as Markdown, **Keep planning** / **Approve plan** | The plan dialog renders alongside the hook's wait. `deny` returns a deny-with-message the model reads as "refine it" — a bare denial ends the turn instead. `allow` is **ignored** by Claude Code (approving a plan also picks the next permission mode, which a hook decision can't carry), so the hook swallows it and the frontend answers the dialog itself. Verified on 2.1.234. |
 | `Stop` | `done` | dimmed dot | turn finished, waiting for the next prompt |
+| `PreCompact` (`manual` or `auto`) | `thinking` | brand dot, **"Compacting…"**; the bar and the island pill hold the word "Compacting" instead of rotating verbs | Not a state of its own: a label on `thinking` (docs/protocol.md unchanged). `update.js compact` keeps what the row said in `resume`. |
+| `SessionStart` (`source: "compact"`) | what it was before `PreCompact` | as before | Ends the compaction: `lifecycle.js` restores `state`, `label` and `recap` from `resume` and drops it, so a manual `/compact` after a finished turn lands on `done` again. `PostCompact` is deliberately not registered — this start follows every compaction, and an event name an older Claude Code does not know is a settings file it may refuse. |
 | `SessionEnd` | (row removed) | — | `lifecycle.js end` deletes the state file |
 
 ## Events deliberately not consumed
@@ -28,7 +30,7 @@ the authoritative map of what AgentBar consumes and why. Sources:
 |---|---|
 | `Notification` (`permission_prompt`, `idle_prompt`, …) | Removed in 1.2.1: notifications can arrive *late* (after the upstream dialog-flash race, claude-code #12176) and overwrite newer state — sessions got stuck on "needs approval". `permission.js` is the sole owner of the permission signal. |
 | `SubagentStart` / `SubagentStop` | Subagent activity is already reflected through the parent session's tool events. |
-| `PreCompact` / `PostCompact` | Compaction is brief and self-resolving; a dedicated state would flicker. Candidate for a future "compacting…" label. |
+| `PostCompact` | The `SessionStart` with `source: "compact"` that follows every compaction already ends it (see above). |
 | `PostToolUseFailure`, `ConfigChange`, `FileChanged`, … | No user-facing signal AgentBar needs — a failed tool call is followed by more of the same turn. (Qwen Code, which reuses these scripts, *does* register `PostToolUseFailure` — mapped to the same "thinking" as a successful `PostToolUse`, so an errored tool keeps animating the turn — and its `StopFailure`, where the turn itself ended badly: the `error` state.) |
 
 ## Known upstream quirks the design accounts for

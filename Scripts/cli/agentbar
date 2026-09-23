@@ -1459,6 +1459,7 @@ function installHooks() {
     ["PostToolUse", `"${node}" "${dir}/update.js" post`, true, null],
     ["PermissionRequest", `"${node}" "${dir}/permission.js"`, true, 630],
     ["Stop", `"${node}" "${dir}/update.js" stop`, false, null],
+    ["PreCompact", `"${node}" "${dir}/update.js" compact`, false, null],
   ];
   for (const cfgDir of claudeDirs) {
     const file = path.join(cfgDir, "settings.json");

@@ -32,6 +32,12 @@ struct Session {
     let activity: [String]   // the turn's recent tool steps, oldest → newest ([] ok)
     let url: String          // where the session lives when it isn't local ("" ok)
 
+    /// The label Claude Code's PreCompact hook writes while the session summarises
+    /// its context (`Scripts/hooks/claude/update.js`). Not a state of its own: the
+    /// row stays `thinking`, and the label carries the detail.
+    static let compactingLabel = "Compacting…"
+    var isCompacting: Bool { state.isWorking && label == Self.compactingLabel }
+
     /// Sort/priority weight: what the menu bar should surface first.
     var priority: Int {
         switch state {

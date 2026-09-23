@@ -139,13 +139,26 @@ function run() {
     const continues = source === "resume" || source === "compact" || opensWorking;
     // Whatever the row already says beats a seed that arrived late.
     const keepsWork = source === "compact" || opensWorking;
+    // A compaction that update.js saw start (PreCompact) left what the row said
+    // before it in `resume`; this start is its end, so that is what the row says
+    // again. Anything else that clears the row (a prompt, a tool) drops the record
+    // on its own, since update.js writes a fresh object.
+    const resume = source === "compact" && prev.resume && typeof prev.resume === "object"
+      ? prev.resume : null;
+    const { resume: _dropped, ...kept } = prev;
+    const back = resume
+      ? { state: typeof resume.state === "string" ? resume.state : "idle",
+          label: typeof resume.label === "string" ? resume.label : "",
+          ...(typeof resume.recap === "string" ? { recap: resume.recap } : {}) }
+      : null;
     try {
       const ts = Math.floor(Date.now() / 1000);
       writeAtomic(statePath, {
-        ...prev,
+        ...kept,
+        ...(back && back.recap ? { recap: back.recap } : {}),
         agent: AGENT,
-        state: keepsWork ? (prev.state || "idle") : "idle",
-        label: keepsWork ? (prev.label || "") : "",
+        state: back ? back.state : keepsWork ? (prev.state || "idle") : "idle",
+        label: back ? back.label : keepsWork ? (prev.label || "") : "",
         project: cwd ? path.basename(cwd) : (prev.project || ""),
         cwd: cwd || prev.cwd || "",
         sessionId: id ? rowId(id) : (prev.sessionId || ""),

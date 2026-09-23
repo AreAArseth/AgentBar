@@ -83,8 +83,11 @@ final class MascotDriver {
             stopHop()
             startAnimation(frames: frames, fps: sprite.fps)
             // Rotating verbs are Clawd's voice; other agents' dot clusters carry
-            // the "working" signal on their own.
-            if agent.id == "claude" { startWords() } else { stopWords() }
+            // the "working" signal on their own. A fixed word (compacting) is not
+            // a mood but a fact, so it holds still and shows for any agent.
+            if let fixed = Self.fixedWord(for: topSession) {
+                stopWords(); word = fixed
+            } else if agent.id == "claude" { startWords() } else { stopWords() }
         case .permission:
             stopHop(); stopAnimation(); stopWords()
             image = IconRenderer.withPermissionDot(resting)
@@ -166,6 +169,13 @@ final class MascotDriver {
     private func stopAnimation() {
         animationTimer?.invalidate()
         animationTimer = nil
+    }
+
+    /// A word that says what the session is actually doing, in place of the
+    /// rotating verbs. Nil means "rotate as usual".
+    static func fixedWord(for session: Session?) -> String? {
+        guard let session, session.isCompacting else { return nil }
+        return "Compacting"
     }
 
     private func startWords() {

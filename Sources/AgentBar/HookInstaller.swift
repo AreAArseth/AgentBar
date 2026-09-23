@@ -218,6 +218,11 @@ enum HookInstaller {
             // newer state and strand sessions on "needs approval".)
             ("PermissionRequest","\"\(node)\" \"\(dir)/permission.js\"", true, 630),
             ("Stop",             "\"\(node)\" \"\(dir)/update.js\" stop", false, nil),
+            // "Compacting…" while the session summarises its context. There is no
+            // PostCompact here on purpose: the SessionStart (source "compact") that
+            // follows every compaction already ends it, and an event name an older
+            // Claude Code does not know is a settings file it may refuse.
+            ("PreCompact",       "\"\(node)\" \"\(dir)/update.js\" compact", false, nil),
         ]
 
         // Drop earlier AgentBar entries from EVERY event (path match), so events we

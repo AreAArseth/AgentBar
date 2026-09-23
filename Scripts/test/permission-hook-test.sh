@@ -414,6 +414,38 @@ check "resume: started_at preserved"  'grep -q "\"started_at\":4444" "$LC_STATE"
 printf '{"session_id":"mgsess","cwd":"/tmp/proj","source":"clear"}' | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
 check "clear: hidden until activity"  'grep -q "\"started\":false" "$LC_STATE"'
 
+# 16c. PreCompact says "Compacting…", and the SessionStart that ends the
+# compaction puts back what the row said before it. A manual /compact after a
+# finished turn must land on done again — with its recap — not stay "Compacting…"
+# until the next prompt.
+fresh_home
+LC_STATE="$HOME/.agentbar/state.d/cpsess.json"
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","prompt":"ship it"}' | "$NODE" Scripts/hooks/claude/update.js prompt
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","last_assistant_message":"Shipped the fix."}' | "$NODE" Scripts/hooks/claude/update.js stop
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","trigger":"manual"}' | "$NODE" Scripts/hooks/claude/update.js compact
+check "compact: says Compacting…"       'grep -q "\"label\":\"Compacting…\"" "$LC_STATE"'
+check "compact: is working"             'grep -q "\"state\":\"thinking\"" "$LC_STATE"'
+check "compact: remembers done"         'grep -q "\"resume\":{\"state\":\"done\"" "$LC_STATE"'
+check "compact: task survives"          'grep -q "\"prompt\":\"ship it\"" "$LC_STATE"'
+# A second PreCompact before the end must not remember "Compacting…".
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","trigger":"auto"}' | "$NODE" Scripts/hooks/claude/update.js compact
+check "compact twice: still remembers done" 'grep -q "\"resume\":{\"state\":\"done\"" "$LC_STATE"'
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","source":"compact"}' | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "compacted: back to done"         'grep -q "\"state\":\"done\"" "$LC_STATE"'
+check "compacted: label cleared"        'grep -q "\"label\":\"\"" "$LC_STATE"'
+check "compacted: recap back"           'grep -q "\"recap\":\"Shipped the fix.\"" "$LC_STATE"'
+check "compacted: record dropped"       '! grep -q "\"resume\"" "$LC_STATE"'
+check "compacted: still visible"        'grep -q "\"started\":true" "$LC_STATE"'
+# Mid-turn (auto-compact while a tool runs): back to what it was doing.
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","prompt":"next"}' | "$NODE" Scripts/hooks/claude/update.js prompt
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","trigger":"auto"}' | "$NODE" Scripts/hooks/claude/update.js compact
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","source":"compact"}' | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "auto-compact: back to thinking"  'grep -q "\"state\":\"thinking\"" "$LC_STATE" && grep -q "\"label\":\"Thinking…\"" "$LC_STATE"'
+# Any real event after a compaction replaces the record with a fresh row.
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","trigger":"auto"}' | "$NODE" Scripts/hooks/claude/update.js compact
+printf '{"session_id":"cpsess","cwd":"/tmp/proj","tool_name":"Bash"}' | "$NODE" Scripts/hooks/claude/update.js post
+check "event after compact: record gone" '! grep -q "\"resume\"" "$LC_STATE" && grep -q "\"label\":\"Thinking…\"" "$LC_STATE"'
+
 # 17. the permission hook's own state write must carry the optional task fields
 # through — its {...prev} merge is exactly what the protocol relies on
 fresh_home

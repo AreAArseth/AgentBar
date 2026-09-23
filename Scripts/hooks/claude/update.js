@@ -15,6 +15,10 @@ const AGENT = String(process.env.AGENTBAR_AGENT || "claude").replace(/[^a-z]/g, 
 const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
 const event = process.argv[2] || "";
 
+// Written by the compact event, read by lifecycle.js and by the frontends
+// (Session.compactingLabel) — the three must agree on the exact string.
+const COMPACTING = "Compacting…";
+
 const TOOL_LABELS = {
   Bash: "Running command", Edit: "Editing", Write: "Writing", MultiEdit: "Editing",
   NotebookEdit: "Editing", Read: "Reading", Grep: "Searching", Glob: "Searching",
@@ -163,6 +167,13 @@ function run() {
     case "pre":    state = "tool"; label = TOOL_LABELS[p.tool_name] || "Using tool"; break;
     case "post":   state = "thinking"; label = "Thinking…"; break;
     case "stop":    state = "done"; label = ""; break;
+    // PreCompact: the session is busy summarising its own context. It is not a
+    // state of its own (docs/protocol.md stays as it is) — a label on "thinking",
+    // the channel permission and question already use for their detail. What it
+    // was doing before is kept in `resume`, so the SessionStart that ends the
+    // compaction can put it back: a manual /compact between turns must return to
+    // "done", not leave the row saying "Compacting…" until the next prompt.
+    case "compact": state = "thinking"; label = COMPACTING; break;
     // Agents that report a failed turn separately (Qwen's StopFailure, Copilot's
     // ErrorOccurred). The turn is over, but it is not a success — a green tick
     // and a celebration cue over an error would be a lie.
@@ -224,6 +235,15 @@ function run() {
   // event omits the field (out is built fresh, not {...prev}), so the next prompt
   // naturally clears the previous turn's recap and a working session never shows
   // a stale result.
+  // The state to return to once compaction ends. A second PreCompact before that
+  // end keeps the first one's record, or it would remember "Compacting…".
+  if (event === "compact") {
+    const r = prev.resume && typeof prev.resume === "object" && prev.label === COMPACTING
+      ? prev.resume
+      : { state: prev.state || "idle", label: prev.label || "",
+          ...(typeof prev.recap === "string" ? { recap: prev.recap } : {}) };
+    out.resume = r;
+  }
   if (event === "stop") {
     const recap = (typeof p.last_assistant_message === "string"
                    ? cleanRecapText(p.last_assistant_message) : "")
