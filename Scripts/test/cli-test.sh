@@ -593,6 +593,23 @@ if python3 -c 'import tomllib' 2>/dev/null; then
   check "trusted config parses as TOML" 'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert len(d[\"hooks\"][\"state\"])==7; assert len(d[\"hooks\"][\"Stop\"])==1" "$CODEX_CFG"'
 fi
 
+# Every spelling TOML reads as notify, or as something under it, is the user's: a
+# second one beside it is a duplicate key and Codex refuses the file.
+for shape in '"\u006eotify" = ["/usr/bin/say"]' 'notify.command = "/usr/bin/say"' '[notify]'; do
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  printf 'model = "o3"\n%s\n\n[profiles.mine]\nmodel = "o4"\n' "$shape" > "$HOME/.codex/config.toml"
+  "$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+  check "codex stands down for $shape" 'grep -q "already has a notify hook" "$TESTROOT/codex-out" && ! grep -q "/.agentbar/hooks/codex/notify.js" "$HOME/.codex/config.toml"'
+done
+# A file that ends inside an unterminated value is left exactly as it was.
+fresh_home
+mkdir -p "$HOME/.codex"
+printf 'model = "o3"\ninstructions = """\nnever closed\n' > "$HOME/.codex/config.toml"
+CODEX_OPEN="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "an unterminated value is untouched" '[ "$CODEX_OPEN" = "$(cat "$HOME/.codex/config.toml")" ] && grep -q "unterminated value" "$TESTROOT/codex-out"'
+
 # --- the record, as something you can hand to somebody ---------------------------
 fresh_home
 printf '%s\n%s\n' \

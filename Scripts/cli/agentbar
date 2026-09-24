@@ -1432,7 +1432,7 @@ function doctor(json) {
 // `notify =` and be neither a header nor a key. Not a parser, and validates nothing.
 function tomlOutline(t) {
   const n = t.length;
-  let mode = "code", depth = 0, lineStart = 0, atLineStart = true, headerSeen = false, dirty = false;
+  let mode = "code", depth = 0, lineStart = 0, atLineStart = true, headerSeen = false, dirty = false, broken = false;
   const statements = [];
   let topLevelEnd = null, firstHeader = null;
   const triple = (i, q) => t[i] === q && t[i + 1] === q && t[i + 2] === q;
@@ -1444,6 +1444,7 @@ function tomlOutline(t) {
     if (c === "\n") {
       if (!headerSeen && dirty) topLevelEnd = i + 1;
       dirty = false;
+      if (mode === "basic" || mode === "literal") broken = true;
       if (mode === "comment" || mode === "header" || mode === "basic" || mode === "literal") mode = "code";
       i++;
       lineStart = i;
@@ -1494,12 +1495,84 @@ function tomlOutline(t) {
       if (c === '"') mode = "basic";
       else if (c === "'") mode = "literal";
       else if (c === "[" || c === "{") depth++;
-      else if (c === "]" || c === "}") depth = Math.max(0, depth - 1);
+      else if (c === "]" || c === "}") {
+        if (depth === 0) broken = true;
+        depth = Math.max(0, depth - 1);
+      }
       i++;
     }
   }
   if (!headerSeen && dirty) topLevelEnd = n;
-  return { statements, topLevelEnd, firstHeader };
+  // Back at the top level: no string, array or inline table left open. When not, the
+  // rest describes a file TOML would not read either, and nothing may be written.
+  const complete = !broken && depth === 0 && (mode === "code" || mode === "comment" || mode === "header");
+  return { statements, topLevelEnd, firstHeader, complete };
+}
+
+// One escape in a basic string, the backslash at t[i]: TOML 1.0's set plus 1.1's
+// \e and \xHH. Returns [decoded, next index], or null when unreadable.
+function tomlEscape(t, i) {
+  const simple = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", e: "\x1b", '"': '"', "\\": "\\" };
+  const c = t[i + 1];
+  if (c in simple) return [simple[c], i + 2];
+  const len = { x: 2, u: 4, U: 8 }[c];
+  if (!len) return null;
+  const hex = t.slice(i + 2, i + 2 + len);
+  if (!new RegExp(`^[0-9A-Fa-f]{${len}}$`).test(hex)) return null;
+  const cp = parseInt(hex, 16);
+  if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return null;
+  return [String.fromCodePoint(cp), i + 2 + len];
+}
+
+// The dotted key a statement assigns, or the one its header names, each part decoded
+// (`"\u006eotify"` is `notify`). Null when it cannot be read; mirrors TOMLOutline.keyPath.
+function tomlKeyPath(t, s) {
+  let i = s.start;
+  let end = "=";
+  if (s.header) { i++; if (t[i] === "[") i++; end = "]"; }
+  const skip = () => { while (t[i] === " " || t[i] === "\t") i++; };
+  const parts = [];
+  for (;;) {
+    skip();
+    let part = "";
+    if (t[i] === '"') {
+      i++;
+      while (t[i] !== '"') {
+        if (i >= t.length || t[i] === "\n" || t[i] === "\r") return null;
+        if (t[i] === "\\") {
+          const e = tomlEscape(t, i);
+          if (!e) return null;
+          part += e[0]; i = e[1];
+        } else part += t[i++];
+      }
+      i++;
+    } else if (t[i] === "'") {
+      i++;
+      while (t[i] !== "'") {
+        if (i >= t.length || t[i] === "\n" || t[i] === "\r") return null;
+        part += t[i++];
+      }
+      i++;
+    } else {
+      while (i < t.length && /[A-Za-z0-9_-]/.test(t[i])) part += t[i++];
+      if (!part) return null;
+    }
+    parts.push(part);
+    skip();
+    if (t[i] === ".") { i++; continue; }
+    return t[i] === end ? parts : null;
+  }
+}
+
+// Whether a top-level `key = …` would collide with something already there: the key
+// itself, a dotted key or header under it (`key.x = 1`, `[key]`), or a key that
+// cannot be read at all. Mirrors TOMLOutline.claims.
+function tomlClaims(t, outline, key) {
+  return outline.statements.some((s) => {
+    if (!s.header && !s.top) return false;
+    const p = tomlKeyPath(t, s);
+    return p === null || p[0] === key;
+  });
 }
 
 const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
@@ -1553,6 +1626,9 @@ function codexUntrustedEvents(toml, cfgPath) {
 // Returns { kind: "unchanged" | "foreign" | "write", text, repaired }.
 function codexNotifyPlan(toml, ours, isAlive) {
   const outline = tomlOutline(toml);
+  // A file that ends inside an unterminated value is one TOML will not read either,
+  // and every position below would be a guess into that value.
+  if (!outline.complete) return { kind: "unchanged" };
   const ourLine = /[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/y;
   const mine = [];
   for (const s of outline.statements) {
@@ -1592,14 +1668,11 @@ function codexNotifyPlan(toml, ours, isAlive) {
   // Our marker somewhere the line regex could not read (hand-edited formatting,
   // a comment): leave it alone rather than appending a second notify key.
   if (codexWithoutBlock(toml).includes("/.agentbar/hooks/codex/")) return { kind: "unchanged" };
-  // Codex takes one top-level `notify`, on whatever line the user put it.
-  const key = /(?:notify|"notify"|'notify')[ \t]*=/y;
-  const foreign = outline.statements.some((s) => {
-    if (!s.top || s.header) return false;
-    key.lastIndex = s.start;
-    return key.test(toml);
-  });
-  if (foreign) return { kind: "foreign" };
+  // Codex takes one top-level `notify`, on whatever line the user put it. So does
+  // anything else that already defines it (`notify.x`, `[notify]`), and a key that
+  // cannot be read at all: ours beside either is a duplicate key, and Codex refuses
+  // the whole file for one.
+  if (tomlClaims(toml, outline, "notify")) return { kind: "foreign" };
 
   // Never at the end of the file: after a table header, a bare key is that table's.
   // It goes after the last top-level statement, or above the first header.
@@ -1768,7 +1841,8 @@ function installHooks() {
 
     const b = toml.indexOf(CODEX_BEGIN);
     const e = b < 0 ? -1 : toml.indexOf(CODEX_END, b);
-    if (b >= 0 && e >= 0) {
+    if (!tomlOutline(toml).complete) console.error(`skip: ${file} ends inside an unterminated value — left untouched`);
+    else if (b >= 0 && e >= 0) {
       const current = toml.slice(b, e + CODEX_END.length);
       if (current === block) report("codex hooks   " + file, false);
       else {

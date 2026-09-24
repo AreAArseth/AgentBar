@@ -266,6 +266,10 @@ enum HookInstaller {
         // Two independent keys in one file, applied in order. `notify` is the older
         // integration and stays: it is the only thing that reports a Codex session
         // until the human accepts the hooks in Codex's own trust prompt.
+        guard TOMLOutline(config).isComplete else {
+            NSLog("AgentBar: ~/.codex/config.toml ends inside an unterminated value, not touching it")
+            return
+        }
         var text = config
         switch codexPlan(config: text, node: node, script: script) {
         case .foreignNotify:
@@ -337,6 +341,7 @@ enum HookInstaller {
     /// Replace our block where it already is, or append it at the end. Pure, so the
     /// "unknown keys survive byte for byte" promise is a test rather than a hope.
     static func codexHooksPlan(config: String, node: String, dir: String) -> CodexPlan {
+        guard TOMLOutline(config).isComplete else { return .unchanged }
         let block = codexHooksBlock(node: node, dir: dir)
         if let begin = config.range(of: codexBegin),
            let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex) {
@@ -399,6 +404,9 @@ enum HookInstaller {
         let ours = "notify = [\"\(node)\", \"\(script)\"]"
         let ourLine = #"[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
         let outline = TOMLOutline(config)
+        // A file that ends inside an unterminated value is one TOML will not read
+        // either, and every position below would be a guess into that value.
+        guard outline.isComplete else { return .unchanged }
         let mine = outline.statements.compactMap { s -> (top: Bool, line: Range<String.Index>)? in
             guard !s.isHeader,
                   let r = config.range(of: ourLine, options: [.regularExpression, .anchored],
@@ -443,7 +451,10 @@ enum HookInstaller {
         // be installed again.
         if withoutCodexBlock(config).contains("/.agentbar/hooks/codex/") { return .unchanged }
         // Codex takes one top-level `notify`, on whatever line the user put it.
-        if outline.topLevelKey("notify", in: config) != nil { return .foreignNotify }
+        // So does anything else that already defines `notify` (`notify.x`, `[notify]`),
+        // and a key that cannot be read at all: adding ours beside either would be a
+        // duplicate key, and Codex refuses the whole file for one.
+        if outline.claims("notify", in: config) { return .foreignNotify }
 
         // Never at the end of the file: after a table header, a bare key is that
         // table's. It goes after the last top-level statement, or above the first

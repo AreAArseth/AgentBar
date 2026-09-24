@@ -31,6 +31,11 @@ struct TOMLOutline {
     let topLevelEnd: String.Index?
     /// Start of the line holding the first table header; nil for a file without one.
     let firstHeader: String.Index?
+    /// The scan ended back at the top level: no string, array or inline table left
+    /// open, and no bracket closed that was never opened. When it is false the other
+    /// answers describe a file TOML would not read either, and nothing may be written
+    /// on the strength of them. A key inserted after an unterminated `"""` is text.
+    let isComplete: Bool
 
     init(_ text: String) {
         let b = Array(text.utf8)
@@ -49,6 +54,7 @@ struct TOMLOutline {
         var found: [(line: Int, start: Int, header: Bool, top: Bool)] = []
         var topEnd: Int?
         var header: Int?
+        var broken = false
 
         func triple(_ i: Int, _ q: UInt8) -> Bool {
             i + 2 < n && b[i] == q && b[i + 1] == q && b[i + 2] == q
@@ -62,6 +68,7 @@ struct TOMLOutline {
             if c == lf {
                 if !headerSeen && dirty { topEnd = i + 1 }
                 dirty = false
+                if mode == .basic || mode == .literal { broken = true }
                 if mode == .comment || mode == .header || mode == .basic || mode == .literal {
                     mode = .code
                 }
@@ -126,11 +133,16 @@ struct TOMLOutline {
                 if triple(i, sq) { mode = .multiLiteral; i += 3; continue }
                 if c == dq { mode = .basic } else if c == sq { mode = .literal }
                 else if c == lbr || c == lbc { depth += 1 }
-                else if c == rbr || c == rbc { depth = max(0, depth - 1) }
+                else if c == rbr || c == rbc {
+                    if depth == 0 { broken = true }
+                    depth = max(0, depth - 1)
+                }
                 i += 1
             }
         }
         if !headerSeen && dirty { topEnd = n }
+        isComplete = !broken && depth == 0
+            && (mode == .code || mode == .comment || mode == .header)
 
         let u = text.utf8
         func at(_ o: Int) -> String.Index { u.index(u.startIndex, offsetBy: o) }
@@ -141,13 +153,105 @@ struct TOMLOutline {
         firstHeader = header.map(at)
     }
 
-    /// The top-level statement assigning `key`, bare or quoted; dotted keys don't count.
+    /// The top-level statement assigning exactly `key`, however it is spelled: bare,
+    /// literal-quoted, or basic-quoted with escapes (`"\u006eotify"` is `notify`).
     func topLevelKey(_ key: String, in text: String) -> Statement? {
-        let pattern = "(\(key)|\"\(key)\"|'\(key)')[ \\t]*="
-        return statements.first {
-            $0.isTopLevel && !$0.isHeader
-                && text.range(of: pattern, options: [.regularExpression, .anchored],
-                              range: $0.start..<text.endIndex) != nil
+        statements.first { $0.isTopLevel && !$0.isHeader && keyPath(of: $0, in: text) == [key] }
+    }
+
+    /// Whether a top-level `key = …` would collide with something already in the file:
+    /// the key itself, a dotted key or a table header under it (`key.x = 1`, `[key]`),
+    /// which TOML counts as defining it too. A key this cannot read counts as a
+    /// collision, because the alternative is guessing and a wrong guess is a file
+    /// Codex refuses to load.
+    func claims(_ key: String, in text: String) -> Bool {
+        statements.contains { s in
+            guard s.isHeader || s.isTopLevel else { return false }
+            guard let path = keyPath(of: s, in: text) else { return true }
+            return path.first == key
+        }
+    }
+
+    /// The dotted key a statement assigns, or the one its header names, each part
+    /// decoded. Nil when it cannot be read.
+    func keyPath(of s: Statement, in text: String) -> [String]? {
+        var it = text[s.start...].unicodeScalars.makeIterator()
+        var c = it.next()
+        func skipBlanks() { while c == " " || c == "\t" { c = it.next() } }
+        let end: Unicode.Scalar
+        if s.isHeader {
+            c = it.next()
+            if c == "[" { c = it.next() }
+            end = "]"
+        } else {
+            end = "="
+        }
+
+        var parts: [String] = []
+        while true {
+            skipBlanks()
+            var part = ""
+            switch c {
+            case "\""?:
+                c = it.next()
+                while c != "\"" {
+                    guard let ch = c, ch != "\n", ch != "\r" else { return nil }
+                    if ch == "\\" {
+                        guard let decoded = Self.escape(&it) else { return nil }
+                        part.unicodeScalars.append(decoded)
+                    } else {
+                        part.unicodeScalars.append(ch)
+                    }
+                    c = it.next()
+                }
+                c = it.next()
+            case "'"?:
+                c = it.next()
+                while c != "'" {
+                    guard let ch = c, ch != "\n", ch != "\r" else { return nil }
+                    part.unicodeScalars.append(ch)
+                    c = it.next()
+                }
+                c = it.next()
+            default:
+                while let ch = c, ("a"..."z").contains(ch) || ("A"..."Z").contains(ch)
+                        || ("0"..."9").contains(ch) || ch == "_" || ch == "-" {
+                    part.unicodeScalars.append(ch)
+                    c = it.next()
+                }
+                if part.isEmpty { return nil }
+            }
+            parts.append(part)
+            skipBlanks()
+            if c == "." { c = it.next(); continue }
+            return c == end ? parts : nil
+        }
+    }
+
+    /// One escape in a basic string, the backslash already read. TOML 1.0's set, plus
+    /// 1.1's `\e` and `\xHH`; anything else is unreadable.
+    private static func escape(_ it: inout String.UnicodeScalarView.SubSequence.Iterator) -> Unicode.Scalar? {
+        func hex(_ n: Int) -> Unicode.Scalar? {
+            var v: UInt32 = 0
+            for _ in 0..<n {
+                guard let d = it.next(), let x = UInt32(String(d), radix: 16) else { return nil }
+                v = v * 16 + x
+            }
+            return Unicode.Scalar(v)
+        }
+        switch it.next() {
+        case "b"?: return "\u{08}"
+        case "t"?: return "\t"
+        case "n"?: return "\n"
+        case "f"?: return "\u{0C}"
+        case "r"?: return "\r"
+        case "e"?: return "\u{1B}"
+        case "\""?: return "\""
+        case "\\"?: return "\\"
+        case "x"?: return hex(2)
+        case "u"?: return hex(4)
+        case "U"?: return hex(8)
+        default: return nil
         }
     }
 }

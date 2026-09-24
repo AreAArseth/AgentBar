@@ -306,6 +306,33 @@ import Testing
                                         script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
     }
 
+    /// TOML reads all of these as `notify` or as something under it; adding ours
+    /// beside any of them is a duplicate key and Codex refuses the file.
+    @Test(arguments: [
+        "model = \"o3\"\n\"\\u006eotify\" = [\"/usr/bin/say\"]\n[t]\n",
+        "model = \"o3\"\n\"not\\x69fy\" = [\"/usr/bin/say\"]\n",
+        "model = \"o3\"\nnotify.command = \"/usr/bin/say\"\n",
+        "model = \"o3\"\n\n[notify]\ncommand = \"/usr/bin/say\"\n",
+        "model = \"o3\"\n\"\\q\" = 1\n",
+    ])
+    func aKeyThatIsOrMightBeNotifyMakesAgentBarStandDown(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// A file that ends inside an unterminated value: every position in it is a guess,
+    /// and the first "top-level" line after the opening `"""` is string content.
+    @Test(arguments: [
+        "model = \"o3\"\ninstructions = \"\"\"\nnever closed\n",
+        "model = \"o3\"\nargs = [\n  \"a\",\n",
+    ])
+    func aFileThatEndsInsideAValueIsLeftAlone(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
+    }
+
     /// The hand workaround for the broken file, our stray line commented out, keeps
     /// AgentBar standing down: deleting it would have had the old installer write it
     /// back, so this is what a user's config may look like when the fix arrives.
