@@ -401,19 +401,64 @@ import Testing
                 == "[hooks.state.\"/c:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n\n[profiles.mine] # the user's\nmodel = \"o4\"")
     }
 
-    // MARK: - firstQuoted
-
-    @Test(arguments: [
-        ("notify = [\"/usr/bin/node\", \"/x/notify.js\"]", "/usr/bin/node"),
-        ("notify = [\"\", \"/x\"]", ""),
-    ])
-    func firstQuotedReadsTheInterpreter(_ line: String, _ want: String) {
-        #expect(HookInstaller.firstQuoted(line) == want)
+    /// A begin marker inside someone's multi-line string: the text up to our end marker
+    /// does not read as whole TOML, so there is no telling what a replacement would cut.
+    @Test func aBlockWhoseInsideIsNotWholeTOMLIsNotReplaced() {
+        let config = "note = \"\"\"\n\(HookInstaller.codexBegin)\n\"\"\"\n\n\(HookInstaller.codexEnd)\n"
+        #expect(TOMLOutline(config).isComplete)
+        #expect(HookInstaller.codexForeignTables(in: "\n\"\"\"\n\n") == nil)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
     }
 
-    @Test(arguments: ["notify = []", "", "no quotes here", "\"unterminated"])
-    func firstQuotedIsNilWithoutAClosedPair(_ line: String) {
-        #expect(HookInstaller.firstQuoted(line) == nil)
+    // MARK: - Codex: our notify line, read as TOML rather than up to the first `]`
+
+    private static let bracketNode = "/opt/node]x/bin/node"
+    private static let bracketScript = "/Users/a]b/.agentbar/hooks/codex/notify.js"
+    private static let bracketLine = "notify = [\"\(bracketNode)\", \"\(bracketScript)\"]\n"
+
+    /// A `]` in the node or home path is legal inside the quotes. Cut at the first
+    /// `]`, the line was never recognised, and the stray copy an earlier release left
+    /// under a table was never taken out.
+    @Test func aStrayLineWithABracketInItsPathIsStillRepaired() {
+        let healthy = Self.withBlock(Self.userConfig)
+        let broken = healthy.replacingOccurrences(
+            of: "SHA256S = \"8e86beb8\"\n", with: "SHA256S = \"8e86beb8\"\n" + Self.bracketLine)
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: Self.bracketNode, script: Self.bracketScript,
+            isExecutable: { _ in true }) else {
+            Issue.record("the stray line must be removed"); return
+        }
+        #expect(next == healthy)
+    }
+
+    @Test func aBracketInThePathIsReadAsOursAtTheTopLevelToo() {
+        let config = "model = \"o3\"\n" + Self.bracketLine
+        #expect(HookInstaller.codexPlan(config: config, node: Self.bracketNode, script: Self.bracketScript,
+                                        isExecutable: { _ in true }) == .unchanged)
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: config, node: "/usr/local/bin/node", script: Self.bracketScript,
+            isExecutable: { $0 != Self.bracketNode }) else {
+            Issue.record("a dead interpreter with a bracket in it must be replaced"); return
+        }
+        #expect(next == "model = \"o3\"\nnotify = [\"/usr/local/bin/node\", \"\(Self.bracketScript)\"]\n")
+    }
+
+    /// What we write has to read back as what we meant, whatever the path holds.
+    @Test func ourLineIsEscapedAndReadsBackAsWritten() {
+        let node = "/Users/q\"uote\\slash]/bin/node"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: "model = \"o3\"\n", node: node, script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        let outline = TOMLOutline(next)
+        let values = outline.statements.lazy.compactMap {
+            outline.stringArray(assignedTo: "notify", by: $0, in: next)?.values
+        }.first
+        #expect(values == [node, Self.script])
+        #expect(HookInstaller.codexPlan(config: next, node: node, script: Self.script,
+                                        isExecutable: { _ in true }) == .unchanged)
     }
 
     // MARK: - Node paths

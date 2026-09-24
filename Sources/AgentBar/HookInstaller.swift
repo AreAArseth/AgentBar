@@ -352,7 +352,8 @@ enum HookInstaller {
             // when a human trusts these hooks lands inside this block. Replacing the
             // block whole deleted it on the next launch and Codex asked all over again.
             // Every table here that is not ours moves below the marker, intact.
-            let foreign = codexForeignTables(in: String(config[begin.upperBound..<end.lowerBound]))
+            guard let foreign = codexForeignTables(in: String(config[begin.upperBound..<end.lowerBound]))
+            else { return .unchanged }
             var next = config
             next.replaceSubrange(begin.lowerBound..<end.upperBound,
                                  with: foreign.isEmpty ? block : block + "\n\n" + foreign)
@@ -365,10 +366,14 @@ enum HookInstaller {
     }
 
     /// The tables between our markers that `codexHooksBlock` did not write, each with
-    /// its keys, in the order they stood.
-    static func codexForeignTables(in inner: String) -> String {
+    /// its keys, in the order they stood. Nil when the text between the markers does
+    /// not read as whole TOML on its own (a marker inside someone's string, say):
+    /// then there is no telling what a replacement would cut, and nothing is replaced.
+    static func codexForeignTables(in inner: String) -> String? {
         let ours = Set(codexEvents.flatMap { ["[[hooks.\($0.event)]]", "[[hooks.\($0.event).hooks]]"] })
-        let headers = TOMLOutline(inner).statements.filter(\.isHeader)
+        let outline = TOMLOutline(inner)
+        guard outline.isComplete else { return nil }
+        let headers = outline.statements.filter(\.isHeader)
         var out: [String] = []
         for (i, h) in headers.enumerated() {
             let lineEnd = inner[h.start...].firstIndex(where: \.isNewline) ?? inner.endIndex
@@ -401,18 +406,18 @@ enum HookInstaller {
         config: String, node: String, script: String,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> CodexPlan {
-        let ours = "notify = [\"\(node)\", \"\(script)\"]"
-        let ourLine = #"[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
+        let ours = "notify = [\(TOMLOutline.basicString(node)), \(TOMLOutline.basicString(script))]"
         let outline = TOMLOutline(config)
         // A file that ends inside an unterminated value is one TOML will not read
         // either, and every position below would be a guess into that value.
         guard outline.isComplete else { return .unchanged }
-        let mine = outline.statements.compactMap { s -> (top: Bool, line: Range<String.Index>)? in
-            guard !s.isHeader,
-                  let r = config.range(of: ourLine, options: [.regularExpression, .anchored],
-                                       range: s.lineStart..<config.endIndex)
+        // Ours is a notify array with our hooks path in it, read as TOML reads it: a
+        // `]` inside a quoted node or home path belongs to the path.
+        let mine = outline.statements.compactMap { s -> (top: Bool, line: Range<String.Index>, values: [String])? in
+            guard let array = outline.stringArray(assignedTo: "notify", by: s, in: config),
+                  array.values.contains(where: { $0.contains("/.agentbar/hooks/codex/") })
             else { return nil }
-            return (s.isTopLevel, s.lineStart..<r.upperBound)
+            return (s.isTopLevel, s.lineStart..<array.end, array.values)
         }
 
         // Our line under a table header is what every release up to 1.30.0 wrote into
@@ -435,14 +440,14 @@ enum HookInstaller {
         }
 
         if let line = mine.first?.line {
-            guard let interpreter = firstQuoted(String(config[line])), !isExecutable(interpreter)
+            guard let interpreter = mine.first?.values.first, !isExecutable(interpreter)
             else { return .unchanged }
             var next = config
             next.replaceSubrange(line, with: ours)
             return .write(next, repaired: true)
         }
-        // Our marker somewhere the line pattern could not read — a comment, hand-edited
-        // formatting, a `notify` spread over several lines: leave it alone rather than
+        // Our marker somewhere the array reader could not read — a comment, a value
+        // that is not an array of one-line strings: leave it alone rather than
         // appending a second notify key.
         //
         // Our own hooks block is cut out first, and that is not a detail. It carries the
@@ -490,15 +495,6 @@ enum HookInstaller {
         out.removeSubrange(begin.lowerBound..<end.upperBound)
         return out
     }
-
-    /// The first `"…"` in a TOML line — the interpreter in `notify = ["node", "script"]`.
-    static func firstQuoted(_ s: String) -> String? {
-        guard let open = s.firstIndex(of: "\""),
-              let close = s[s.index(after: open)...].firstIndex(of: "\"")
-        else { return nil }
-        return String(s[s.index(after: open)..<close])
-    }
-
     // MARK: - Cursor CLI (~/.cursor/hooks.json)
 
     private static func installCursor() throws {

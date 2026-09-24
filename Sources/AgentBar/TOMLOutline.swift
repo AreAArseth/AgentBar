@@ -175,83 +175,153 @@ struct TOMLOutline {
     /// The dotted key a statement assigns, or the one its header names, each part
     /// decoded. Nil when it cannot be read.
     func keyPath(of s: Statement, in text: String) -> [String]? {
-        var it = text[s.start...].unicodeScalars.makeIterator()
-        var c = it.next()
-        func skipBlanks() { while c == " " || c == "\t" { c = it.next() } }
-        let end: Unicode.Scalar
+        var cur = Cursor(text.unicodeScalars, at: s.start)
         if s.isHeader {
-            c = it.next()
-            if c == "[" { c = it.next() }
-            end = "]"
-        } else {
-            end = "="
+            cur.advance()
+            if cur.c == "[" { cur.advance() }
+            return cur.key(endingAt: "]")
+        }
+        return cur.key(endingAt: "=")
+    }
+
+    /// The strings of an array a statement assigns to `key` (`key = ["a", 'b']`), and
+    /// where the array ends. Read with the same quoting rules as everything else, so a
+    /// `]` inside a quoted path is part of the path. Nil for any other shape.
+    func stringArray(assignedTo key: String, by s: Statement, in text: String)
+        -> (values: [String], end: String.Index)? {
+        guard !s.isHeader else { return nil }
+        var cur = Cursor(text.unicodeScalars, at: s.start)
+        guard cur.key(endingAt: "=") == [key] else { return nil }
+        cur.advance()
+        cur.skipBlanks()
+        guard let values = cur.stringArray() else { return nil }
+        return (values, cur.i)
+    }
+
+    private struct Cursor {
+        let s: String.UnicodeScalarView
+        var i: String.Index
+        init(_ s: String.UnicodeScalarView, at i: String.Index) { self.s = s; self.i = i }
+
+        var c: Unicode.Scalar? { i < s.endIndex ? s[i] : nil }
+        mutating func advance() { if i < s.endIndex { i = s.index(after: i) } }
+        mutating func skipBlanks() { while c == " " || c == "\t" { advance() } }
+
+        /// A dotted key up to `end`, which is left unread.
+        mutating func key(endingAt end: Unicode.Scalar) -> [String]? {
+            var parts: [String] = []
+            while true {
+                skipBlanks()
+                if c == "\"" || c == "'" {
+                    guard let part = string() else { return nil }
+                    parts.append(part)
+                } else {
+                    var part = ""
+                    while let ch = c, ("a"..."z").contains(ch) || ("A"..."Z").contains(ch)
+                            || ("0"..."9").contains(ch) || ch == "_" || ch == "-" {
+                        part.unicodeScalars.append(ch)
+                        advance()
+                    }
+                    if part.isEmpty { return nil }
+                    parts.append(part)
+                }
+                skipBlanks()
+                if c == "." { advance(); continue }
+                return c == end ? parts : nil
+            }
         }
 
-        var parts: [String] = []
-        while true {
-            skipBlanks()
-            var part = ""
-            switch c {
-            case "\""?:
-                c = it.next()
-                while c != "\"" {
-                    guard let ch = c, ch != "\n", ch != "\r" else { return nil }
-                    if ch == "\\" {
-                        guard let decoded = Self.escape(&it) else { return nil }
-                        part.unicodeScalars.append(decoded)
-                    } else {
-                        part.unicodeScalars.append(ch)
-                    }
-                    c = it.next()
+        /// A one-line basic or literal string, decoded; the cursor ends past its quote.
+        mutating func string() -> String? {
+            guard let q = c, q == "\"" || q == "'" else { return nil }
+            advance()
+            var out = ""
+            while c != q {
+                guard let ch = c, ch != "\n", ch != "\r" else { return nil }
+                advance()
+                if q == "\"" && ch == "\\" {
+                    guard let decoded = escape() else { return nil }
+                    out.unicodeScalars.append(decoded)
+                } else {
+                    out.unicodeScalars.append(ch)
                 }
-                c = it.next()
-            case "'"?:
-                c = it.next()
-                while c != "'" {
-                    guard let ch = c, ch != "\n", ch != "\r" else { return nil }
-                    part.unicodeScalars.append(ch)
-                    c = it.next()
-                }
-                c = it.next()
-            default:
-                while let ch = c, ("a"..."z").contains(ch) || ("A"..."Z").contains(ch)
-                        || ("0"..."9").contains(ch) || ch == "_" || ch == "-" {
-                    part.unicodeScalars.append(ch)
-                    c = it.next()
-                }
-                if part.isEmpty { return nil }
             }
-            parts.append(part)
-            skipBlanks()
-            if c == "." { c = it.next(); continue }
-            return c == end ? parts : nil
+            advance()
+            return out
+        }
+
+        /// `[ "a", 'b', ]`, with the blank lines and comments TOML allows between items.
+        mutating func stringArray() -> [String]? {
+            guard c == "[" else { return nil }
+            advance()
+            var out: [String] = []
+            while true {
+                skipSpace()
+                if c == "]" { advance(); return out }
+                guard let v = string() else { return nil }
+                out.append(v)
+                skipSpace()
+                if c == "," { advance(); continue }
+                guard c == "]" else { return nil }
+                advance()
+                return out
+            }
+        }
+
+        private mutating func skipSpace() {
+            while let ch = c {
+                if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" { advance() }
+                else if ch == "#" { while c != nil && c != "\n" { advance() } }
+                else { return }
+            }
+        }
+
+        /// One escape in a basic string, the backslash already read. TOML 1.0's set,
+        /// plus 1.1's `\e` and `\xHH`; anything else is unreadable.
+        private mutating func escape() -> Unicode.Scalar? {
+            guard let e = c else { return nil }
+            advance()
+            func hex(_ n: Int) -> Unicode.Scalar? {
+                var v: UInt32 = 0
+                for _ in 0..<n {
+                    guard let d = c, let x = UInt32(String(d), radix: 16) else { return nil }
+                    advance()
+                    v = v * 16 + x
+                }
+                return Unicode.Scalar(v)
+            }
+            switch e {
+            case "b": return "\u{08}"
+            case "t": return "\t"
+            case "n": return "\n"
+            case "f": return "\u{0C}"
+            case "r": return "\r"
+            case "e": return "\u{1B}"
+            case "\"": return "\""
+            case "\\": return "\\"
+            case "x": return hex(2)
+            case "u": return hex(4)
+            case "U": return hex(8)
+            default: return nil
+            }
         }
     }
 
-    /// One escape in a basic string, the backslash already read. TOML 1.0's set, plus
-    /// 1.1's `\e` and `\xHH`; anything else is unreadable.
-    private static func escape(_ it: inout String.UnicodeScalarView.SubSequence.Iterator) -> Unicode.Scalar? {
-        func hex(_ n: Int) -> Unicode.Scalar? {
-            var v: UInt32 = 0
-            for _ in 0..<n {
-                guard let d = it.next(), let x = UInt32(String(d), radix: 16) else { return nil }
-                v = v * 16 + x
+    /// `value` as a TOML basic string, quotes included.
+    static func basicString(_ value: String) -> String {
+        var out = "\""
+        for u in value.unicodeScalars {
+            switch u {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case _ where u.value < 0x20 || u.value == 0x7F:
+                out += String(format: "\\u%04X", u.value)
+            default: out.unicodeScalars.append(u)
             }
-            return Unicode.Scalar(v)
         }
-        switch it.next() {
-        case "b"?: return "\u{08}"
-        case "t"?: return "\t"
-        case "n"?: return "\n"
-        case "f"?: return "\u{0C}"
-        case "r"?: return "\r"
-        case "e"?: return "\u{1B}"
-        case "\""?: return "\""
-        case "\\"?: return "\\"
-        case "x"?: return hex(2)
-        case "u"?: return hex(4)
-        case "U"?: return hex(8)
-        default: return nil
-        }
+        return out + "\""
     }
 }

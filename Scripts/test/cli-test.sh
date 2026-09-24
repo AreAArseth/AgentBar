@@ -609,6 +609,35 @@ printf 'model = "o3"\ninstructions = """\nnever closed\n' > "$HOME/.codex/config
 CODEX_OPEN="$(cat "$HOME/.codex/config.toml")"
 "$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
 check "an unterminated value is untouched" '[ "$CODEX_OPEN" = "$(cat "$HOME/.codex/config.toml")" ] && grep -q "unterminated value" "$TESTROOT/codex-out"'
+# Markers around text that is not whole TOML (the begin marker inside a string):
+# there is no telling what replacing the block would cut, so it is not replaced.
+printf 'note = """\n# >>> agentbar >>> written by AgentBar; edit outside these two lines\n"""\n\n# <<< agentbar <<<\n' > "$HOME/.codex/config.toml"
+CODEX_ODD="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "odd markers are not replaced"   '! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "not whole TOML" "$TESTROOT/codex-out"'
+
+# A `]` in the home path is legal inside the quotes. Read up to the first `]`, our
+# own line was not recognised, and a stray copy under a table was never taken out.
+fresh_home
+export HOME="$TESTROOT/home]b.$$"
+mkdir -p "$HOME/.agentbar/state.d" "$HOME/.codex"
+printf 'model = "o3"\nnotify = ["/usr/bin/say"]\n\n[shell_environment_policy.set]\nK = "v"\n' > "$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+CODEX_HEALTHY="$(cat "$HOME/.codex/config.toml")"
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/(K = "v"\n)/,`$1notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`));' "$HOME/.codex/config.toml" "$HOME/.agentbar/hooks"
+check "a bracketed stray is seeded"    'grep -q "home\]b" "$HOME/.codex/config.toml" && [ "$(grep -c "^notify = " "$HOME/.codex/config.toml")" = 2 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "a bracketed stray is removed"   '[ "$CODEX_HEALTHY" = "$(cat "$HOME/.codex/config.toml")" ]'
+fresh_home
+export HOME="$TESTROOT/home]c.$$"
+mkdir -p "$HOME/.agentbar/state.d" "$HOME/.codex"
+printf 'model = "o3"\n\n[profiles.mine]\nmodel = "o4"\n' > "$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+CODEX_BRACKET="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "a bracketed home is idempotent" '[ "$CODEX_BRACKET" = "$(cat "$HOME/.codex/config.toml")" ] && grep -q "home\]c.*notify.js" "$HOME/.codex/config.toml" && grep -q "^ok .*codex  " "$TESTROOT/codex-out"'
 
 # --- the record, as something you can hand to somebody ---------------------------
 fresh_home

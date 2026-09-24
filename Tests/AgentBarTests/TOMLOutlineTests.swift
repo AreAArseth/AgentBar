@@ -115,6 +115,34 @@ import Testing
         #expect(TOMLOutline(text).claims("notify", in: text) == want)
     }
 
+    @Test(arguments: [
+        ("notify = [\"/a]b/node\", '/c]/x.js']\n", ["/a]b/node", "/c]/x.js"]),
+        ("notify = [ \"a\" ,\n  # why\n  'b', ]\n", ["a", "b"]),
+        ("\"\\u006eotify\" = [\"a\\\"]\"]\n", ["a\"]"]),
+        ("notify = []\n", []),
+    ])
+    func stringArraysAreReadWithTheirQuoting(_ text: String, _ want: [String]) {
+        let outline = TOMLOutline(text)
+        let got = outline.stringArray(assignedTo: "notify", by: outline.statements[0], in: text)
+        #expect(got?.values == want)
+        #expect(got.map { text[$0.end...].hasPrefix("\n") } == true)
+    }
+
+    @Test(arguments: ["notify = \"x\"\n", "notify = [\"a\", 1]\n", "other = [\"a\"]\n",
+                      "notify = [\"a\"\n", "notify.x = [\"a\"]\n", "[notify]\n"])
+    func anythingElseIsNotAStringArray(_ text: String) {
+        let outline = TOMLOutline(text)
+        #expect(outline.stringArray(assignedTo: "notify", by: outline.statements[0], in: text) == nil)
+    }
+
+    @Test func basicStringsRoundTrip() {
+        let raw = "q\"uote \\ tab\t nl\n bell\u{07} ]"
+        let text = "k = [\(TOMLOutline.basicString(raw))]\n"
+        let outline = TOMLOutline(text)
+        #expect(outline.isComplete)
+        #expect(outline.stringArray(assignedTo: "k", by: outline.statements[0], in: text)?.values == [raw])
+    }
+
     @Test func topLevelKeyIgnoresDottedAndLongerNames() {
         let text = "notify.x = 1\nnotifyer = 2\n[t]\nnotify = 3\n"
         #expect(TOMLOutline(text).topLevelKey("notify", in: text) == nil)

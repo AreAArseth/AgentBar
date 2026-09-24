@@ -1524,44 +1524,101 @@ function tomlEscape(t, i) {
   return [String.fromCodePoint(cp), i + 2 + len];
 }
 
-// The dotted key a statement assigns, or the one its header names, each part decoded
-// (`"\u006eotify"` is `notify`). Null when it cannot be read; mirrors TOMLOutline.keyPath.
-function tomlKeyPath(t, s) {
-  let i = s.start;
-  let end = "=";
-  if (s.header) { i++; if (t[i] === "[") i++; end = "]"; }
+// A one-line basic or literal string at t[i], decoded: { value, i } past its closing
+// quote, or null when it is not one.
+function tomlString(t, i) {
+  const q = t[i];
+  if (q !== '"' && q !== "'") return null;
+  i++;
+  let value = "";
+  while (t[i] !== q) {
+    if (i >= t.length || t[i] === "\n" || t[i] === "\r") return null;
+    if (q === '"' && t[i] === "\\") {
+      const e = tomlEscape(t, i);
+      if (!e) return null;
+      value += e[0]; i = e[1];
+    } else value += t[i++];
+  }
+  return { value, i: i + 1 };
+}
+
+// A dotted key at t[i] up to `end`, which is left unread: { parts, i } or null.
+function tomlKey(t, i, end) {
   const skip = () => { while (t[i] === " " || t[i] === "\t") i++; };
   const parts = [];
   for (;;) {
     skip();
-    let part = "";
-    if (t[i] === '"') {
-      i++;
-      while (t[i] !== '"') {
-        if (i >= t.length || t[i] === "\n" || t[i] === "\r") return null;
-        if (t[i] === "\\") {
-          const e = tomlEscape(t, i);
-          if (!e) return null;
-          part += e[0]; i = e[1];
-        } else part += t[i++];
-      }
-      i++;
-    } else if (t[i] === "'") {
-      i++;
-      while (t[i] !== "'") {
-        if (i >= t.length || t[i] === "\n" || t[i] === "\r") return null;
-        part += t[i++];
-      }
-      i++;
+    if (t[i] === '"' || t[i] === "'") {
+      const r = tomlString(t, i);
+      if (!r) return null;
+      parts.push(r.value); i = r.i;
     } else {
+      let part = "";
       while (i < t.length && /[A-Za-z0-9_-]/.test(t[i])) part += t[i++];
       if (!part) return null;
+      parts.push(part);
     }
-    parts.push(part);
     skip();
     if (t[i] === ".") { i++; continue; }
-    return t[i] === end ? parts : null;
+    return t[i] === end ? { parts, i } : null;
   }
+}
+
+// The dotted key a statement assigns, or the one its header names, each part decoded
+// (`"\u006eotify"` is `notify`). Null when it cannot be read; mirrors TOMLOutline.keyPath.
+function tomlKeyPath(t, s) {
+  if (!s.header) { const r = tomlKey(t, s.start, "="); return r && r.parts; }
+  let i = s.start + 1;
+  if (t[i] === "[") i++;
+  const r = tomlKey(t, i, "]");
+  return r && r.parts;
+}
+
+// The strings of an array a statement assigns to `key`, and the index just past the
+// array: { values, end } or null. Read with the same quoting rules as everything else,
+// so a `]` inside a quoted path is part of the path. Mirrors TOMLOutline.stringArray.
+function tomlStringArray(t, s, key) {
+  if (s.header) return null;
+  const k = tomlKey(t, s.start, "=");
+  if (!k || k.parts.length !== 1 || k.parts[0] !== key) return null;
+  let i = k.i + 1;
+  while (t[i] === " " || t[i] === "\t") i++;
+  if (t[i] !== "[") return null;
+  i++;
+  const space = () => {
+    for (;;) {
+      if (t[i] === " " || t[i] === "\t" || t[i] === "\r" || t[i] === "\n") i++;
+      else if (t[i] === "#") { while (i < t.length && t[i] !== "\n") i++; }
+      else return;
+    }
+  };
+  const values = [];
+  for (;;) {
+    space();
+    if (t[i] === "]") return { values, end: i + 1 };
+    const r = tomlString(t, i);
+    if (!r) return null;
+    values.push(r.value); i = r.i;
+    space();
+    if (t[i] === ",") { i++; continue; }
+    return t[i] === "]" ? { values, end: i + 1 } : null;
+  }
+}
+
+// `v` as a TOML basic string, quotes included.
+function tomlBasicString(v) {
+  let out = '"';
+  for (const ch of v) {
+    const cp = ch.codePointAt(0);
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (cp < 0x20 || cp === 0x7f) out += "\\u" + cp.toString(16).toUpperCase().padStart(4, "0");
+    else out += ch;
+  }
+  return out + '"';
 }
 
 // Whether a top-level `key = …` would collide with something already there: the key
@@ -1590,10 +1647,14 @@ function codexWithoutBlock(t) {
 const CODEX_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"];
 
 // The tables between our markers that install-hooks did not write, each with its
-// keys, in the order they stood; mirrors HookInstaller.codexForeignTables.
+// keys, in the order they stood; mirrors HookInstaller.codexForeignTables. Null when
+// the inside does not read as whole TOML (a marker inside someone's string): then
+// there is no telling what a replacement would cut, and nothing is replaced.
 function codexForeignTables(inner) {
   const ours = new Set(CODEX_EVENTS.flatMap((e) => [`[[hooks.${e}]]`, `[[hooks.${e}.hooks]]`]));
-  const headers = tomlOutline(inner).statements.filter((s) => s.header);
+  const outline = tomlOutline(inner);
+  if (!outline.complete) return null;
+  const headers = outline.statements.filter((s) => s.header);
   const out = [];
   headers.forEach((h, i) => {
     const nl = inner.indexOf("\n", h.start);
@@ -1629,13 +1690,14 @@ function codexNotifyPlan(toml, ours, isAlive) {
   // A file that ends inside an unterminated value is one TOML will not read either,
   // and every position below would be a guess into that value.
   if (!outline.complete) return { kind: "unchanged" };
-  const ourLine = /[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/y;
+  // Ours is a notify array with our hooks path in it, read as TOML reads it: a `]`
+  // inside a quoted node or home path belongs to the path.
   const mine = [];
   for (const s of outline.statements) {
-    if (s.header) continue;
-    ourLine.lastIndex = s.lineStart;
-    const m = ourLine.exec(toml);
-    if (m) mine.push({ top: s.top, from: s.lineStart, to: s.lineStart + m[0].length });
+    const a = tomlStringArray(toml, s, "notify");
+    if (a && a.values.some((v) => v.includes("/.agentbar/hooks/codex/"))) {
+      mine.push({ top: s.top, from: s.lineStart, to: a.end, values: a.values });
+    }
   }
 
   // Our line under a table header is what every release up to 1.30.0 wrote into a
@@ -1660,13 +1722,13 @@ function codexNotifyPlan(toml, ours, isAlive) {
     // rewritten whenever its content differs, so a moved node heals on the next
     // run. Codex used to stop at the marker, which made it the one integration
     // where a stale interpreter was permanent. Re-verify the interpreter.
-    const [{ from, to }] = mine;
-    const interp = (toml.slice(from, to).match(/"([^"]*)"/) || [])[1];
+    const [{ from, to, values }] = mine;
+    const interp = values[0];
     if (interp === undefined || isAlive(interp)) return { kind: "unchanged" };
     return { kind: "write", text: toml.slice(0, from) + ours + toml.slice(to), repaired: true };
   }
-  // Our marker somewhere the line regex could not read (hand-edited formatting,
-  // a comment): leave it alone rather than appending a second notify key.
+  // Our marker somewhere the array reader could not read (a comment, a value that is
+  // not an array of one-line strings): leave it alone rather than appending another.
   if (codexWithoutBlock(toml).includes("/.agentbar/hooks/codex/")) return { kind: "unchanged" };
   // Codex takes one top-level `notify`, on whatever line the user put it. So does
   // anything else that already defines it (`notify.x`, `[notify]`), and a key that
@@ -1793,7 +1855,7 @@ function installHooks() {
   if (fs.existsSync(codexDir)) {
     const file = path.join(codexDir, "config.toml");
     let toml = ""; try { toml = fs.readFileSync(file, "utf8"); } catch {}
-    const ours = `notify = ["${node}", "${path.join(hooksDir, "codex", "notify.js")}"]`;
+    const ours = `notify = [${tomlBasicString(node)}, ${tomlBasicString(path.join(hooksDir, "codex", "notify.js"))}]`;
     // tmp+rename like every other config write here — a crash mid-write must
     // not truncate the user's Codex config.
     const writeToml = (next) => {
@@ -1851,8 +1913,11 @@ function installHooks() {
         // a human trusts these hooks lands inside this block. Replacing it whole
         // deleted that trust on the next run. Tables here that are not ours move below.
         const foreign = codexForeignTables(toml.slice(b + CODEX_BEGIN.length, e));
-        writeToml(toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length));
-        report("codex hooks   " + file, true);
+        if (foreign === null) console.error(`skip: ${file} has AgentBar's markers around text that is not whole TOML — left untouched`);
+        else {
+          writeToml(toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length));
+          report("codex hooks   " + file, true);
+        }
       }
     } else {
       let next = toml;
