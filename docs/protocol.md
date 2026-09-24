@@ -22,6 +22,8 @@ locks. All timestamps (`ts`) are Unix seconds.
   claude-config-dir  optional hint: custom CLAUDE_CONFIG_DIR path (one line)
   remote-cluster.json  shared-home declaration — state layout 2 (see below)
   identity-salt  makes machine ids opaque in shared-home mode (see below)
+  source-id    a standalone home's collector identity (docs/remote-protocol.md)
+  remote/, bin/agentbar-remote  the collector the ssh mirror runs (docs/remote-protocol.md)
 ```
 
 ## state.d — sessions

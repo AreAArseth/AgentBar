@@ -24,6 +24,8 @@
 //                                   the Linux equivalent of the macOS app's installer
 //   agentbar configure-cluster      --shared-home: this home is mounted on several
 //                                   machines, so every row names the one that owns it
+//   agentbar remote-stream          this machine's sessions as a status stream, for
+//                                   a Mac reading over SSH (docs/remote-protocol.md)
 
 "use strict";
 const fs = require("fs"), os = require("os"), path = require("path");
@@ -1427,6 +1429,12 @@ function doctor(json) {
             c.legacy ? "Restart the sessions that predate shared mode; their rows are never shown or deleted by any machine." : null);
       }
     }
+    const launcher = path.join(base, "bin", "agentbar-remote");
+    const text = read(launcher);
+    const pinned = text && (/^exec '([^']+)'/m.exec(text) || [])[1];
+    add("remote.stream", "The command a Mac runs over SSH", !text ? "skipped" : pinned && runnable(pinned) ? "ok" : "fail",
+        !text ? "Not installed." : pinned && runnable(pinned) ? null : "It names a node that is not there any more.",
+        !text || (pinned && runnable(pinned)) ? null : "Run `agentbar install-hooks` again.");
   }
 
   const stale = [];
@@ -1819,6 +1827,29 @@ function installHooks() {
     }
     report("opencode " + file, changed);
   }
+  // The status stream a Mac reads over SSH, and the one fixed command that
+  // starts it. Fixed, so the Mac never sends a path or anything else a shell
+  // would read; pinned to this node, so a login shell's PATH never decides.
+  const srcRemote = path.join(__dirname, "..", "remote");
+  if (fs.existsSync(srcRemote)) {
+    const remoteDir = path.join(base, "remote");
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+    fs.cpSync(srcRemote, remoteDir, { recursive: true,
+      filter: (src) => path.basename(src) !== "test" });
+    const launcher = path.join(base, "bin", "agentbar-remote");
+    const text = "#!/bin/sh\n# Written by `agentbar install-hooks`: what a Mac runs over SSH.\n"
+      + "exec '" + node.replace(/'/g, "'\\''") + "' \"$HOME/.agentbar/remote/stream.js\" \"$@\"\n";
+    let changed = true;
+    try { changed = fs.readFileSync(launcher, "utf8") !== text; } catch {}
+    if (changed) {
+      fs.mkdirSync(path.dirname(launcher), { recursive: true });
+      const t = launcher + "." + process.pid + ".tmp";
+      fs.writeFileSync(t, text, { mode: 0o755 });
+      fs.renameSync(t, launcher);
+    }
+    fs.chmodSync(launcher, 0o755);
+    report("remote stream " + launcher, changed);
+  }
   console.log("Done. Start a NEW agent session to see it (hooks snapshot at session start).");
 }
 
@@ -1877,6 +1908,7 @@ switch (cmd) {
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
   case "configure-cluster": configureCluster(argv); break;
+  case "remote-stream": require("../remote/stream.js").main(argv); break;
   case "--help": case "help": default:
     console.log(`agentbar — AI coding agents' status & remote approval (file protocol: ~/.agentbar)
 
@@ -1896,6 +1928,7 @@ switch (cmd) {
   agentbar forget                 empty the decision ledger
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
   agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)
-  agentbar configure-cluster      [--shared-home | --standalone] this home is mounted on several machines (or not)`);
+  agentbar configure-cluster      [--shared-home | --standalone] this home is mounted on several machines (or not)
+  agentbar remote-stream          this machine's sessions as a status stream for a Mac over SSH [--once]`);
     break;
 }

@@ -111,6 +111,8 @@ Where each agent lives, and what says it is ours:
 
 | `remote.cluster` | whether this home is declared shared (`agentbar configure-cluster --shared-home`), which machine this is (a hash, never a hostname), and how many rows are this machine's, other machines', from before shared mode, or from an earlier boot. `skipped` on a standalone home; **`fail`** when the declaration is not understood or this machine has no unique identity (its hooks then write nothing); `warn` while rows from before shared mode remain. CLI only — the app runs on the Mac, whose home is its own |
 
+| `remote.stream` | the collector the ssh mirror runs (`~/.agentbar/bin/agentbar-remote`, `docs/remote-protocol.md`) is installed and names a node that exists. `skipped` when it is not installed. CLI only |
+
 ### macOS only
 
 | id | asserts |
