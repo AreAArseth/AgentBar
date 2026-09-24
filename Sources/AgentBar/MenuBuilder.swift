@@ -343,6 +343,14 @@ enum MenuBuilder {
             item.action = #selector(StatusItemController.checkForUpdatesClicked(_:))
             item.target = controller
             symbol = "exclamationmark.arrow.triangle.2.circlepath"
+        case .needsAdministrator(let v):
+            item.title = "Updating to \(v) needs an administrator"
+            item.toolTip = "This account can't replace \(Bundle.main.bundleURL.path). "
+                + "Ask an administrator to install \(v); this copy keeps running."
+            item.action = #selector(StatusItemController.checkForUpdatesClicked(_:))
+            item.target = controller
+            symbol = "lock.circle"
+            badge = ""
         }
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         if #available(macOS 14.0, *) {

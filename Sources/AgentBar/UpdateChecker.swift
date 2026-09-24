@@ -2,7 +2,8 @@ import Cocoa
 
 /// In-app updates from GitHub Releases — no Sparkle, no windows, no daemons.
 /// A quiet daily check plus a "Check for Updates…" menu row; installing swaps the
-/// app bundle in place and relaunches. All state surfaces as that single menu row.
+/// app bundle (or, for a standard account, its contents) in place and relaunches.
+/// All state surfaces as that single menu row.
 final class UpdateChecker {
     enum Status: Equatable {
         case idle
@@ -11,6 +12,9 @@ final class UpdateChecker {
         case available(String)     // newer version, e.g. "1.7.0"
         case downloading(String)
         case failed(String)        // short, user-facing reason
+        /// This account can neither replace the bundle nor its contents; the version
+        /// it would have installed. The running app is untouched.
+        case needsAdministrator(String)
     }
 
     static let shared = UpdateChecker()
@@ -86,6 +90,7 @@ final class UpdateChecker {
     func clearTransient() {
         if status == .upToDate { setStatus(.idle) }
         if case .failed = status { setStatus(.idle) }
+        if case .needsAdministrator = status { setStatus(.idle) }
     }
 
     /// Numeric semver compare, tolerant of stray suffixes ("1.6.0-beta" → 1.6.0).
@@ -105,6 +110,13 @@ final class UpdateChecker {
 
     func installAvailable() {
         guard case .available(let v) = status, let zip = zipURL else { return }
+        // Asked before the download too: a standard account on an admin's install
+        // should hear so at once, not after fetching a bundle it can never put in place.
+        if UpdateInstallation.method(for: Bundle.main.bundleURL) == .needsAdministrator {
+            NSLog("AgentBar update: \(Bundle.main.bundleURL.path) cannot be replaced from this account")
+            setStatus(.needsAdministrator(v))
+            return
+        }
         setStatus(.downloading(v))
         URLSession.shared.downloadTask(with: zip) { [weak self] tmp, _, err in
             guard let self else { return }
@@ -116,7 +128,14 @@ final class UpdateChecker {
             do {
                 let staged = try self.stage(downloaded: tmp, expecting: v)
                 DispatchQueue.main.async {
-                    do { try self.swapAndRelaunch(with: staged) }
+                    let method = UpdateInstallation.method(for: Bundle.main.bundleURL)
+                    guard method != .needsAdministrator else {
+                        NSLog("AgentBar update: \(Bundle.main.bundleURL.path) cannot be replaced from this account")
+                        try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
+                        self.setStatus(.needsAdministrator(v))
+                        return
+                    }
+                    do { try self.installAndRelaunch(staged, by: method) }
                     catch {
                         NSLog("AgentBar update: swap failed: \(error)")
                         try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
@@ -158,22 +177,21 @@ final class UpdateChecker {
         return app
     }
 
-    /// Move the running bundle aside, move the new one into its place, relaunch.
-    /// On any failure the old bundle is restored — the app never ends up missing.
-    private func swapAndRelaunch(with staged: URL) throws {
-        let fm = FileManager.default
+    /// Put the new bundle in place of the running one — by `method`, see
+    /// `UpdateInstallation` — and relaunch. On any failure the old bundle is restored
+    /// and the app keeps running; it never ends up missing.
+    private func installAndRelaunch(_ staged: URL, by method: UpdateInstallation.Method) throws {
         let current = Bundle.main.bundleURL
-        let backup = fm.temporaryDirectory
+        let backup = FileManager.default.temporaryDirectory
             .appendingPathComponent("agentbar-backup-\(UUID().uuidString).app")
-        try fm.moveItem(at: current, to: backup)
-        do {
-            do { try fm.moveItem(at: staged, to: current) }
-            catch { try fm.copyItem(at: staged, to: current) }   // cross-volume temp
-        } catch {
-            try? fm.moveItem(at: backup, to: current)
-            throw error
+        switch method {
+        case .bundle: try UpdateInstallation.swapBundle(current: current, staged: staged, backup: backup)
+        case .contents: try UpdateInstallation.replaceContents(current: current, staged: staged, backup: backup)
+        case .needsAdministrator:
+            throw NSError(domain: "AgentBar", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "bundle not replaceable from this account"])
         }
-        NSLog("AgentBar update: installed \(currentVersion) → \(current.path), relaunching")
+        NSLog("AgentBar update: installed \(current.path) by \(method.rawValue) replace, relaunching")
         // Past the swap the backup is dead weight, but it belongs to the process we are
         // about to kill: the relaunch script sweeps it — and the leftover staging dir —
         // only after the new bundle has actually been opened, and puts the backup back
@@ -182,7 +200,8 @@ final class UpdateChecker {
         let relaunch = Process()
         relaunch.executableURL = URL(fileURLWithPath: "/bin/bash")
         relaunch.arguments = ["-c", UpdateInstallation.relaunchScript, "agentbar-relaunch",
-                              current.path, staging.path, backup.path, "/usr/bin/open"]
+                              current.path, staging.path, backup.path, "/usr/bin/open",
+                              method.rawValue]
         try relaunch.run()
         NSApp.terminate(nil)
     }
