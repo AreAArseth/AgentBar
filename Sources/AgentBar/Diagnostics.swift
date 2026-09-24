@@ -407,15 +407,54 @@ enum Diagnostics {
         let url = home.appendingPathComponent(".codex/config.toml")
         guard let text = try? String(contentsOf: url, encoding: .utf8),
               text.contains(HookInstaller.codexBegin) else { return [] }
-        // Codex writes this key when a hook is accepted; it is
-        // "<source path>:<event>:<group>:<index>", and the source is this file.
-        let trusted = text.contains("hooks.state.\"\(url.path):session_start:")
+        let missing = codexUntrustedEvents(config: text, path: url.path)
+        let all = missing.count == HookInstaller.codexEvents.count
         return [Check(id: "codex.hooks", title: "Codex has accepted its hooks",
-                      status: trusted ? .ok : .warn,
-                      detail: trusted ? nil
-                        : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
-                      fix: trusted ? nil
+                      status: missing.isEmpty ? .ok : .warn,
+                      detail: missing.isEmpty ? nil
+                        : all ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                        : "Accepted except \(missing.joined(separator: ", ")). Codex runs only the hooks it was told to trust, and skips the rest in silence.",
+                      fix: missing.isEmpty ? nil
                         : "Start a Codex session and accept the hooks it asks about.")]
+    }
+
+    /// AgentBar's events that have no trusted, enabled entry in Codex's `[hooks.state]`.
+    ///
+    /// Codex keys an entry "<source path>:<event>:<group>:<handler>" and writes a
+    /// `trusted_hash` into it when a human accepts that hook; `enabled = false` is the
+    /// human switching it off. One entry per event, not just `session_start`: trust is
+    /// given hook by hook, and the approval hook is the one that matters most.
+    ///
+    /// Presence is all this can see. Whether the hash still matches the hook is
+    /// Codex's own arithmetic over its own structs; when it does not, Codex asks again
+    /// at the next session, which is the one place that question has a reliable answer.
+    static func codexUntrustedEvents(config: String, path: String) -> [String] {
+        var trusted = Set<String>()
+        let prefix = "\(path):"
+        let pattern = #"(?m)^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^\[\s][^\n]*\n?|[ \t]*\n)*)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = config as NSString
+        for m in regex.matches(in: config, range: NSRange(location: 0, length: ns.length)) {
+            let key = ns.substring(with: m.range(at: 1))
+            let body = ns.substring(with: m.range(at: 2))
+            guard key.hasPrefix(prefix),
+                  body.range(of: #"(?m)^[ \t]*trusted_hash[ \t]*="#, options: .regularExpression) != nil,
+                  body.range(of: #"(?m)^[ \t]*enabled[ \t]*=[ \t]*false"#, options: .regularExpression) == nil
+            else { continue }
+            let rest = key.dropFirst(prefix.count)
+            if let label = rest.split(separator: ":").first { trusted.insert(String(label)) }
+        }
+        return HookInstaller.codexEvents.map(\.event).filter { !trusted.contains(codexEventLabel($0)) }
+    }
+
+    /// `SessionStart` → `session_start`, the spelling Codex uses in its state keys.
+    static func codexEventLabel(_ event: String) -> String {
+        var out = ""
+        for c in event {
+            if c.isUppercase && !out.isEmpty { out.append("_") }
+            out.append(contentsOf: c.lowercased())
+        }
+        return out
     }
 
     private static func lastSeenCheck(_ i: Integration, base: URL, now: TimeInterval) -> Check {

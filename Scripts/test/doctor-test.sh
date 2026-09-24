@@ -137,7 +137,14 @@ check "no block, no trust row"          '[ "$(status_of codex.hooks)" = absent ]
 check "codex hooks await acceptance"    '[ "$(status_of codex.hooks)" = warn ]'
 DCFG="$HOME/.codex/config.toml"
 printf '\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
+# Trust is given hook by hook: one accepted is not all accepted.
+check "codex hooks partly accepted warn" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionEnd"'
+for e in session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
 check "codex hooks accepted passes"     '[ "$(status_of codex.hooks)" = ok ]'
+printf 'enabled = false\n' >> "$DCFG"
+check "a disabled codex hook warns"     '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
 
 # --- the rules file, reported the way the app reports it -------------------------
 # A rules file that will not parse is the one failure that is invisible by design:

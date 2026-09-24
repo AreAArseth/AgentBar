@@ -1346,9 +1346,13 @@ function doctor(json) {
       const cfg = path.join(H, ".codex/config.toml");
       const toml = read(cfg) || "";
       if (toml.includes("# >>> agentbar >>>")) {
-        const trusted = toml.includes(`hooks.state."${cfg}:session_start:`);
+        const missing = codexUntrustedEvents(toml, cfg);
+        const trusted = missing.length === 0;
         add("codex.hooks", "Codex has accepted its hooks", trusted ? "ok" : "warn",
-            trusted ? null : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
+            trusted ? null
+              : missing.length === CODEX_EVENTS.length
+                ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                : `Accepted except ${missing.join(", ")}. Codex runs only the hooks it was told to trust, and skips the rest in silence.`,
             trusted ? null : "Start a Codex session and accept the hooks it asks about.");
       }
     }

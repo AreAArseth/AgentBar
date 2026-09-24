@@ -123,13 +123,46 @@ import Testing
         #expect(row?.fix != nil)
     }
 
+    private func trustState(_ cfg: String, _ labels: [String], extra: String = "") -> String {
+        "[hooks.state]\n\n" + labels.map {
+            "[hooks.state.\"\(cfg):\($0):0:0\"]\ntrusted_hash = \"sha256:x\"\n\($0 == "stop" ? extra : "")\n"
+        }.joined()
+    }
+
+    private static let labels = ["session_start", "session_end", "user_prompt_submit", "pre_tool_use",
+                                 "post_tool_use", "stop", "permission_request"]
+
     @Test func codexHooksAcceptedPass() throws {
         let cfg = home.appendingPathComponent(".codex/config.toml").path
         try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
                   + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
-                  + "[hooks.state.\"\(cfg):session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n")
+                  + trustState(cfg, Self.labels))
         #expect(check("codex.hooks")?.status == .ok)
         #expect(check("codex.hooks")?.fix == nil)
+    }
+
+    /// Trust is given hook by hook. Only `session_start` used to be looked at, so a
+    /// Codex that would still skip the approval hook read as fully accepted.
+    @Test func codexHooksPartlyAcceptedNameWhatIsMissing() throws {
+        let cfg = home.appendingPathComponent(".codex/config.toml").path
+        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
+                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
+                  + trustState(cfg, ["session_start"]))
+        let row = check("codex.hooks")
+        #expect(row?.status == .warn)
+        #expect(row?.detail?.contains("PermissionRequest") == true)
+        #expect(row?.detail?.contains("SessionStart") == false)
+    }
+
+    /// `enabled = false` is the human switching a hook off: trusted, and still not run.
+    @Test func aDisabledCodexHookIsNotAccepted() {
+        let cfg = "/h/.codex/config.toml"
+        #expect(Diagnostics.codexUntrustedEvents(
+            config: trustState(cfg, Self.labels, extra: "enabled = false\n"), path: cfg) == ["Stop"])
+        #expect(Diagnostics.codexUntrustedEvents(config: trustState(cfg, Self.labels), path: cfg).isEmpty)
+        // Another file's trust says nothing about this one.
+        #expect(Diagnostics.codexUntrustedEvents(config: trustState("/other.toml", Self.labels),
+                                                 path: cfg).count == 7)
     }
 
     /// No block, no row: a Codex user who has never had the hooks written should not
