@@ -190,6 +190,63 @@ check "cursor sessionEnd removes row"    '[ ! -e "$HOME/.agentbar/state.d/cur9.j
 printf '{"hook_event_name":"somethingElse","conversation_id":"cur9"}' \
   | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/cursor/cursor.js
 check "cursor unknown event writes nothing" '[ ! -e "$HOME/.agentbar/state.d/cur9.json" ]'
+# The CLI's own shape: session_id is the conversation, so its end is the session's.
+printf '{"hook_event_name":"sessionStart","conversation_id":"cur7","session_id":"cur7"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/cursor/cursor.js
+printf '{"hook_event_name":"sessionEnd","conversation_id":"cur7","session_id":"cur7"}' \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/cursor/cursor.js
+check "cursor CLI sessionEnd removes row" '[ ! -e "$HOME/.agentbar/state.d/cur7.json" ] && [ ! -e "$HOME/.agentbar/claims.d/cur7" ]'
+
+# --- cursor: the cloud-agent worker ----------------------------------------------
+# Shapes as Cursor's worker sends them. Its tool events carry every id empty; its
+# sessionStart/sessionEnd open and close a claim "<run>:<epoch>" on a run, and one
+# run holds several at once — a subagent's work opens more claims on its parent.
+# Fed by here-string, not a pipe: a function at the end of a pipe runs in a subshell
+# that exits at once, and the hook's parent pid is what a claim stays alive on. Here
+# it is this shell, as the worker process is in real life.
+cur() { AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/cursor/cursor.js <<<"$1"; }
+wstart() { cur "$(printf '{"hook_event_name":"sessionStart","conversation_id":"%s","session_id":"%s:%s","generation_id":"","model":"unknown","is_background_agent":true}' "$1" "$1" "$2")"; }
+wend() { cur "$(printf '{"hook_event_name":"sessionEnd","conversation_id":"%s","session_id":"%s:%s","generation_id":"","model":"unknown","reason":"completed","is_background_agent":true,"final_status":"completed"}' "$1" "$1" "$2")"; }
+wtool() { cur "$(printf '{"hook_event_name":"%s","conversation_id":"","generation_id":"","model":"unknown","tool_name":"Shell","tool_use_id":"t-1","cwd":"","session_id":"","transcript_path":null,"workspace_roots":["/tmp/proj"]}' "$1")"; }
+wtask() { cur "$(printf '{"hook_event_name":"%s","conversation_id":"%s","generation_id":"g-1","model":"","tool_name":"Task","tool_use_id":"t-2","session_id":"%s"}' "$1" "$2" "$2")"; }
+ROW() { echo "$HOME/.agentbar/state.d/$1.json"; }
+
+fresh_home
+wtool preToolUse; wtool postToolUse
+check "worker: id-less tool event writes nothing" '[ -z "$(ls "$HOME/.agentbar/state.d/")" ]'
+check "worker: and never an unknown.json"   '[ ! -e "$(ROW unknown)" ]'
+cur '{"hook_event_name":"preToolUse","generation_id":"g-only","tool_name":"Read"}'
+cur '{"hook_event_name":"preToolUse","conversation_id":"::/..","tool_name":"Read"}'
+check "worker: a turn id or junk id is not a session" '[ -z "$(ls "$HOME/.agentbar/state.d/")" ]'
+
+# Two runs in one worker process: each gets its own row, and id-less tool events
+# from either land in neither.
+fresh_home
+wstart run-a 1; wstart run-b 2
+check "worker: each run gets its own row"   '[ -e "$(ROW run-a)" ] && [ -e "$(ROW run-b)" ]'
+check "worker: the row is named by the run" 'grep -q "\"sessionId\":\"run-a\"" "$(ROW run-a)"'
+wtask preToolUse run-a
+wtool preToolUse
+check "worker: Task marks its own run"      'grep -q "\"label\":\"Task\"" "$(ROW run-a)" && grep -q "\"started\":true" "$(ROW run-a)"'
+check "worker: the other run is untouched"  'grep -q "\"started\":false" "$(ROW run-b)"'
+cur '{"hook_event_name":"stop","conversation_id":"run-b","generation_id":"g-9","status":"completed","session_id":"run-b"}'
+check "worker: stop finishes only its run"  'grep -q "\"state\":\"done\"" "$(ROW run-b)" && grep -q "\"state\":\"tool\"" "$(ROW run-a)"'
+
+# A subagent opens claims on its parent and closes them when it finishes. That
+# ending must leave the parent's row — the parent still holds its own claim — and a
+# claim opening on a row already shown must not reset what the row says.
+wstart run-a 3; wstart run-a 4
+check "worker: a new claim keeps the state" 'grep -q "\"state\":\"tool\"" "$(ROW run-a)" && grep -q "\"label\":\"Task\"" "$(ROW run-a)"'
+wend run-a 4; wend run-a 3
+check "worker: subagent ending keeps parent" 'grep -q "\"state\":\"tool\"" "$(ROW run-a)"'
+wend run-a 1
+check "worker: the last claim ends the run" '[ ! -e "$(ROW run-a)" ] && [ ! -e "$HOME/.agentbar/claims.d/run-a" ]'
+check "worker: and only that run"           '[ -e "$(ROW run-b)" ]'
+
+# A claim left by a worker that crashed holds nothing open.
+printf '{"pid":999999,"ts":%d}' "$(date +%s)" > "$HOME/.agentbar/claims.d/run-b/run-b_0"
+wend run-b 2
+check "worker: a dead worker's claim holds nothing" '[ ! -e "$(ROW run-b)" ] && [ ! -e "$HOME/.agentbar/claims.d/run-b" ]'
 
 # Gemini: BeforeAgent is the turn start (life on text-only turns), BeforeTool
 # names the step, AfterAgent finishes, SessionEnd removes.
