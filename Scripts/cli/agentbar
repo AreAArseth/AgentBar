@@ -1510,6 +1510,41 @@ function codexWithoutBlock(t) {
   return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
 }
 
+const CODEX_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"];
+
+// The tables between our markers that install-hooks did not write, each with its
+// keys, in the order they stood; mirrors HookInstaller.codexForeignTables.
+function codexForeignTables(inner) {
+  const ours = new Set(CODEX_EVENTS.flatMap((e) => [`[[hooks.${e}]]`, `[[hooks.${e}.hooks]]`]));
+  const headers = tomlOutline(inner).statements.filter((s) => s.header);
+  const out = [];
+  headers.forEach((h, i) => {
+    const nl = inner.indexOf("\n", h.start);
+    if (ours.has(inner.slice(h.start, nl < 0 ? inner.length : nl).trim())) return;
+    const next = i + 1 < headers.length ? headers[i + 1].lineStart : inner.length;
+    out.push(inner.slice(h.lineStart, next).trim());
+  });
+  return out.join("\n\n");
+}
+
+// AgentBar's events with no trusted, enabled entry in Codex's [hooks.state]; mirrors
+// Diagnostics.codexUntrustedEvents. Codex keys an entry
+// "<source path>:<event>:<group>:<handler>" and writes `trusted_hash` into it when a
+// human accepts that hook. Presence is all this can see: whether the hash still
+// matches is Codex's own arithmetic, and Codex asks again when it does not.
+function codexUntrustedEvents(toml, cfgPath) {
+  const trusted = new Set();
+  const re = /^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^[\s][^\n]*\n?|[ \t]*\n)*)/gm;
+  for (const m of toml.matchAll(re)) {
+    const [, key, body] = m;
+    if (!key.startsWith(cfgPath + ":")) continue;
+    if (!/^[ \t]*trusted_hash[ \t]*=/m.test(body) || /^[ \t]*enabled[ \t]*=[ \t]*false/m.test(body)) continue;
+    trusted.add(key.slice(cfgPath.length + 1).split(":")[0]);
+  }
+  const label = (e) => e.replace(/(?!^)([A-Z])/g, "_$1").toLowerCase();
+  return CODEX_EVENTS.filter((e) => !trusted.has(label(e)));
+}
+
 // What install-hooks does with Codex's notify key; mirrors HookInstaller.codexPlan.
 // Returns { kind: "unchanged" | "foreign" | "write", text, repaired }.
 function codexNotifyPlan(toml, ours, isAlive) {
@@ -1732,7 +1767,15 @@ function installHooks() {
     if (b >= 0 && e >= 0) {
       const current = toml.slice(b, e + CODEX_END.length);
       if (current === block) report("codex hooks   " + file, false);
-      else { writeToml(toml.slice(0, b) + block + toml.slice(e + CODEX_END.length)); report("codex hooks   " + file, true); }
+      else {
+        // Codex adds a new table at the end of the document, ahead of the trailing
+        // comment, and that comment is our end marker: the [hooks.state] written when
+        // a human trusts these hooks lands inside this block. Replacing it whole
+        // deleted that trust on the next run. Tables here that are not ours move below.
+        const foreign = codexForeignTables(toml.slice(b + CODEX_BEGIN.length, e));
+        writeToml(toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length));
+        report("codex hooks   " + file, true);
+      }
     } else {
       let next = toml;
       if (next && !next.endsWith("\n")) next += "\n";

@@ -316,6 +316,64 @@ import Testing
         #expect(Self.install(config) == config)
     }
 
+    // MARK: - Codex: a human's trust survives the next launch
+
+    /// Where Codex's own writer (`config/batchWrite`, codex-cli 0.156.1) put the trust
+    /// a human gave: at the end of the document, ahead of its trailing comment — which
+    /// is our end marker. Every launch after that replaced the block whole, the seven
+    /// `trusted_hash` entries went with it, and Codex asked about "7 hooks new or
+    /// changed" all over again.
+    private static func trustedByCodex(_ config: String) -> String {
+        let cfg = "/Users/x/.codex/config.toml"
+        let state = "[hooks.state]\n\n" + ["session_start", "session_end", "user_prompt_submit",
+                                            "pre_tool_use", "post_tool_use", "stop", "permission_request"]
+            .map { "[hooks.state.\"\(cfg):\($0):0:0\"]\ntrusted_hash = \"sha256:\($0)\"\n\n" }.joined()
+        return config.replacingOccurrences(of: HookInstaller.codexEnd, with: state + HookInstaller.codexEnd)
+    }
+
+    @Test func trustCodexWroteInsideTheBlockIsMovedOutNotDeleted() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        #expect(trusted.components(separatedBy: "trusted_hash").count - 1 == 7)
+
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/opt/homebrew/bin/node", dir: Self.hooksDir) else {
+            Issue.record("the block must be rewritten without the foreign tables"); return
+        }
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        guard let end = next.range(of: HookInstaller.codexEnd),
+              let state = next.range(of: "[hooks.state]") else {
+            Issue.record("marker or state missing"); return
+        }
+        #expect(state.lowerBound > end.upperBound)
+        #expect(next.hasPrefix(Self.withBlock(Self.userConfig).trimmingCharacters(in: .newlines)))
+        #expect(HookInstaller.codexHooksPlan(config: next, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
+        #expect(Self.install(next) == next)
+    }
+
+    /// A real rewrite (node moved) keeps the trust too. Codex will call the hooks
+    /// changed, because they are, but that is Codex's question, not our deletion.
+    @Test func aRewrittenBlockKeepsTheTrustBesideIt() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/usr/local/bin/node", dir: Self.hooksDir) else {
+            Issue.record("expected a rewrite"); return
+        }
+        #expect(next.contains("\\\"/usr/local/bin/node\\\""))
+        #expect(!next.contains("\\\"/opt/homebrew/bin/node\\\""))
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        #expect(next.components(separatedBy: HookInstaller.codexBegin).count - 1 == 1)
+    }
+
+    @Test func onlyTablesWeDidNotWriteCountAsForeign() {
+        let inner = "\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = \"command\"\r\n\n"
+            + "[hooks.state.\"/c:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n\n"
+            + "[[hooks.PreToolUse]]\r\n[[hooks.PreToolUse.hooks]]\ntimeout = 5\n\n"
+            + "[profiles.mine] # the user's\nmodel = \"o4\"\n"
+        #expect(HookInstaller.codexForeignTables(in: inner)
+                == "[hooks.state.\"/c:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n\n[profiles.mine] # the user's\nmodel = \"o4\"")
+    }
+
     // MARK: - firstQuoted
 
     @Test(arguments: [

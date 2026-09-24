@@ -342,14 +342,37 @@ enum HookInstaller {
            let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex) {
             let current = String(config[begin.lowerBound..<end.upperBound])
             if current == block { return .unchanged }
+            // Codex adds a new table at the end of the document, ahead of the trailing
+            // comment, and that comment is our end marker: the `[hooks.state]` written
+            // when a human trusts these hooks lands inside this block. Replacing the
+            // block whole deleted it on the next launch and Codex asked all over again.
+            // Every table here that is not ours moves below the marker, intact.
+            let foreign = codexForeignTables(in: String(config[begin.upperBound..<end.lowerBound]))
             var next = config
-            next.replaceSubrange(begin.lowerBound..<end.upperBound, with: block)
+            next.replaceSubrange(begin.lowerBound..<end.upperBound,
+                                 with: foreign.isEmpty ? block : block + "\n\n" + foreign)
             return .write(next, repaired: true)
         }
         var next = config
         if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
         if !next.isEmpty { next += "\n" }
         return .write(next + block + "\n", repaired: false)
+    }
+
+    /// The tables between our markers that `codexHooksBlock` did not write, each with
+    /// its keys, in the order they stood.
+    static func codexForeignTables(in inner: String) -> String {
+        let ours = Set(codexEvents.flatMap { ["[[hooks.\($0.event)]]", "[[hooks.\($0.event).hooks]]"] })
+        let headers = TOMLOutline(inner).statements.filter(\.isHeader)
+        var out: [String] = []
+        for (i, h) in headers.enumerated() {
+            let lineEnd = inner[h.start...].firstIndex(where: \.isNewline) ?? inner.endIndex
+            let header = inner[h.start..<lineEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+            if ours.contains(header) { continue }
+            let next = i + 1 < headers.count ? headers[i + 1].lineStart : inner.endIndex
+            out.append(inner[h.lineStart..<next].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return out.joined(separator: "\n\n")
     }
 
     /// What `installCodex` should do with the TOML it found.

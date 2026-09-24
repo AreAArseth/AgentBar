@@ -573,6 +573,26 @@ printf 'notify = ["/usr/bin/node", "%s/codex/notify.js"]\n' "$HOME/.agentbar/hoo
 "$CLI" install-hooks >/dev/null 2>&1
 check "a lone stray notify moves up"   '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 1 ] && [ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" = 5 ]'
 
+# A human's trust has to survive the next run. Codex's own writer puts [hooks.state]
+# at the end of the document, ahead of the trailing comment, which is our end marker,
+# so it lands inside our block, and replacing the block whole used to delete it.
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1];
+const ev=["session_start","session_end","user_prompt_submit","pre_tool_use","post_tool_use","stop","permission_request"];
+const state="[hooks.state]\n\n"+ev.map((e)=>`[hooks.state."${f}:${e}:0:0"]\ntrusted_hash = "sha256:${e}"\n\n`).join("");
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("# <<< agentbar <<<",state+"# <<< agentbar <<<"));' "$CODEX_CFG"
+check "trust seeded inside the block"  '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 7 ] && [ "$(grep -n "^\[hooks.state\]" "$CODEX_CFG" | cut -d: -f1)" -lt "$(grep -n "^# <<< agentbar <<<" "$CODEX_CFG" | cut -d: -f1)" ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "codex trust survives install"   '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 7 ]'
+check "codex trust moved below block"  '[ "$(grep -n "^\[hooks.state\]" "$CODEX_CFG" | cut -d: -f1)" -gt "$(grep -n "^# <<< agentbar <<<" "$CODEX_CFG" | cut -d: -f1)" ]'
+check "codex hooks block still once"   '[ "$(grep -c "^# >>> agentbar >>>" "$CODEX_CFG")" = 1 ] && [ "$(grep -c "^\[\[hooks.Stop\]\]" "$CODEX_CFG")" = 1 ]'
+CODEX_TRUSTED="$(cat "$CODEX_CFG")"
+"$CLI" install-hooks >/dev/null 2>&1
+check "trusted config is left alone"   '[ "$CODEX_TRUSTED" = "$(cat "$CODEX_CFG")" ]'
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "trusted config parses as TOML" 'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert len(d[\"hooks\"][\"state\"])==7; assert len(d[\"hooks\"][\"Stop\"])==1" "$CODEX_CFG"'
+fi
+
 # --- the record, as something you can hand to somebody ---------------------------
 fresh_home
 printf '%s\n%s\n' \
