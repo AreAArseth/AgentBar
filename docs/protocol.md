@@ -18,6 +18,7 @@ locks. All timestamps (`ts`) are Unix seconds.
   history.jsonl  one line per ended session     (writer: frontends only)
   decisions.jsonl one line per permission decision (writer: frontends only)
   history-seen.json  the CLI's previous tick, so one-shot commands can diff
+  claims.d/    <sessionId>/<claim> per open Cursor worker claim (writer and reader: the Cursor hook)
   hooks/       installed copies of the hook scripts (refreshed by the installer)
   claude-config-dir  optional hint: custom CLAUDE_CONFIG_DIR path (one line)
 ```
@@ -27,6 +28,16 @@ locks. All timestamps (`ts`) are Unix seconds.
 File name: `<sessionId>.json` where `sessionId` is sanitized `[A-Za-z0-9_.-]`,
 max 64 chars (fallback `"unknown"`). The file name is the session's identity;
 `sessionId` inside is informative.
+
+A writer that cannot name the session SHOULD write nothing rather than fall back:
+`unknown.json` is one row for every session that lacked an id, so unrelated
+sessions overwrite each other in it. The Cursor hook does this. Cursor's
+cloud-agent worker sends its tool events with every id empty, and its
+`sessionStart`/`sessionEnd` open and close *claims* on a run
+(`session_id: "<conversation>:<epoch>"`), several at once, so the hook keys the
+row on `conversation_id`, records each open claim under `claims.d/`, and deletes
+the row only when the last claim closes. Claims whose process is dead or that are
+older than 24 h count as closed.
 
 A writer MAY prefix that name (AgentBar's hooks do it for Codex, whose rows a
 second writer already named `codex-<thread-id>`), but the prefix is part of the
