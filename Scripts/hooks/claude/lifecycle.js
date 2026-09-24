@@ -71,6 +71,9 @@ setTimeout(run, 1000); // never hang the host session
 
 function run() {
   if (done) return; done = true;
+  // Cursor runs these hooks too, with its own ids; its session belongs to
+  // cursor.js, and a SessionEnd here could delete cursor.js's row (see update.js).
+  try { if (JSON.parse(input).cursor_version !== undefined) return process.exit(0); } catch {}
   // An unwritable state.d must not throw the hook out with a stack trace: report it
   // once and carry on, so the SessionEnd cleanup below still runs.
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }

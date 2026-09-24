@@ -148,6 +148,13 @@ function run() {
   if (started) return; started = true;
   let p = {};
   try { p = JSON.parse(raw || "{}"); } catch {}
+  // Cursor runs the hooks in ~/.claude/settings.json too, and hands them its own
+  // payload: a session_id that is not the conversation_id cursor.js names the row
+  // by, or no id at all. That session already has its writer, and a second one
+  // here re-tagged it "claude" — in cursor.js's own file when the ids agree, in a
+  // twin row or unknown.json when they don't. Claude Code never sends
+  // cursor_version; the env is no test, a `claude` in Cursor's terminal inherits it.
+  if (p && p.cursor_version !== undefined) return process.exit(0);
 
   // The session's own file is both the unit of state and the liveness marker; writing it on
   // any event also picks up sessions that predate the hook install (no SessionStart fired).

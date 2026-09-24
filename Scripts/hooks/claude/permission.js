@@ -267,6 +267,10 @@ function run() {
   let p;
   try { p = JSON.parse(raw); } catch { process.exit(0); }
   if (!p || typeof p !== "object" || Array.isArray(p)) process.exit(0);
+  // Cursor runs Claude's hooks with its own payload. It maps no event here today,
+  // but a Cursor session is veto-only (docs/permission-surfaces.md): an approval
+  // from this hook must never reach one.
+  if (p.cursor_version !== undefined) process.exit(0);
 
   // `hookName` is the only field that tells the two dialects apart — Claude's
   // payload has no such key, and Copilot's is this event's own name.
