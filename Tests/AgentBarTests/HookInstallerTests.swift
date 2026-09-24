@@ -218,6 +218,21 @@ import Testing
         #expect(Self.install(healthy) == healthy)
     }
 
+    /// A CRLF file: the line ending is one `Character` in Swift, and a search for
+    /// `"\n"` that misses it would take the rest of the file along with the stray line.
+    @Test func theRepairTakesOneLineOutOfACRLFFile() {
+        let healthy = Self.withBlock(Self.userConfig).replacingOccurrences(of: "\n", with: "\r\n")
+        let broken = healthy.replacingOccurrences(
+            of: "SHA256S = \"8e86beb8\"\r\n",
+            with: "SHA256S = \"8e86beb8\"\r\n" + Self.oursLine.replacingOccurrences(of: "\n", with: "\r\n"))
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a repair"); return
+        }
+        #expect(next == healthy)
+    }
+
     /// With no notify of the user's, the stray one is moved rather than dropped.
     @Test func aStrayLineWithoutAForeignNotifyMovesToTheTopLevel() {
         let mine = Self.userConfig.replacingOccurrences(of: "notify = [\"/Users/x/.codex", with: "# was: [\"/Users/x/.codex")

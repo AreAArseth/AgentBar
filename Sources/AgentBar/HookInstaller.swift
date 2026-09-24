@@ -438,9 +438,10 @@ enum HookInstaller {
         return .write(next, repaired: false)
     }
 
-    /// `range` widened to whole lines, including the line ending after it.
+    /// `range` widened to whole lines, including the line ending after it. `isNewline`
+    /// rather than `"\n"`: a CRLF ending is one `Character`, and never equals `"\n"`.
     static func wholeLines(of range: Range<String.Index>, in text: String) -> Range<String.Index> {
-        let end = text[range.upperBound...].firstIndex(of: "\n").map { text.index(after: $0) }
+        let end = text[range.upperBound...].firstIndex(where: \.isNewline).map { text.index(after: $0) }
             ?? text.endIndex
         return range.lowerBound..<end
     }
