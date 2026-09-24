@@ -1665,22 +1665,88 @@ function codexForeignTables(inner) {
   return out.join("\n\n");
 }
 
-// AgentBar's events with no trusted, enabled entry in Codex's [hooks.state]; mirrors
-// Diagnostics.codexUntrustedEvents. Codex keys an entry
-// "<source path>:<event>:<group>:<handler>" and writes `trusted_hash` into it when a
-// human accepts that hook. Presence is all this can see: whether the hash still
-// matches is Codex's own arithmetic, and Codex asks again when it does not.
+// AgentBar's events whose own hook has no trusted, enabled entry in Codex's
+// [hooks.state]; mirrors Diagnostics.codexUntrustedEvents. Codex keys an entry
+// "<source path>:<event>:<group>:<handler>", group and handler counted by position in
+// this file, and writes `trusted_hash` into it when a human accepts that hook. So
+// the key checked is the one AgentBar's own handler occupies: a user's hooks for the
+// same event come first, and their trust says nothing about ours. Presence is all
+// this can see: whether the hash still matches is Codex's own arithmetic.
 function codexUntrustedEvents(toml, cfgPath) {
-  const trusted = new Set();
-  const re = /^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^[\s][^\n]*\n?|[ \t]*\r?\n)*)/gm;
-  for (const m of toml.matchAll(re)) {
-    const [, key, body] = m;
-    if (!key.startsWith(cfgPath + ":")) continue;
-    if (!/^[ \t]*trusted_hash[ \t]*=/m.test(body) || /^[ \t]*enabled[ \t]*=[ \t]*false/m.test(body)) continue;
-    trusted.add(key.slice(cfgPath.length + 1).split(":")[0]);
+  const outline = tomlOutline(toml);
+  const keys = codexHookKeys(toml, outline, cfgPath);
+  const states = codexHookStates(toml, outline);
+  return CODEX_EVENTS.filter((e) => {
+    const st = keys[e] && states[keys[e]];
+    return !st || !st.trusted || st.disabled;
+  });
+}
+
+const codexEventLabel = (e) => e.replace(/(?!^)([A-Z])/g, "_$1").toLowerCase();
+const tomlLineFrom = (t, i) => { const nl = t.indexOf("\n", i); return t.slice(i, nl < 0 ? t.length : nl); };
+
+// A key statement's decoded dotted key and where its value starts, or null; mirrors
+// TOMLOutline.assignment.
+function tomlAssignment(t, s) {
+  if (s.header) return null;
+  const k = tomlKey(t, s.start, "=");
+  if (!k) return null;
+  let i = k.i + 1;
+  while (t[i] === " " || t[i] === "\t") i++;
+  return { key: k.parts, value: i };
+}
+
+// Event -> the state key of the handler that runs AgentBar's codex/hook.js; mirrors
+// Diagnostics.codexHookKeys. Groups are the event's [[hooks.<Event>]] tables in file
+// order, handlers the [[hooks.<Event>.hooks]] tables under each, counted from zero the
+// way Codex's discovery enumerates them.
+function codexHookKeys(t, outline, cfgPath) {
+  const out = {}, group = {}, handler = {};
+  let current = null;
+  for (const s of outline.statements) {
+    if (s.header) {
+      current = null;
+      if (!t.startsWith("[[", s.start)) continue;
+      const p = tomlKeyPath(t, s);
+      if (!p || p[0] !== "hooks" || p.length < 2) continue;
+      const ev = p[1];
+      if (p.length === 2) { group[ev] = (group[ev] ?? -1) + 1; handler[ev] = -1; }
+      else if (p.length === 3 && p[2] === "hooks" && group[ev] !== undefined) {
+        handler[ev] += 1;
+        current = { ev, key: `${cfgPath}:${codexEventLabel(ev)}:${group[ev]}:${handler[ev]}` };
+      }
+    } else if (current && !(current.ev in out)) {
+      const a = tomlAssignment(t, s);
+      if (a && a.key.length === 1 && a.key[0] === "command" &&
+          tomlLineFrom(t, a.value).includes("/.agentbar/hooks/codex/hook.js")) out[current.ev] = current.key;
+    }
   }
-  const label = (e) => e.replace(/(?!^)([A-Z])/g, "_$1").toLowerCase();
-  return CODEX_EVENTS.filter((e) => !trusted.has(label(e)));
+  return out;
+}
+
+// State key -> { trusted, disabled }, in any of TOML's spellings: [hooks.state."k"]
+// tables, "k".trusted_hash dotted keys under [hooks.state], or "k" = { ... } inline
+// tables; mirrors Diagnostics.codexHookStates.
+function codexHookStates(t, outline) {
+  const out = {};
+  let table = [];
+  for (const s of outline.statements) {
+    if (s.header) { table = t.startsWith("[[", s.start) ? null : tomlKeyPath(t, s); continue; }
+    const a = table && tomlAssignment(t, s);
+    if (!a) continue;
+    const full = table.concat(a.key);
+    if (full.length < 3 || full[0] !== "hooks" || full[1] !== "state") continue;
+    const value = tomlLineFrom(t, a.value);
+    const st = out[full[2]] || { trusted: false, disabled: false };
+    if (full.length === 4 && full[3] === "trusted_hash") st.trusted = true;
+    else if (full.length === 4 && full[3] === "enabled") st.disabled = value.startsWith("false");
+    else if (full.length === 3 && value.startsWith("{")) {
+      if (/(^|[{,\s])trusted_hash\s*=/.test(value)) st.trusted = true;
+      if (/(^|[{,\s])enabled\s*=\s*false/.test(value)) st.disabled = true;
+    } else continue;
+    out[full[2]] = st;
+  }
+  return out;
 }
 
 // What install-hooks does with Codex's notify key; mirrors HookInstaller.codexPlan.

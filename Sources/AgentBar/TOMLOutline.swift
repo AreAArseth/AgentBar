@@ -184,6 +184,22 @@ struct TOMLOutline {
         return cur.key(endingAt: "=")
     }
 
+    /// A key statement's decoded dotted key, and where its value starts. Nil for a
+    /// header or a key that cannot be read.
+    func assignment(of s: Statement, in text: String) -> (key: [String], value: String.Index)? {
+        guard !s.isHeader else { return nil }
+        var cur = Cursor(text.unicodeScalars, at: s.start)
+        guard let key = cur.key(endingAt: "=") else { return nil }
+        cur.advance()
+        cur.skipBlanks()
+        return (key, cur.i)
+    }
+
+    /// Whether a header opens an array of tables (`[[a.b]]`) rather than a table.
+    func isArrayHeader(_ s: Statement, in text: String) -> Bool {
+        s.isHeader && text[s.start...].hasPrefix("[[")
+    }
+
     /// The strings of an array a statement assigns to `key` (`key = ["a", 'b']`), and
     /// where the array ends. Read with the same quoting rules as everything else, so a
     /// `]` inside a quoted path is part of the path. Nil for any other shape.

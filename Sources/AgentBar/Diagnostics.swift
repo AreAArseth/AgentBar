@@ -418,33 +418,94 @@ enum Diagnostics {
                         : "Start a Codex session and accept the hooks it asks about.")]
     }
 
-    /// AgentBar's events that have no trusted, enabled entry in Codex's `[hooks.state]`.
+    /// AgentBar's events whose own hook has no trusted, enabled entry in Codex's
+    /// `[hooks.state]`.
     ///
-    /// Codex keys an entry "<source path>:<event>:<group>:<handler>" and writes a
-    /// `trusted_hash` into it when a human accepts that hook; `enabled = false` is the
-    /// human switching it off. One entry per event, not just `session_start`: trust is
-    /// given hook by hook, and the approval hook is the one that matters most.
+    /// Codex keys an entry "<source path>:<event>:<group>:<handler>", the group and
+    /// handler counted by position in this file, and writes a `trusted_hash` into it
+    /// when a human accepts that hook; `enabled = false` is the human switching it
+    /// off. So the key checked is the one AgentBar's own handler occupies: a user's
+    /// hooks for the same event come first, and their trust says nothing about ours.
     ///
     /// Presence is all this can see. Whether the hash still matches the hook is
     /// Codex's own arithmetic over its own structs; when it does not, Codex asks again
     /// at the next session, which is the one place that question has a reliable answer.
     static func codexUntrustedEvents(config: String, path: String) -> [String] {
-        var trusted = Set<String>()
-        let prefix = "\(path):"
-        let pattern = #"(?m)^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^\[\s][^\n]*\n?|[ \t]*\r?\n)*)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let ns = config as NSString
-        for m in regex.matches(in: config, range: NSRange(location: 0, length: ns.length)) {
-            let key = ns.substring(with: m.range(at: 1))
-            let body = ns.substring(with: m.range(at: 2))
-            guard key.hasPrefix(prefix),
-                  body.range(of: #"(?m)^[ \t]*trusted_hash[ \t]*="#, options: .regularExpression) != nil,
-                  body.range(of: #"(?m)^[ \t]*enabled[ \t]*=[ \t]*false"#, options: .regularExpression) == nil
-            else { continue }
-            let rest = key.dropFirst(prefix.count)
-            if let label = rest.split(separator: ":").first { trusted.insert(String(label)) }
+        let outline = TOMLOutline(config)
+        let keys = codexHookKeys(config, outline: outline, path: path)
+        let states = codexHookStates(config, outline: outline)
+        return HookInstaller.codexEvents.map(\.event).filter { event in
+            guard let key = keys[event], let state = states[key] else { return true }
+            return !state.trusted || state.disabled
         }
-        return HookInstaller.codexEvents.map(\.event).filter { !trusted.contains(codexEventLabel($0)) }
+    }
+
+    /// Event → the state key of the handler that runs AgentBar's `codex/hook.js`.
+    /// Groups are the event's `[[hooks.<Event>]]` tables in file order, handlers the
+    /// `[[hooks.<Event>.hooks]]` tables under each, both counted from zero the way
+    /// Codex's discovery enumerates them.
+    static func codexHookKeys(_ text: String, outline: TOMLOutline, path: String) -> [String: String] {
+        var out: [String: String] = [:]
+        var group: [String: Int] = [:], handler: [String: Int] = [:]
+        var current: (event: String, key: String)?
+        for s in outline.statements {
+            if s.isHeader {
+                current = nil
+                guard outline.isArrayHeader(s, in: text), let p = outline.keyPath(of: s, in: text),
+                      p.first == "hooks", p.count >= 2 else { continue }
+                let event = p[1]
+                if p.count == 2 {
+                    group[event, default: -1] += 1
+                    handler[event] = -1
+                } else if p.count == 3, p[2] == "hooks", let g = group[event] {
+                    handler[event, default: -1] += 1
+                    current = (event, "\(path):\(codexEventLabel(event)):\(g):\(handler[event]!)")
+                }
+            } else if let c = current, out[c.event] == nil,
+                      let a = outline.assignment(of: s, in: text), a.key == ["command"],
+                      text[a.value...].prefix(while: { !$0.isNewline }).contains("/.agentbar/hooks/codex/hook.js") {
+                out[c.event] = c.key
+            }
+        }
+        return out
+    }
+
+    /// State key → what `[hooks.state]` records for it, in any of TOML's spellings:
+    /// `[hooks.state."k"]` tables, `"k".trusted_hash = …` dotted keys under
+    /// `[hooks.state]`, or `"k" = { trusted_hash = … }` inline tables.
+    static func codexHookStates(_ text: String, outline: TOMLOutline)
+        -> [String: (trusted: Bool, disabled: Bool)] {
+        var out: [String: (trusted: Bool, disabled: Bool)] = [:]
+        var table: [String]? = []
+        for s in outline.statements {
+            if s.isHeader {
+                table = outline.isArrayHeader(s, in: text) ? nil : outline.keyPath(of: s, in: text)
+                continue
+            }
+            guard let t = table, let a = outline.assignment(of: s, in: text) else { continue }
+            let full = t + a.key
+            guard full.count >= 3, full[0] == "hooks", full[1] == "state" else { continue }
+            let key = full[2]
+            let value = String(text[a.value...].prefix(while: { !$0.isNewline }))
+            var state = out[key] ?? (false, false)
+            switch full.count {
+            case 4 where full[3] == "trusted_hash":
+                state.trusted = true
+            case 4 where full[3] == "enabled":
+                state.disabled = value.hasPrefix("false")
+            case 3 where value.hasPrefix("{"):
+                if value.range(of: #"(^|[{,\s])trusted_hash\s*="#, options: .regularExpression) != nil {
+                    state.trusted = true
+                }
+                if value.range(of: #"(^|[{,\s])enabled\s*=\s*false"#, options: .regularExpression) != nil {
+                    state.disabled = true
+                }
+            default:
+                continue
+            }
+            out[key] = state
+        }
+        return out
     }
 
     /// `SessionStart` → `session_start`, the spelling Codex uses in its state keys.

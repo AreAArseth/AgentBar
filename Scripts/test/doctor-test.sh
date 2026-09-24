@@ -148,6 +148,31 @@ check "a disabled codex hook warns"     '[ "$(status_of codex.hooks)" = warn ] &
 # The same file with CRLF endings and a blank line before the switch.
 grep -v '^enabled = false$' "$DCFG" | sed 's/$/\r/' > "$DCFG.tmp" && printf '\r\nenabled = false\r\n' >> "$DCFG.tmp" && mv "$DCFG.tmp" "$DCFG"
 check "a disabled hook warns under CRLF" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
+# The user's own SessionStart hook comes first, so AgentBar's sits in group 1. Trust
+# for the user's group 0 is not trust for AgentBar's; the key is cut to its event no more.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/usr/local/bin/mine"\n' > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
+check "the user's own trust is not ours" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionStart\."'
+printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
+check "trust at our own group passes"  '[ "$(status_of codex.hooks)" = ok ]'
+# TOML's other spellings of the same entries: inline tables and dotted keys.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state]\n'
+  for e in session_start session_end user_prompt_submit; do printf '"%s:%s:0:0" = { trusted_hash = "sha256:x" }\n' "$DCFG" "$e"; done
+  for e in pre_tool_use post_tool_use stop; do printf '"%s:%s:0:0".trusted_hash = "sha256:x"\n' "$DCFG" "$e"; done
+  printf '"%s:permission_request:0:0" = { trusted_hash = "sha256:x", enabled = false }\n' "$DCFG"
+} >> "$DCFG"
+check "inline and dotted trust are read" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest\."'
 
 # --- the rules file, reported the way the app reports it -------------------------
 # A rules file that will not parse is the one failure that is invisible by design:

@@ -123,20 +123,32 @@ import Testing
         #expect(row?.fix != nil)
     }
 
-    private func trustState(_ cfg: String, _ labels: [String], extra: String = "") -> String {
+    private func trustState(_ cfg: String, _ labels: [String], group: Int = 0, extra: String = "") -> String {
         "[hooks.state]\n\n" + labels.map {
-            "[hooks.state.\"\(cfg):\($0):0:0\"]\ntrusted_hash = \"sha256:x\"\n\($0 == "stop" ? extra : "")\n"
+            "[hooks.state.\"\(cfg):\($0):\(group):0\"]\ntrusted_hash = \"sha256:x\"\n\($0 == "stop" ? extra : "")\n"
         }.joined()
     }
 
     private static let labels = ["session_start", "session_end", "user_prompt_submit", "pre_tool_use",
                                  "post_tool_use", "stop", "permission_request"]
 
+    /// The block exactly as the installer writes it, pointing into this test's home.
+    private func block(_ config: String = "model = \"o3\"\n") -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: config, node: "/n", dir: home.appendingPathComponent(".agentbar/hooks").path)
+        else { return config }
+        return next
+    }
+
+    private static func block(at dir: String, after config: String) -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(config: config, node: "/n", dir: dir)
+        else { return config }
+        return next
+    }
+
     @Test func codexHooksAcceptedPass() throws {
         let cfg = home.appendingPathComponent(".codex/config.toml").path
-        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
-                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
-                  + trustState(cfg, Self.labels))
+        try write(".codex/config.toml", block() + trustState(cfg, Self.labels))
         #expect(check("codex.hooks")?.status == .ok)
         #expect(check("codex.hooks")?.fix == nil)
     }
@@ -145,9 +157,7 @@ import Testing
     /// Codex that would still skip the approval hook read as fully accepted.
     @Test func codexHooksPartlyAcceptedNameWhatIsMissing() throws {
         let cfg = home.appendingPathComponent(".codex/config.toml").path
-        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
-                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
-                  + trustState(cfg, ["session_start"]))
+        try write(".codex/config.toml", block() + trustState(cfg, ["session_start"]))
         let row = check("codex.hooks")
         #expect(row?.status == .warn)
         #expect(row?.detail?.contains("PermissionRequest") == true)
@@ -157,16 +167,66 @@ import Testing
     /// `enabled = false` is the human switching a hook off: trusted, and still not run.
     @Test func aDisabledCodexHookIsNotAccepted() {
         let cfg = "/h/.codex/config.toml"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: "model = \"o3\"\n")
         #expect(Diagnostics.codexUntrustedEvents(
-            config: trustState(cfg, Self.labels, extra: "enabled = false\n"), path: cfg) == ["Stop"])
-        #expect(Diagnostics.codexUntrustedEvents(config: trustState(cfg, Self.labels), path: cfg).isEmpty)
+            config: wired + trustState(cfg, Self.labels, extra: "enabled = false\n"), path: cfg) == ["Stop"])
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState(cfg, Self.labels), path: cfg).isEmpty)
         // CRLF, with a blank line before the switch: still switched off.
-        let crlf = trustState(cfg, Self.labels, extra: "\nenabled = false\n")
+        let crlf = (wired + trustState(cfg, Self.labels, extra: "\nenabled = false\n"))
             .replacingOccurrences(of: "\n", with: "\r\n")
         #expect(Diagnostics.codexUntrustedEvents(config: crlf, path: cfg) == ["Stop"])
         // Another file's trust says nothing about this one.
-        #expect(Diagnostics.codexUntrustedEvents(config: trustState("/other.toml", Self.labels),
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState("/other.toml", Self.labels),
                                                  path: cfg).count == 7)
+    }
+
+    /// The user's own hooks for the same events come first, so AgentBar's groups sit
+    /// at index 1. Trust for the user's index-0 hooks must not count as trust for
+    /// AgentBar's: before, the key was cut down to its event and this read `ok`.
+    @Test func trustForTheUsersOwnHooksIsNotTrustForAgentBars() {
+        let cfg = "/h/.codex/config.toml"
+        let mine = "model = \"o3\"\n\n" + ["SessionStart", "Stop", "PermissionRequest"].map {
+            "[[hooks.\($0)]]\n[[hooks.\($0).hooks]]\ntype = \"command\"\ncommand = \"/usr/local/bin/mine\"\n"
+        }.joined(separator: "\n")
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: mine)
+        let theirs = trustState(cfg, Self.labels, group: 0)
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + theirs, path: cfg)
+                == ["SessionStart", "Stop", "PermissionRequest"])
+
+        // AgentBar's own keys, at the group each event really has it in.
+        let ours = "[hooks.state.\"\(cfg):session_start:1:0\"]\ntrusted_hash = \"sha256:a\"\n"
+            + "[hooks.state.\"\(cfg):stop:1:0\"]\ntrusted_hash = \"sha256:a\"\n"
+            + "[hooks.state.\"\(cfg):permission_request:1:0\"]\ntrusted_hash = \"sha256:a\"\nenabled = false\n"
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + theirs + ours, path: cfg) == ["PermissionRequest"])
+    }
+
+    /// Handlers are counted inside their own group, groups across the file, and a
+    /// user's group after AgentBar's block moves nothing.
+    @Test func agentBarsKeyIsTheGroupAndHandlerItsCommandSitsIn() {
+        let cfg = "/h/.codex/config.toml"
+        let before = "[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = \"a\"\n"
+            + "[[hooks.PreToolUse.hooks]]\ncommand = \"b\"\n\n"
+            + "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ncommand = \"c\"\n"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: before)
+            + "\n[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = \"after\"\n"
+        let keys = Diagnostics.codexHookKeys(wired, outline: TOMLOutline(wired), path: cfg)
+        #expect(keys["PreToolUse"] == "\(cfg):pre_tool_use:2:0")
+        #expect(keys["SessionStart"] == "\(cfg):session_start:0:0")
+        #expect(keys.count == 7)
+    }
+
+    /// Codex writes tables, but TOML has three spellings for the same entry, and
+    /// quoted keys are decoded before they are compared.
+    @Test func everySpellingOfAStateEntryIsRead() {
+        let text = "[hooks.state]\n\"k1\".trusted_hash = \"sha256:a\"\n"
+            + "\"k2\" = { trusted_hash = \"sha256:b\", enabled = false }\n"
+            + "\"k\\u0033\" = { trusted_hash = \"sha256:c\" }\n\n"
+            + "[hooks.state.\"k4\"]\nenabled = false\n"
+        let states = Diagnostics.codexHookStates(text, outline: TOMLOutline(text))
+        #expect(states["k1"]?.trusted == true && states["k1"]?.disabled == false)
+        #expect(states["k2"]?.trusted == true && states["k2"]?.disabled == true)
+        #expect(states["k3"]?.trusted == true)
+        #expect(states["k4"]?.trusted == false && states["k4"]?.disabled == true)
     }
 
     /// No block, no row: a Codex user who has never had the hooks written should not
