@@ -70,8 +70,11 @@ test("ssh: the remote script prints live rows and drops dead ones", async () => 
   // Stand-in ssh: drop the options and the host, run the command with HOME set.
   // Its login shell is tcsh, and its rc prints a banner — the two things a real
   // host does that a plain `sh -c` stand-in would hide.
+  // tcsh where there is one (macOS ships it; a CI Linux image does not), plain sh
+  // otherwise — the banner still proves the separator handling either way.
+  const login = fs.existsSync("/bin/tcsh") ? "/bin/tcsh" : "/bin/sh";
   const fake = path.join(home, "fake-ssh");
-  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\necho "Welcome to devbox"\nHOME="${home}" exec /bin/tcsh -c "$*"\n`);
+  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\necho "Welcome to devbox"\nHOME="${home}" exec ${login} -c "$*"\n`);
   fs.chmodSync(fake, 0o755);
   try {
     const raw = await ssh.fetchRaw({ bin: fake, hosts: ["devbox"] });
