@@ -326,6 +326,33 @@ check "unparseable config untouched"   '[ "$(cat "$HOME/.gemini/settings.json")"
 CLAUDE_CONFIG_DIR="$HOME/.claude-custom" "$CLI" install-hooks >/dev/null 2>&1
 check "CLAUDE_CONFIG_DIR wired (contained)" 'grep -q PermissionRequest "$HOME/.claude-custom/settings.json"'
 
+# A rule can hold several handlers. Only AgentBar's leaves it on a reinstall: the
+# user's sibling stays in the same rule, with its matcher, and a rerun is a no-op.
+fresh_home
+mkdir -p "$HOME/.qwen" "$HOME/.gemini"
+QOLD="\"/usr/bin/node\" \"$HOME/.agentbar/hooks/claude/update.js\" pre"
+GOLD="\"/usr/bin/node\" \"$HOME/.agentbar/hooks/gemini/gemini.js\""
+"$NODE" -e '
+const fs = require("fs"), [q, g, qc, gc] = process.argv.slice(1);
+const rule = (cmd) => [{ matcher: "Bash", hooks: [{ type: "command", command: cmd }, { type: "command", command: "echo sibling" }] }];
+fs.writeFileSync(q, JSON.stringify({ hooks: { PreToolUse: rule(qc) } }));
+fs.writeFileSync(g, JSON.stringify({ hooks: { BeforeTool: rule(gc) } }));' \
+  "$HOME/.qwen/settings.json" "$HOME/.gemini/settings.json" "$QOLD" "$GOLD"
+"$CLI" install-hooks >/dev/null 2>&1
+QWEN_SNAP="$(cat "$HOME/.qwen/settings.json")"; GEMINI_SNAP="$(cat "$HOME/.gemini/settings.json")"
+"$CLI" install-hooks >/dev/null 2>&1
+sibling_kept() { # $1 file, $2 event, $3 marker
+  "$NODE" -e '
+const [f, ev, marker] = process.argv.slice(1);
+const rules = JSON.parse(require("fs").readFileSync(f, "utf8")).hooks[ev];
+const mine = rules.find((r) => r.matcher === "Bash");
+const ours = rules.flatMap((r) => r.hooks).filter((h) => h.command.includes(marker));
+process.exit(mine && mine.hooks.length === 1 && mine.hooks[0].command === "echo sibling" && ours.length === 1 ? 0 : 1);' "$@"
+}
+check "qwen: a user hook sharing AgentBar's rule survives"   'sibling_kept "$HOME/.qwen/settings.json" PreToolUse /.agentbar/hooks/claude/'
+check "gemini: a user hook sharing AgentBar's rule survives" 'sibling_kept "$HOME/.gemini/settings.json" BeforeTool /.agentbar/hooks/gemini/'
+check "qwen and gemini repair idempotent" '[ "$QWEN_SNAP" = "$(cat "$HOME/.qwen/settings.json")" ] && [ "$GEMINI_SNAP" = "$(cat "$HOME/.gemini/settings.json")" ]'
+
 
 # --- plan requests: the hook can't carry a plan approval, so the CLI must say so
 seed_plan() { # $1 name

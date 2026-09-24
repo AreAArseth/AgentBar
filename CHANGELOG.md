@@ -21,7 +21,8 @@ All notable changes to AgentBar are documented here. This project follows
   Antigravity's app-or-CLI check too, which looked at the same parent. The next
   install replaces an older entry where it stands, so no event gets a second
   AgentBar hook. Only AgentBar's own handler leaves a rule: a hook of yours that
-  shares the rule stays in it.
+  shares the rule stays in it. The Qwen and Gemini installers used to drop that
+  whole rule too, and now keep your hook the same way.
 
 ## 1.30.0 - 2026-09-24
 

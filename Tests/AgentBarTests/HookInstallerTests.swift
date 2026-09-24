@@ -261,4 +261,50 @@ import Testing
         let b = try JSONSerialization.data(withJSONObject: twice, options: .sortedKeys)
         #expect(a == b, "a second install must change nothing")
     }
+
+    // MARK: - Qwen and Gemini: the same rule shape, the same promise
+
+    /// One rule holding AgentBar's handler and the user's, under `event`. After
+    /// `merge` the user's rule is still there with its matcher and only its own
+    /// handler, AgentBar's appears exactly once in its own rule, and a second
+    /// merge changes nothing.
+    private static func expectSiblingSurvives(
+        event: String, ourCommand: String, marker: String,
+        merge: ([String: Any]) -> [String: Any]
+    ) throws {
+        let existing: [String: Any] = [
+            event: [["matcher": "Bash", "note": "mine",
+                     "hooks": [["type": "command", "command": ourCommand],
+                               ["type": "command", "command": "echo sibling"]]]],
+        ]
+        let once = merge(existing)
+        let rules = try #require(once[event] as? [[String: Any]])
+        #expect(rules.count == 2)
+        #expect(rules[0]["matcher"] as? String == "Bash")
+        #expect(rules[0]["note"] as? String == "mine")
+        let kept = try #require(rules[0]["hooks"] as? [[String: Any]])
+        #expect(kept.compactMap { $0["command"] as? String } == ["echo sibling"])
+        let ours = rules.flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
+            .compactMap { $0["command"] as? String }.filter { $0.contains(marker) }
+        #expect(ours.count == 1)
+
+        let a = try JSONSerialization.data(withJSONObject: once, options: .sortedKeys)
+        let b = try JSONSerialization.data(withJSONObject: merge(once), options: .sortedKeys)
+        #expect(a == b, "a second install must change nothing")
+    }
+
+    @Test func aUserHookSharingAQwenRuleSurvives() throws {
+        try Self.expectSiblingSurvives(
+            event: "PreToolUse", ourCommand: "\"/usr/bin/node\" \"\(Self.claudeDir)/update.js\" pre",
+            marker: "/.agentbar/hooks/claude/"
+        ) { HookInstaller.qwenHooks($0, node: "/usr/bin/node", dir: Self.claudeDir) }
+    }
+
+    @Test func aUserHookSharingAGeminiRuleSurvives() throws {
+        let command = "\"/usr/bin/node\" \"/Users/x/.agentbar/hooks/gemini/gemini.js\""
+        try Self.expectSiblingSurvives(event: "BeforeTool", ourCommand: command,
+                                       marker: "/.agentbar/hooks/gemini/") {
+            HookInstaller.geminiHooks($0, command: command)
+        }
+    }
 }
