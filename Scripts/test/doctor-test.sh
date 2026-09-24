@@ -173,6 +173,32 @@ DCFG="$HOME/.codex/config.toml"
   printf '"%s:permission_request:0:0" = { trusted_hash = "sha256:x", enabled = false }\n' "$DCFG"
 } >> "$DCFG"
 check "inline and dotted trust are read" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest\."'
+# A config that ends inside an open value accepts nothing, whatever it seems to hold.
+printf '"%s:permission_request:0:1" = { trusted_hash = "sha256:x" }\nnote = """\nnever closed\n' "$DCFG" >> "$DCFG"
+check "an open value accepts nothing"  '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Written, but not yet accepted"'
+# A comment naming our path does not make the user's handler ours; only the command
+# value counts. Read raw, the user's group 0 passed for AgentBar's.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/mine" # old: %s/.agentbar/hooks/codex/hook.js\n' "$HOME" > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
+check "a comment is not our handler"   '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionStart\."'
+# An inline entry is read as a table: a comment after it is not trust.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state]\n'
+  for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+    printf '"%s:%s:0:0" = {} # trusted_hash = "sha256:x"\n' "$DCFG" "$e"
+  done
+} >> "$DCFG"
+check "a comment is not trust"         '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Written, but not yet accepted"'
 
 # --- the rules file, reported the way the app reports it -------------------------
 # A rules file that will not parse is the one failure that is invisible by design:

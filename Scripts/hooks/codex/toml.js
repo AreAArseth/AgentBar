@@ -230,6 +230,39 @@ function tomlAssignment(t, s) {
   return { key: k.parts, value: i };
 }
 
+// The pairs of an inline table at t[i] ({ a = "x", b = false }): each dotted key
+// decoded, each value its decoded string or bare token, `quoted` telling them apart.
+// Null when it cannot be read, including a nested array or table; mirrors
+// TOMLOutline.inlineTable.
+function tomlInlineTable(t, i) {
+  if (t[i] !== "{") return null;
+  i++;
+  const blanks = () => { while (t[i] === " " || t[i] === "\t") i++; };
+  blanks();
+  const out = [];
+  if (t[i] === "}") return out;
+  for (;;) {
+    const k = tomlKey(t, i, "=");
+    if (!k) return null;
+    i = k.i + 1;
+    blanks();
+    if (t[i] === '"' || t[i] === "'") {
+      const r = tomlString(t, i);
+      if (!r) return null;
+      out.push({ key: k.parts, value: r.value, quoted: true });
+      i = r.i;
+    } else {
+      let token = "";
+      while (i < t.length && !/[,}\s\[{#]/.test(t[i])) token += t[i++];
+      if (!token) return null;
+      out.push({ key: k.parts, value: token, quoted: false });
+    }
+    blanks();
+    if (t[i] === ",") { i++; blanks(); continue; }
+    return t[i] === "}" ? out : null;
+  }
+}
+
 // Event -> the state key of the handler that runs AgentBar's codex/hook.js; mirrors
 // Diagnostics.codexHookKeys. Groups are the event's [[hooks.<Event>]] tables in file
 // order, handlers the [[hooks.<Event>.hooks]] tables under each, counted from zero the
@@ -252,7 +285,9 @@ function codexHookKeys(t, outline, cfgPath) {
     } else if (current && !(current.ev in out)) {
       const a = tomlAssignment(t, s);
       if (a && a.key.length === 1 && a.key[0] === "command" &&
-          tomlLineFrom(t, a.value).includes("/.agentbar/hooks/codex/hook.js")) out[current.ev] = current.key;
+          // The decoded value only: a comment after it naming our path does not make
+          // someone else's handler ours.
+          (tomlString(t, a.value)?.value ?? "").includes("/.agentbar/hooks/codex/hook.js")) out[current.ev] = current.key;
     }
   }
   return out;
@@ -275,8 +310,14 @@ function codexHookStates(t, outline) {
     if (full.length === 4 && full[3] === "trusted_hash") st.trusted = true;
     else if (full.length === 4 && full[3] === "enabled") st.disabled = value.startsWith("false");
     else if (full.length === 3 && value.startsWith("{")) {
-      if (/(^|[{,\s])trusted_hash\s*=/.test(value)) st.trusted = true;
-      if (/(^|[{,\s])enabled\s*=\s*false/.test(value)) st.disabled = true;
+      // Read as a table, so a comment after it counts for nothing.
+      const pairs = tomlInlineTable(t, a.value);
+      if (!pairs) continue;
+      for (const p of pairs) {
+        if (p.key.length !== 1) continue;
+        if (p.key[0] === "trusted_hash") st.trusted = true;
+        if (p.key[0] === "enabled" && !p.quoted && p.value === "false") st.disabled = true;
+      }
     } else continue;
     out[full[2]] = st;
   }

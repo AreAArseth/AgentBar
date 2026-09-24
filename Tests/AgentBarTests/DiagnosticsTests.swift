@@ -200,6 +200,43 @@ import Testing
         #expect(Diagnostics.codexUntrustedEvents(config: wired + theirs + ours, path: cfg) == ["PermissionRequest"])
     }
 
+    /// A comment naming our path does not make the user's handler ours: only the
+    /// decoded command value counts. Read raw to the line's end, the user's group 0
+    /// was taken for AgentBar's and its trust passed the check.
+    @Test func aCommentNamingOurPathIsNotOurHandler() {
+        let cfg = "/h/.codex/config.toml"
+        let mine = "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\n"
+            + "command = \"/mine\" # old: /h/.agentbar/hooks/codex/hook.js\n\n"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: mine)
+        #expect(Diagnostics.codexHookKeys(wired, outline: TOMLOutline(wired), path: cfg)["SessionStart"]
+                == "\(cfg):session_start:1:0")
+        let trustMine = "[hooks.state.\"\(cfg):session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n"
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState(cfg, Self.labels.filter { $0 != "session_start" }) + trustMine,
+                                                 path: cfg) == ["SessionStart"])
+    }
+
+    /// A config that ends inside an open value is one Codex reads differently, if at
+    /// all: nothing in it counts as accepted, whatever trust entries it seems to hold.
+    @Test func anIncompleteConfigAcceptsNothing() {
+        let cfg = "/h/.codex/config.toml"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: "model = \"o3\"\n")
+        let trusted = wired + trustState(cfg, Self.labels)
+        #expect(Diagnostics.codexUntrustedEvents(config: trusted, path: cfg).isEmpty)
+        #expect(Diagnostics.codexUntrustedEvents(config: trusted + "note = \"\"\"\nnever closed\n", path: cfg).count == 7)
+    }
+
+    /// An inline entry is read as a table: a comment after it is not part of it, and
+    /// a quoted "false" is a string, not a switch.
+    @Test func aCommentAfterAnInlineEntryCountsForNothing() {
+        let text = "[hooks.state]\n\"a\" = {} # trusted_hash = \"x\"\n"
+            + "\"c\" = { trusted_hash = \"x\" } # enabled = false\n"
+            + "\"d\" = { trusted_hash = \"x\", enabled = \"false\" }\n"
+        let states = Diagnostics.codexHookStates(text, outline: TOMLOutline(text))
+        #expect(states["a"]?.trusted != true)
+        #expect(states["c"]?.trusted == true && states["c"]?.disabled == false)
+        #expect(states["d"]?.trusted == true && states["d"]?.disabled == false)
+    }
+
     /// Handlers are counted inside their own group, groups across the file, and a
     /// user's group after AgentBar's block moves nothing.
     @Test func agentBarsKeyIsTheGroupAndHandlerItsCommandSitsIn() {

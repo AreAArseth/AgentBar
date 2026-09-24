@@ -1477,6 +1477,9 @@ function codexForeignTables(inner) {
 // this can see: whether the hash still matches is Codex's own arithmetic.
 function codexUntrustedEvents(toml, cfgPath) {
   const outline = tomlOutline(toml);
+  // A file that ends inside an open value reads differently to Codex, if it reads at
+  // all; nothing in it counts as accepted.
+  if (!outline.complete) return CODEX_EVENTS.slice();
   const keys = codexHookKeys(toml, outline, cfgPath);
   const states = codexHookStates(toml, outline);
   return CODEX_EVENTS.filter((e) => {

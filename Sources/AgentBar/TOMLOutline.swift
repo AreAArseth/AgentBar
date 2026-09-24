@@ -195,6 +195,22 @@ struct TOMLOutline {
         return (key, cur.i)
     }
 
+    /// The one-line string value starting at `i`, decoded; nil for any other value.
+    /// A comment after it is not part of it.
+    func string(at i: String.Index, in text: String) -> String? {
+        var cur = Cursor(text.unicodeScalars, at: i)
+        return cur.string()
+    }
+
+    /// The pairs of an inline table starting at `i` (`{ a = "x", b = false }`): each
+    /// dotted key decoded, each value as its decoded string or its bare token, with
+    /// `quoted` telling the two apart. Nil when it cannot be read, including a nested
+    /// array or table, which nothing here needs.
+    func inlineTable(at i: String.Index, in text: String) -> [(key: [String], value: String, quoted: Bool)]? {
+        var cur = Cursor(text.unicodeScalars, at: i)
+        return cur.inlineTable()
+    }
+
     /// Whether a header opens an array of tables (`[[a.b]]`) rather than a table.
     func isArrayHeader(_ s: Statement, in text: String) -> Bool {
         s.isHeader && text[s.start...].hasPrefix("[[")
@@ -279,6 +295,37 @@ struct TOMLOutline {
                 skipSpace()
                 if c == "," { advance(); continue }
                 guard c == "]" else { return nil }
+                advance()
+                return out
+            }
+        }
+
+        mutating func inlineTable() -> [(key: [String], value: String, quoted: Bool)]? {
+            guard c == "{" else { return nil }
+            advance()
+            skipBlanks()
+            var out: [(key: [String], value: String, quoted: Bool)] = []
+            if c == "}" { advance(); return out }
+            while true {
+                guard let key = key(endingAt: "=") else { return nil }
+                advance()
+                skipBlanks()
+                if c == "\"" || c == "'" {
+                    guard let v = string() else { return nil }
+                    out.append((key, v, true))
+                } else {
+                    var token = ""
+                    while let ch = c, ch != ",", ch != "}", ch != " ", ch != "\t",
+                          ch != "\n", ch != "\r", ch != "[", ch != "{", ch != "#" {
+                        token.unicodeScalars.append(ch)
+                        advance()
+                    }
+                    if token.isEmpty { return nil }
+                    out.append((key, token, false))
+                }
+                skipBlanks()
+                if c == "," { advance(); skipBlanks(); continue }
+                guard c == "}" else { return nil }
                 advance()
                 return out
             }

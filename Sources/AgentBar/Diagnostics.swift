@@ -432,6 +432,9 @@ enum Diagnostics {
     /// at the next session, which is the one place that question has a reliable answer.
     static func codexUntrustedEvents(config: String, path: String) -> [String] {
         let outline = TOMLOutline(config)
+        // A file that ends inside an open value reads differently to Codex, if it
+        // reads at all; nothing in it counts as accepted.
+        guard outline.isComplete else { return HookInstaller.codexEvents.map(\.event) }
         let keys = codexHookKeys(config, outline: outline, path: path)
         let states = codexHookStates(config, outline: outline)
         return HookInstaller.codexEvents.map(\.event).filter { event in
@@ -463,7 +466,9 @@ enum Diagnostics {
                 }
             } else if let c = current, out[c.event] == nil,
                       let a = outline.assignment(of: s, in: text), a.key == ["command"],
-                      text[a.value...].prefix(while: { !$0.isNewline }).contains("/.agentbar/hooks/codex/hook.js") {
+                      // The decoded value only: a comment after it naming our path
+                      // does not make someone else's handler ours.
+                      outline.string(at: a.value, in: text)?.contains("/.agentbar/hooks/codex/hook.js") == true {
                 out[c.event] = c.key
             }
         }
@@ -494,11 +499,11 @@ enum Diagnostics {
             case 4 where full[3] == "enabled":
                 state.disabled = value.hasPrefix("false")
             case 3 where value.hasPrefix("{"):
-                if value.range(of: #"(^|[{,\s])trusted_hash\s*="#, options: .regularExpression) != nil {
-                    state.trusted = true
-                }
-                if value.range(of: #"(^|[{,\s])enabled\s*=\s*false"#, options: .regularExpression) != nil {
-                    state.disabled = true
+                // Read as a table, so a comment after it counts for nothing.
+                guard let pairs = outline.inlineTable(at: a.value, in: text) else { continue }
+                for p in pairs where p.key.count == 1 {
+                    if p.key[0] == "trusted_hash" { state.trusted = true }
+                    if p.key[0] == "enabled" && !p.quoted && p.value == "false" { state.disabled = true }
                 }
             default:
                 continue

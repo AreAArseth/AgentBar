@@ -308,6 +308,16 @@ printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:ours"\n' 
 "$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
 check "codex: stands down for our key"  '[ ! -e "$HOME/.agentbar/state.d/codex-sd1.json" ]'
 
+# The user's handler whose comment names our path is still the user's: only the
+# command value counts. Read raw, its trusted key silenced the fallback.
+fresh_home
+mkdir -p "$HOME/.codex"
+CFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/mine" # old: /x/.agentbar/hooks/codex/hook.js\n\n%s\n' "$BLOCK" > "$CFG"
+printf "$AB_SESSION_START\n[hooks.state.\"%s:session_start:0:0\"]\ntrusted_hash = \"sha256:mine\"\n" "$CFG" >> "$CFG"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: a comment is not our hook" '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
 # An unreadable config must not silence it: a Codex session disappearing for a
 # reason nobody can see is worse than a duplicate row.
 fresh_home
