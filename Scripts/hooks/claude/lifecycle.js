@@ -25,6 +25,18 @@ const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 6
 // nothing else changes shape.
 const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
 const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
+// Who is really calling, read off the payload; "" means the row is not ours to
+// touch. Same rule, same reasons as the copy in update.js — keep them in step.
+const copilotChat = (p) => typeof p.transcript_path === "string" &&
+  /[\\/]GitHub\.copilot-chat[\\/]/i.test(p.transcript_path);
+const hostAgent = (p) => {
+  if (!p || typeof p !== "object") return AGENT;
+  if (p.cursor_version !== undefined) return "";
+  if (AGENT !== "claude") return AGENT;
+  if (copilotChat(p)) return "copilot";
+  if (p.timestamp !== undefined) return "";
+  return AGENT;
+};
 // The macOS app, or the CLI's watch/waybar heartbeat (any platform).
 // AGENTBAR_FORCE_APP=1|0 overrides for tests, same knob permission.js honors.
 const running = () => {
@@ -71,9 +83,10 @@ setTimeout(run, 1000); // never hang the host session
 
 function run() {
   if (done) return; done = true;
-  // Cursor runs these hooks too, with its own ids; its session belongs to
-  // cursor.js, and a SessionEnd here could delete cursor.js's row (see update.js).
-  try { if (JSON.parse(input).cursor_version !== undefined) return process.exit(0); } catch {}
+  // Another host's session: a Cursor SessionEnd here could delete cursor.js's row.
+  let agent = AGENT;
+  try { agent = hostAgent(JSON.parse(input)); } catch {}
+  if (!agent) return process.exit(0);
   // An unwritable state.d must not throw the hook out with a stack trace: report it
   // once and carry on, so the SessionEnd cleanup below still runs.
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }
@@ -159,7 +172,7 @@ function run() {
       writeAtomic(statePath, {
         ...kept,
         ...(back && back.recap ? { recap: back.recap } : {}),
-        agent: AGENT,
+        agent,
         state: back ? back.state : keepsWork ? (prev.state || "idle") : "idle",
         label: back ? back.label : keepsWork ? (prev.label || "") : "",
         project: cwd ? path.basename(cwd) : (prev.project || ""),

@@ -271,6 +271,13 @@ function run() {
   // but a Cursor session is veto-only (docs/permission-surfaces.md): an approval
   // from this hook must never reach one.
   if (p.cursor_version !== undefined) process.exit(0);
+  // VS Code's Copilot Chat runs these hooks too (from ~/.claude/settings.json, and
+  // from Copilot's own file). What it makes of an answer has never been measured,
+  // so its sessions keep their own prompt. On Claude's own install, any payload
+  // carrying `timestamp` is some other host: Claude Code never sends one.
+  if (typeof p.transcript_path === "string" &&
+      /[\\/]GitHub\.copilot-chat[\\/]/i.test(p.transcript_path)) process.exit(0);
+  if (agent === "claude" && p.timestamp !== undefined) process.exit(0);
 
   // `hookName` is the only field that tells the two dialects apart — Claude's
   // payload has no such key, and Copilot's is this event's own name.

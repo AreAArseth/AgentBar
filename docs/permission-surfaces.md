@@ -22,6 +22,7 @@ that can *approve* it. Several can only refuse.
 | Claude Code | 2.1.277 | `PermissionRequest` | **Approve** | `permission.js`, the full card |
 | Codex CLI | 0.155.0 | `PermissionRequest` | **Approve** | `permission.js`, since 1.28.0 |
 | Copilot CLI | 1.0.85 | `permissionRequest` | **Approve** | `permission.js` |
+| Copilot in VS Code | 1.137.0 | `PreToolUse`, unverified | unknown | status only — `Scripts/hooks/copilot/README.md` |
 | Antigravity (`agy` CLI) | 2.0 | `PreToolUse` | **Approve** | status only — see below |
 | Antigravity (desktop) | 2.0 | `PreToolUse` | Observe | status + keystroke approval |
 | Cursor | 2026.01.23 | `beforeShellExecution`, `preToolUse`, `beforeMCPExecution`, `beforeReadFile` | **Veto** | status only |
