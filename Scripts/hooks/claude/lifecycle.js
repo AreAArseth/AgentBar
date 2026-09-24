@@ -8,6 +8,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
+const agentPid = require("../shared/agent-pid");
 
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
@@ -164,7 +165,7 @@ function run() {
         sessionId: id ? rowId(id) : (prev.sessionId || ""),
         entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || prev.entrypoint || "",
         term_program: process.env.TERM_PROGRAM || prev.term_program || "",
-        pid: process.ppid,
+        pid: agentPid(),
         started: continues ? prev.started === true : false,
         // Set once and preserved from then on — elapsed depends on it never moving.
         started_at: prev.started_at || ts,

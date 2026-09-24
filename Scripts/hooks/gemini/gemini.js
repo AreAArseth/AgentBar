@@ -3,6 +3,7 @@
 // stdin payload's hook_event_name) to a per-session state file in
 // ~/.agentbar/state.d/. Observe-only: writes state, emits nothing, exits fast.
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
+const agentPid = require("../shared/agent-pid");
 
 const AGENT = "gemini";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
@@ -116,9 +117,9 @@ function run() {
       project: (cwd || prev.cwd) ? path.basename(cwd || prev.cwd) : (prev.project || ""),
       cwd: cwd || prev.cwd || "", sessionId: id,
       entrypoint: "cli", term_program: process.env.TERM_PROGRAM || "",
-      // The shell running Gemini's command string execs the single command, so ppid
-      // is the gemini process itself, not a dead intermediate sh (verified on macOS).
-      pid: process.ppid, started: state !== "idle" ? true : (prev.started || false),
+      // Gemini runs the command string through a shell; on macOS that shell execs the
+      // single command, and where it does not (dash) agentPid steps over it.
+      pid: agentPid(), started: state !== "idle" ? true : (prev.started || false),
       started_at: prev.started_at || ts, // set once; elapsed depends on it never moving
       ...(typeof j.prompt === "string" && j.prompt.trim() ? { prompt: oneLine(j.prompt) } : {}),
       ts,

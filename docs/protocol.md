@@ -46,7 +46,8 @@ session becomes two rows. The cap counts the prefix.
                                // "cloud" = the session runs on another machine — a vendor's infrastructure,
                                // or one of your own hosts mirrored over ssh; the row opens `url`
   "term_program": "WarpTerminal", // $TERM_PROGRAM of the hosting terminal ("" ok)
-  "pid": 12345,                // the agent process (hook's ppid) — liveness handle
+  "pid": 12345,                // the agent process (hook's ppid, past any `sh -c` wrapper
+                               // that did not exec — dash doesn't) — liveness handle
   "started": true,             // false = session opened but no real activity yet
   "ts": 1784844796,
 
