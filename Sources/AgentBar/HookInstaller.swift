@@ -246,14 +246,23 @@ enum HookInstaller {
         // Drop earlier AgentBar entries from EVERY event (path match), so events we
         // no longer register (e.g. Notification) don't linger from old installs,
         // and a command whose shape changed (the `exec` prefix) replaces its old self.
+        // Only AgentBar's own handlers go: a rule can hold several, and the user's
+        // siblings in it stay, with the rule, unless nothing of theirs is left.
+        let ours: ([String: Any]) -> Bool = {
+            ($0["command"] as? String)?.contains("/.agentbar/hooks/claude/") == true
+        }
         for (event, value) in hooks {
-            guard var rules = value as? [[String: Any]] else { continue }
-            rules.removeAll { rule in
-                ((rule["hooks"] as? [[String: Any]]) ?? []).contains { cmd in
-                    (cmd["command"] as? String)?.contains("/.agentbar/hooks/claude/") == true
-                }
+            guard let rules = value as? [[String: Any]] else { continue }
+            let kept: [[String: Any]] = rules.compactMap { rule in
+                guard let handlers = rule["hooks"] as? [[String: Any]], handlers.contains(where: ours)
+                else { return rule }
+                let theirs = handlers.filter { !ours($0) }
+                if theirs.isEmpty { return nil }
+                var rule = rule
+                rule["hooks"] = theirs
+                return rule
             }
-            if rules.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = rules }
+            if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
         }
 
         for e in claudeEvents {

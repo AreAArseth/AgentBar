@@ -238,4 +238,27 @@ import Testing
         let b = try JSONSerialization.data(withJSONObject: twice, options: .sortedKeys)
         #expect(a == b, "a second install must change nothing")
     }
+
+    /// A rule may hold several handlers. Only AgentBar's own leaves it: the user's
+    /// sibling stays, in the same rule, with the rule's matcher and other keys.
+    @Test func aUserHookSharingARuleWithAgentBarsSurvives() throws {
+        let existing: [String: Any] = [
+            "PreToolUse": [["matcher": "Bash", "note": "mine",
+                            "hooks": [["type": "command", "command": "\"/usr/bin/node\" \"\(Self.claudeDir)/update.js\" pre"],
+                                      ["type": "command", "command": "echo sibling"]]]],
+        ]
+        let once = HookInstaller.claudeHooks(existing, node: "/usr/bin/node", dir: Self.claudeDir)
+        let rules = try #require(once["PreToolUse"] as? [[String: Any]])
+        #expect(rules.count == 2)
+        #expect(rules[0]["matcher"] as? String == "Bash")
+        #expect(rules[0]["note"] as? String == "mine")
+        let kept = try #require(rules[0]["hooks"] as? [[String: Any]])
+        #expect(kept.compactMap { $0["command"] as? String } == ["echo sibling"])
+        #expect(Self.agentBarCommands(once)["PreToolUse"]?.count == 1)
+
+        let twice = HookInstaller.claudeHooks(once, node: "/usr/bin/node", dir: Self.claudeDir)
+        let a = try JSONSerialization.data(withJSONObject: once, options: .sortedKeys)
+        let b = try JSONSerialization.data(withJSONObject: twice, options: .sortedKeys)
+        #expect(a == b, "a second install must change nothing")
+    }
 }

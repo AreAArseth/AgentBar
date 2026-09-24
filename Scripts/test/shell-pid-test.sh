@@ -127,6 +127,8 @@ cat > "$HOME/.claude/settings.json" <<EOF
   "SessionStart":[{"hooks":[{"type":"command","command":"\"/usr/bin/node\" \"$OLD/lifecycle.js\" start"}]},
                   {"hooks":[{"type":"command","command":"echo mine"}]}],
   "Stop":[{"hooks":[{"type":"command","command":"\"/usr/bin/node\" \"$OLD/update.js\" stop"}]}],
+  "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"\"/usr/bin/node\" \"$OLD/update.js\" pre"},
+                                          {"type":"command","command":"echo sibling"}]}],
   "Notification":[{"hooks":[{"type":"command","command":"\"/usr/bin/node\" \"$OLD/update.js\" notify"}]}]
 },"theme":"dark"}
 EOF
@@ -146,6 +148,10 @@ shape() {
 }
 check "one exec entry per event, none left bare" '[ "$(shape)" = "PermissionRequest:1:exec PostToolUse:1:exec PreCompact:1:exec PreToolUse:1:exec SessionEnd:1:exec SessionStart:1:exec Stop:1:exec UserPromptSubmit:1:exec" ]'
 check "the user's own hook survives"   'grep -q "echo mine" "$HOME/.claude/settings.json" && grep -q "\"theme\": \"dark\"" "$HOME/.claude/settings.json"'
+check "a user hook sharing AgentBar's rule survives in it" '"$NODE" -e "
+  const r = JSON.parse(require(\"fs\").readFileSync(process.env.HOME + \"/.claude/settings.json\", \"utf8\")).hooks.PreToolUse;
+  const mine = r.find((x) => x.matcher === \"Bash\");
+  process.exit(mine && mine.hooks.length === 1 && mine.hooks[0].command === \"echo sibling\" ? 0 : 1);"'
 check "the repair is idempotent"       '[ "$SNAP" = "$(cat "$HOME/.claude/settings.json")" ]'
 
 echo

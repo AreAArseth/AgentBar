@@ -20,7 +20,8 @@ All notable changes to AgentBar are documented here. This project follows
   Claude, Qwen, Copilot, Gemini, Cursor and Antigravity scripts, and fixes
   Antigravity's app-or-CLI check too, which looked at the same parent. The next
   install replaces an older entry where it stands, so no event gets a second
-  AgentBar hook.
+  AgentBar hook. Only AgentBar's own handler leaves a rule: a hook of yours that
+  shares the rule stays in it.
 
 ## 1.30.0 - 2026-09-24
 
