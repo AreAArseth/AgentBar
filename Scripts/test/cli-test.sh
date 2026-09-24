@@ -78,6 +78,17 @@ seed_session h3 tool $$
 seed_session h3 idle $$
 "$CLI" status >/dev/null 2>&1
 check "idle is not an ending"          '[ ! -f "$HOME/.agentbar/history.jsonl" ]'
+# A row the ssh mirror wrote is another machine's session: its turn ending, or
+# its row going when the connection is lost, is not an ending this machine saw.
+fresh_home
+mirror_row() { printf '{"agent":"claude","state":"%s","label":"","project":"host-a: api","cwd":"","sessionId":"ssh-host-a-m1","entrypoint":"cloud","source":"ssh","host":"host-a","pid":%s,"started":true,"ts":%s}' "$1" $$ "$(date +%s)" > "$HOME/.agentbar/state.d/ssh-host-a-m1.json"; }
+mirror_row thinking
+"$CLI" status >/dev/null 2>&1
+mirror_row done
+"$CLI" status >/dev/null 2>&1
+rm -f "$HOME/.agentbar/state.d/ssh-host-a-m1.json"
+"$CLI" status >/dev/null 2>&1
+check "a mirrored machine's session leaves no record" '[ ! -f "$HOME/.agentbar/history.jsonl" ] || ! grep -q ssh-host-a-m1 "$HOME/.agentbar/history.jsonl"'
 
 # --- history: the day's account, read back out of history.jsonl
 # The clock is pinned to noon. Seeded as "an hour ago" against the real clock,

@@ -32,13 +32,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // there is no session for `agentbar://focus` to find.
             defer { URLCommands.storesReady() }
             self.mascot.update(sessions: sessions, systemColor: IconColor.system)
-            SoundCenter.shared.observe(sessions)
+            // What records, sounds and announces hears only this Mac's sessions: a
+            // mirrored machine's turn is status, and its row disappearing after a
+            // lost connection is not an ending anybody saw.
+            let local = Session.local(sessions)
+            SoundCenter.shared.observe(local)
             // Takes the git baseline a session's record is later measured against.
             // A session that appears and ends inside one tick gets none, which is
             // correct: there is no span there to measure.
-            WorkDiff.shared.observe(sessions)
-            self.history.observe(sessions)
-            Notifier.shared.observe(sessions)
+            WorkDiff.shared.observe(local)
+            self.history.observe(local)
+            Notifier.shared.observe(local)
             self.controller.apply(sessions)
             if self.islandRunning {
                 self.island.apply(sessions: sessions, requests: self.requestStore.requests)

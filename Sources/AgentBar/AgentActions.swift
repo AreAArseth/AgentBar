@@ -57,7 +57,7 @@ enum AgentActions {
         // A cloud session lives at a URL, not in anything local: open it and stop —
         // there is no tty to resolve and no blocked hook to release. Checked first
         // so no local-only path can ever run for a row the poller wrote.
-        if s.entrypoint == "cloud" {
+        if s.isOffMachine {
             if let url = URL(string: s.url), openableCloudURL(url) {
                 NSWorkspace.shared.open(url)
             } else {
@@ -201,7 +201,7 @@ enum AgentActions {
     /// lets **anybody** write a row, so the poller's own discipline is not the place
     /// to rely on.
     static func mayKeystroke(_ session: Session) -> Bool {
-        session.entrypoint != "cloud" && Agent.byID(session.agentID).approveKeys != nil
+        !session.isOffMachine && Agent.byID(session.agentID).approveKeys != nil
     }
 
     /// Inline strip on keystroke-backed permission rows (Antigravity, Codex, Copilot).

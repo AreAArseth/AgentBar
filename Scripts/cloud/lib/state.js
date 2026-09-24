@@ -57,6 +57,17 @@ const listIds = (stateDir, prefix) => {
     .map((n) => n.slice(0, -".json".length));
 };
 
+// A host inside its grace is not known to be gone, and nothing it says is
+// current: its rows stay, marked stale so a frontend shows them dimmed as a lost
+// connection, until it answers again (a fresh row carries no mark) or the grace
+// runs out and reconcile removes them.
+const markStale = (stateDir, ids) => {
+  for (const id of ids) {
+    const prev = readRow(stateDir, id);
+    if (prev && prev.stale !== true) writeRow(stateDir, { ...prev, stale: true });
+  }
+};
+
 // Delete this vendor's rows that a fresh successful poll no longer contains.
 // Prefix-scoped on purpose: one vendor's outage must never touch another's rows.
 const reconcile = (stateDir, prefix, keepIds) => {
@@ -68,4 +79,4 @@ const reconcile = (stateDir, prefix, keepIds) => {
   }
 };
 
-module.exports = { safeId, oneLine, writeRow, readRow, listIds, reconcile };
+module.exports = { safeId, oneLine, writeRow, readRow, listIds, reconcile, markStale };

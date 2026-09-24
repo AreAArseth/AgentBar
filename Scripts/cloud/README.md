@@ -52,8 +52,13 @@ is still alive **there**. Rows read `gpu: my-repo`; a click opens `ssh://<host>`
 - **Read-only.** A remote session waiting on permission shows *Waiting on you on
   gpu* and is answered where it runs — there is no hook on this Mac blocked behind
   it, and an Allow here would answer nothing.
-- A host that is down or asleep is logged and simply shows no rows; the others
-  keep working.
+- A host that is down or asleep keeps its rows for a short grace, **dimmed as a
+  lost connection** (`stale: true`), then they go — never as finished sessions:
+  a mirrored machine's rows never reach the app's history, sounds or
+  notifications. The others keep working.
+- Rows are named for their machine (`host`, from `name`), never "Cloud" — that
+  word is kept for the vendors' clouds, told apart by the adapter that wrote the
+  row (`source`).
 - Host strings are checked before they reach `ssh`'s argv — letters, digits, `.`,
   `_`, `-`, one `@`, never a leading dash.
 

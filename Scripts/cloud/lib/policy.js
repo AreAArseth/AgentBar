@@ -40,9 +40,14 @@ const tsFrozen = (state) => isTerminal(state) || state === "idle";
 // that the rule survives the next adapter and the next vendor status string.
 const cloudState = (state) => (state === "permission" ? "question" : state);
 
-const toProtocolRow = (run, { agentId, prefix }, now, pid) => ({
+const toProtocolRow = (run, { agentId, prefix, vendor }, now, pid) => ({
   // An adapter that mirrors several agents (ssh) names each row's own.
   agent: run.agentId || agentId,
+  // Which adapter wrote the row. Frontends tell a vendor's cloud from the user's
+  // own machines by this, never by reading a label or a url.
+  source: vendor,
+  // The configured name of the machine a mirrored row runs on (ssh only).
+  ...(run.host ? { host: oneLine(run.host, 24) } : {}),
   state: cloudState(run.state),
   label: oneLine(run.label, 80),
   project: oneLine(run.project, 40),

@@ -488,3 +488,22 @@ refuse to aim a keystroke at a row carrying `entrypoint: "cloud"` whatever its
 AgentBar's halves do: the poller rewrites `permission` to `question` as it builds
 the row, and the app checks the entrypoint before it types anything
 (`AgentActions.mayKeystroke`).
+
+Three optional fields tell a frontend where an off-machine row actually runs,
+without it reading a label or a url:
+
+```json
+{
+  "source": "ssh",   // which poller adapter wrote it: "devin" | "cursor" | "codex" | "ssh"
+  "host": "host-a",  // ssh only: the machine's configured name, one line, <= 24 chars
+  "stale": true      // the poller missed this host's last poll; this is what it said last
+}
+```
+
+A row with `source: "ssh"` is one of the **user's own machines**, mirrored — not a
+vendor's cloud. Frontends name it by `host` (or "Remote" when there is none), never
+"Cloud", which would say its data left the user's machines. Its turns, its ends and
+its disappearance after a lost connection are that machine's, not this one's: they
+MUST NOT reach history, sounds, notifications or work diffs. A `stale` row is shown
+dimmed as a lost connection and never as finished; the poller clears the mark with
+the next answer, or removes the row when the host's grace runs out.

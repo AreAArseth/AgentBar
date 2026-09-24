@@ -17,7 +17,7 @@ const os = require("os");
 const path = require("path");
 
 const config = require("./lib/config");
-const { writeRow, readRow, reconcile, listIds } = require("./lib/state");
+const { writeRow, readRow, reconcile, listIds, markStale } = require("./lib/state");
 const { keepRow, toProtocolRow } = require("./lib/policy");
 
 const ADAPTERS = [
@@ -68,6 +68,7 @@ const pollVendor = async (v) => {
   // A host that missed this poll but is still within its grace keeps its rows
   // as they were (ssh); every other adapter passes nothing here.
   const graced = keepPrefixes.flatMap((p) => listIds(stateDir, p));
+  markStale(stateDir, graced);
   reconcile(stateDir, v.adapter.prefix, written.concat(graced));
   if (v.failures > 0) log(`${v.adapter.vendor}: recovered`);
   v.failures = 0;
