@@ -3,6 +3,24 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **Cursor cloud-agent runs no longer share one `unknown.json` row, and a subagent
+  finishing no longer removes its parent.** Cursor's cloud-agent worker (the one the
+  IDE hosts) sends its tool events with `conversation_id`, `generation_id` and
+  `session_id` all empty, so every run in that process wrote to the same
+  `state.d/unknown.json`. Those events now write nothing. Nothing in them says which
+  run they belong to, and a shared row is worse than none. The worker's
+  `sessionStart`/`sessionEnd` turn out to open and close *claims* on a run, several
+  at once and renewed while it works, and a subagent opens more on its parent. Each
+  claim's end deleted the run's row. Now the row belongs to the conversation, each
+  claim is recorded under `~/.agentbar/claims.d/`, and only the last one closing ends
+  the session. A new claim on a row that is already shown leaves its state alone.
+  Rows are no longer named after a turn's `generation_id` either. The Cursor CLI,
+  which sends one id for the whole session, behaves as before.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added

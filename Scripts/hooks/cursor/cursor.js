@@ -8,7 +8,8 @@ const fs = require("fs"), os = require("os"), path = require("path"), cp = requi
 const AGENT = "cursor";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 
 // Cursor event name -> AgentBar state. Exactly the events HookInstaller registers;
 // the permission-gating before* hooks are deliberately not used by this bridge.
@@ -18,7 +19,7 @@ const STATE = {
   stop: "done", afterAgentResponse: "done",
 };
 
-const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
+const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64);
 // A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
 // JSONSerialization reject the whole file, and an unreadable state file hides the
 // session from every frontend until the next clean write. It cannot be caught after
@@ -50,6 +51,25 @@ const running = () => {
 };
 const writeAtomic = (f, o) => { const t = f + "." + process.pid + ".tmp"; fs.writeFileSync(t, JSON.stringify(o, paired)); fs.renameSync(t, f); };
 
+// Claims still open on a run. One whose worker is gone, or older than any row may
+// live, was left by a crash: it holds nothing open and is cleared on the way past.
+const openClaims = (dir) => {
+  let names = []; try { names = fs.readdirSync(dir); } catch { return 0; }
+  let open = 0;
+  for (const f of names) {
+    if (f.endsWith(".tmp")) continue;
+    const p = path.join(dir, f);
+    let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+    let live = Date.now() / 1000 - (Number(c.ts) || 0) < 86400;
+    if (live && Number(c.pid) > 0) {
+      try { process.kill(Number(c.pid), 0); } catch (e) { live = e.code === "EPERM"; }
+    }
+    if (live) open++;
+    else try { fs.rmSync(p, { force: true }); } catch {}
+  }
+  return open;
+};
+
 // One diagnostic per process, never more: this bridge fires on every event, so an
 // unconditional log would flood the host agent's stderr. Self-swallowing and
 // stderr-only — it can neither throw nor delay the exit.
@@ -73,14 +93,38 @@ function run() {
   const state = STATE[event];
   if (!state) return process.exit(0);
 
-  const id = j.conversation_id || j.generation_id || j.session_id || "";
+  // The session is the conversation. generation_id names one turn, not a session.
+  const id = j.conversation_id || j.session_id || "";
+  // Cursor's cloud-agent worker sends its tool events with every id empty. Nothing
+  // in them says whose they are, and one shared file would fold every run in that
+  // process into a single row, so an event no session can be named for writes nothing.
+  if (!safeId(id)) return process.exit(0);
+  // The same worker's sessionStart/sessionEnd open and close a *claim* on the run
+  // ("<conversation>:<epoch>" in session_id). A run holds several at once (a subagent
+  // takes its own on the parent) and renews them while it works, so one claim
+  // closing is not the session ending.
+  const claim = j.session_id && j.session_id !== id ? safeId(String(j.session_id).replace(/:/g, "_")) : "";
+  const claims = path.join(base, "claims.d", safeId(id));
   const cwd = j.cwd || (Array.isArray(j.workspace_roots) && j.workspace_roots[0]) || "";
   const statePath = path.join(stateDir, safeId(id) + ".json");
 
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }
   if (state === "end") {
+    if (claim) {
+      try { fs.rmSync(path.join(claims, claim), { force: true }); } catch (e) { warn("claim remove " + claim, e); }
+      if (openClaims(claims) > 0) return process.exit(0);
+    }
+    try { fs.rmdirSync(claims); } catch {} // only when empty: a claim opening right now keeps it
     try { fs.rmSync(statePath, { force: true }); } catch (e) { warn("state remove " + statePath, e); }
     return process.exit(0);
+  }
+  if (state === "idle" && claim) {
+    try {
+      fs.mkdirSync(claims, { recursive: true });
+      writeAtomic(path.join(claims, claim), { pid: process.ppid, ts: Math.floor(Date.now() / 1000) });
+    } catch (e) { warn("claim write " + claim, e); }
+    // Another claim on a run already shown says nothing about what it is doing.
+    if (fs.existsSync(statePath)) return process.exit(0);
   }
   // App/watcher down on session start -> sweep leftovers from a prior crash, but
   // only files whose agent process is actually gone: other agents' sessions
