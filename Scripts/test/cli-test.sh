@@ -511,6 +511,67 @@ grep -v "^notify = " "$CODEX_CFG" > "$HOME/.codex/c.tmp" && mv "$HOME/.codex/c.t
 check "notify removed for the test"    '! grep -q "^notify = " "$CODEX_CFG"'
 "$CLI" install-hooks >/dev/null 2>&1
 check "notify reinstalled beside block" 'grep -q "^notify = " "$CODEX_CFG" && grep -q "^# >>> agentbar >>>" "$CODEX_CFG"'
+# Where it goes matters as much as whether: after a table header a bare key is that
+# table's, and every release up to 1.30.0 appended notify at the end of the file.
+check "codex notify is top-level"      '[ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" -lt "$(grep -n "^\[profiles.mine\]" "$CODEX_CFG" | cut -d: -f1)" ]'
+
+# The config that broke Codex: the user's own notify on line 4, a file ending in a
+# string table, and our line appended under it by an earlier release. Codex read it
+# as a key of [shell_environment_policy.set] and refused to load the file.
+fresh_home
+mkdir -p "$HOME/.codex"
+CODEX_CFG="$HOME/.codex/config.toml"
+cat > "$CODEX_CFG" <<'EOF'
+model = "gpt-5"
+model_reasoning_effort = "high"
+approvals_reviewer = "guardian_subagent"
+notify = ["/home/user/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+service_tier = "default"
+
+[projects."/home/user"]
+trust_level = "trusted"
+
+[mcp_servers.node_repl]
+command = "node"
+args = ["repl.js"]
+
+[mcp_servers.node_repl.env]
+NODE_OPTIONS = ""
+
+[shell_environment_policy.set]
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "8e86beb8"
+EOF
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "a notify on line 4 is foreign"  'grep -q "already has a notify hook" "$TESTROOT/codex-out" && [ "$(grep -c "notify = " "$CODEX_CFG")" = 1 ]'
+check "the foreign notify still leads" '[ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" = 4 ]'
+CODEX_HEALTHY="$(cat "$CODEX_CFG")"
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+const t=fs.readFileSync(f,"utf8").replace(/(SHA256S = "8e86beb8"\n)/,
+  `$1notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`);
+fs.writeFileSync(f,t);' "$CODEX_CFG" "$HOME/.agentbar/hooks"
+check "the broken shape is seeded"     '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 2 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "the stray notify is taken out"  '[ "$CODEX_HEALTHY" = "$(cat "$CODEX_CFG")" ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "the repair is idempotent"       '[ "$CODEX_HEALTHY" = "$(cat "$CODEX_CFG")" ]'
+# Where a TOML parser is at hand, ask it too: notify is the user's, at the top level.
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "codex config parses as TOML"  'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert d[\"notify\"][1]==\"turn-ended\"; assert \"notify\" not in d[\"shell_environment_policy\"][\"set\"]" "$CODEX_CFG"'
+fi
+# The hand workaround (our stray line commented out) keeps AgentBar standing down.
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/(SHA256S = "8e86beb8"\n)/,
+  `$1# notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`));' "$CODEX_CFG" "$HOME/.agentbar/hooks"
+CODEX_COMMENTED="$(cat "$CODEX_CFG")"
+"$CLI" install-hooks >/dev/null 2>&1
+check "the commented workaround stays" '[ "$CODEX_COMMENTED" = "$(cat "$CODEX_CFG")" ]'
+# With no notify of the user's, the stray one moves up rather than disappearing.
+grep -v "SkyComputerUseClient" "$CODEX_CFG" | grep -v "^# notify" > "$HOME/.codex/c.tmp" && mv "$HOME/.codex/c.tmp" "$CODEX_CFG"
+printf 'notify = ["/usr/bin/node", "%s/codex/notify.js"]\n' "$HOME/.agentbar/hooks" >> "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "a lone stray notify moves up"   '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 1 ] && [ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" = 5 ]'
 
 # --- the record, as something you can hand to somebody ---------------------------
 fresh_home

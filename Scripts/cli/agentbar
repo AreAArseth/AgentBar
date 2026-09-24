@@ -1417,6 +1417,163 @@ function doctor(json) {
   console.log(`\n${out.length} checks - ${bad} failed - ${warn} worth a look`);
 }
 
+// MARK: - TOML outline (mirrors Sources/AgentBar/TOMLOutline.swift)
+
+// Just enough of TOML's shape to put a top-level key where TOML reads it as one. A
+// bare `key = value` after a table header is that table's, so appending Codex's
+// `notify` to a config that has tables either breaks the file (under a string table
+// Codex refuses to load it) or files the key where nothing reads it. Offsets are
+// string indices. Comments, strings (all four kinds) and the inside of multi-line
+// arrays and inline tables are skipped: a line there can start with `[` or
+// `notify =` and be neither a header nor a key. Not a parser, and validates nothing.
+function tomlOutline(t) {
+  const n = t.length;
+  let mode = "code", depth = 0, lineStart = 0, atLineStart = true, headerSeen = false, dirty = false;
+  const statements = [];
+  let topLevelEnd = null, firstHeader = null;
+  const triple = (i, q) => t[i] === q && t[i + 1] === q && t[i + 2] === q;
+  // An escape never swallows a line ending: the line bookkeeping has to see it.
+  const escaped = (i) => (i + 1 < n && t[i + 1] !== "\n" ? 2 : 1);
+  let i = 0;
+  while (i < n) {
+    const c = t[i];
+    if (c === "\n") {
+      if (!headerSeen && dirty) topLevelEnd = i + 1;
+      dirty = false;
+      if (mode === "comment" || mode === "header" || mode === "basic" || mode === "literal") mode = "code";
+      i++;
+      lineStart = i;
+      atLineStart = mode === "code" && depth === 0;
+      continue;
+    }
+    const blank = c === " " || c === "\t" || c === "\r";
+    if (!headerSeen && !blank && mode !== "comment" && !(mode === "code" && c === "#")) dirty = true;
+    if (mode === "comment") i++;
+    else if (mode === "header") {
+      if (c === "#") { mode = "comment"; i++; }
+      else if (c === '"' || c === "'") {
+        let j = i + 1;
+        while (j < n && t[j] !== c && t[j] !== "\n") j += t[j] === "\\" && c === '"' ? escaped(j) : 1;
+        i = j < n && t[j] === c ? j + 1 : j;
+      } else i++;
+    } else if (mode === "basic") {
+      if (c === "\\") i += escaped(i);
+      else { if (c === '"') mode = "code"; i++; }
+    } else if (mode === "literal") {
+      if (c === "'") mode = "code";
+      i++;
+    } else if (mode === "multiBasic" || mode === "multiLiteral") {
+      const q = mode === "multiBasic" ? '"' : "'";
+      if (mode === "multiBasic" && c === "\\") i += escaped(i);
+      else if (triple(i, q)) {
+        i += 3;
+        for (let k = 0; k < 2 && t[i] === q; k++) i++;
+        mode = "code";
+      } else i++;
+    } else {
+      if (blank) { i++; continue; }
+      if (c === "#") { mode = "comment"; i++; continue; }
+      if (atLineStart) {
+        atLineStart = false;
+        if (c === "[") {
+          statements.push({ lineStart, start: i, header: true, top: false });
+          if (firstHeader === null) firstHeader = lineStart;
+          headerSeen = true;
+          mode = "header";
+          i++;
+          continue;
+        }
+        statements.push({ lineStart, start: i, header: false, top: !headerSeen });
+      }
+      if (triple(i, '"')) { mode = "multiBasic"; i += 3; continue; }
+      if (triple(i, "'")) { mode = "multiLiteral"; i += 3; continue; }
+      if (c === '"') mode = "basic";
+      else if (c === "'") mode = "literal";
+      else if (c === "[" || c === "{") depth++;
+      else if (c === "]" || c === "}") depth = Math.max(0, depth - 1);
+      i++;
+    }
+  }
+  if (!headerSeen && dirty) topLevelEnd = n;
+  return { statements, topLevelEnd, firstHeader };
+}
+
+const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
+const CODEX_END = "# <<< agentbar <<<";
+// AgentBar's own hooks block, cut out before any "is notify already ours?" question —
+// it carries the same path on every line, and a blind match would read it as a wired
+// notify and never install notify again.
+function codexWithoutBlock(t) {
+  const b = t.indexOf(CODEX_BEGIN);
+  if (b < 0) return t;
+  const e = t.indexOf(CODEX_END, b);
+  return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
+}
+
+// What install-hooks does with Codex's notify key; mirrors HookInstaller.codexPlan.
+// Returns { kind: "unchanged" | "foreign" | "write", text, repaired }.
+function codexNotifyPlan(toml, ours, isAlive) {
+  const outline = tomlOutline(toml);
+  const ourLine = /[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/y;
+  const mine = [];
+  for (const s of outline.statements) {
+    if (s.header) continue;
+    ourLine.lastIndex = s.lineStart;
+    const m = ourLine.exec(toml);
+    if (m) mine.push({ top: s.top, from: s.lineStart, to: s.lineStart + m[0].length });
+  }
+
+  // Our line under a table header is what every release up to 1.30.0 wrote into a
+  // file that had tables: Codex reads it as that table's key and either rejects the
+  // whole config or quietly never notifies. It carries our path, so it is ours to take
+  // out; what happens next is decided on the file without it.
+  const stray = mine.filter((m) => !m.top);
+  if (stray.length) {
+    let fixed = "", from = 0;
+    for (const m of stray) {
+      const nl = toml.indexOf("\n", m.to);
+      fixed += toml.slice(from, m.from);
+      from = nl < 0 ? toml.length : nl + 1;
+    }
+    fixed += toml.slice(from);
+    const next = codexNotifyPlan(fixed, ours, isAlive);
+    return { kind: "write", text: next.kind === "write" ? next.text : fixed, repaired: true };
+  }
+
+  if (mine.length) {
+    // Ours already — but "ours" is not "working". Every other config here is
+    // rewritten whenever its content differs, so a moved node heals on the next
+    // run. Codex used to stop at the marker, which made it the one integration
+    // where a stale interpreter was permanent. Re-verify the interpreter.
+    const [{ from, to }] = mine;
+    const interp = (toml.slice(from, to).match(/"([^"]*)"/) || [])[1];
+    if (interp === undefined || isAlive(interp)) return { kind: "unchanged" };
+    return { kind: "write", text: toml.slice(0, from) + ours + toml.slice(to), repaired: true };
+  }
+  // Our marker somewhere the line regex could not read (hand-edited formatting,
+  // a comment): leave it alone rather than appending a second notify key.
+  if (codexWithoutBlock(toml).includes("/.agentbar/hooks/codex/")) return { kind: "unchanged" };
+  // Codex takes one top-level `notify`, on whatever line the user put it.
+  const key = /(?:notify|"notify"|'notify')[ \t]*=/y;
+  const foreign = outline.statements.some((s) => {
+    if (!s.top || s.header) return false;
+    key.lastIndex = s.start;
+    return key.test(toml);
+  });
+  if (foreign) return { kind: "foreign" };
+
+  // Never at the end of the file: after a table header, a bare key is that table's.
+  // It goes after the last top-level statement, or above the first header.
+  const end = outline.topLevelEnd, header = outline.firstHeader;
+  let text;
+  if (end !== null) {
+    const lead = end === toml.length && !toml.endsWith("\n") ? "\n" : "";
+    text = toml.slice(0, end) + lead + ours + "\n" + toml.slice(end);
+  } else if (header !== null) text = toml.slice(0, header) + ours + "\n\n" + toml.slice(header);
+  else text = toml + (toml && !toml.endsWith("\n") ? "\n" : "") + ours + "\n";
+  return { kind: "write", text, repaired: false };
+}
+
 function installHooks() {
   const srcHooks = path.join(__dirname, "..", "hooks");
   if (!fs.existsSync(srcHooks)) { console.error("hooks/ not found next to this CLI — run from a repo checkout"); process.exit(1); }
@@ -1532,39 +1689,14 @@ function installHooks() {
       fs.writeFileSync(t, next);
       fs.renameSync(t, file);
     };
-    // AgentBar's own hooks block, cut out before any "is notify already ours?"
-    // question — it carries the same path on every line, and a blind match would
-    // read it as a wired notify and never install notify again.
-    const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
-    const CODEX_END = "# <<< agentbar <<<";
-    const withoutBlock = (t) => {
-      const b = t.indexOf(CODEX_BEGIN);
-      if (b < 0) return t;
-      const e = t.indexOf(CODEX_END, b);
-      return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
-    };
-    const line = toml.match(/^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/m);
-    if (line) {
-      // Ours already — but "ours" is not "working". Every other config here is
-      // rewritten whenever its content differs, so a moved node heals on the next
-      // run. Codex used to stop at the marker, which made it the one integration
-      // where a stale interpreter was permanent. Re-verify the interpreter.
-      const interp = (line[0].match(/"([^"]*)"/) || [])[1];
-      let alive = false;
-      try { fs.accessSync(interp, fs.constants.X_OK); alive = true; } catch {}
-      if (alive) report("codex   " + file, false);
-      else { writeToml(toml.replace(line[0], ours)); report("codex   " + file, true); }
-    }
-    // Our marker somewhere the line regex could not read (hand-edited formatting,
-    // a comment): leave it alone rather than appending a second notify key.
-    else if (withoutBlock(toml).includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
-    else if (/^\s*notify\s*=/m.test(toml)) console.error(`skip: ${file} already has a notify hook — left untouched`);
-    else {
-      if (toml && !toml.endsWith("\n")) toml += "\n";
-      writeToml(toml + ours + "\n");
-      toml += ours + "\n";
+    const executable = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } };
+    const plan = codexNotifyPlan(toml, ours, executable);
+    if (plan.kind === "foreign") console.error(`skip: ${file} already has a notify hook — left untouched`);
+    else if (plan.kind === "write") {
+      writeToml(plan.text);
+      toml = plan.text; // the hooks block below builds on this, not on what was read
       report("codex   " + file, true);
-    }
+    } else report("codex   " + file, false);
 
     // The hooks block — the real integration. Codex speaks Claude's dialect, so
     // these point at the shared claude/ scripts through codex/hook.js, which is
