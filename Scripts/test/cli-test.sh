@@ -614,7 +614,43 @@ check "an unterminated value is untouched" '[ "$CODEX_OPEN" = "$(cat "$HOME/.cod
 printf 'note = """\n# >>> agentbar >>> written by AgentBar; edit outside these two lines\n"""\n\n# <<< agentbar <<<\n' > "$HOME/.codex/config.toml"
 CODEX_ODD="$(cat "$HOME/.codex/config.toml")"
 "$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
-check "odd markers are not replaced"   '! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "not whole TOML" "$TESTROOT/codex-out"'
+# (AgentBar's own notify line may go in above; that part of the file is top-level.)
+check "odd markers are not replaced"   '[ "$CODEX_ODD" = "$(grep -v "^notify = " "$HOME/.codex/config.toml")" ] && ! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "codex.*left untouched" "$TESTROOT/codex-out"'
+# Both markers inside one multi-line string, with whole TOML between them: the
+# inside reads fine on its own, and the block replacement used to overwrite the
+# middle of the user's string. Only standalone comment lines are markers.
+printf 'note = """\n# >>> agentbar >>> written by AgentBar; edit outside these two lines\na = 1\n# <<< agentbar <<<\n"""\n' > "$HOME/.codex/config.toml"
+CODEX_ODD="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "markers in a string are text"   '[ "$CODEX_ODD" = "$(grep -v "^notify = " "$HOME/.codex/config.toml")" ] && ! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "not comment lines" "$TESTROOT/codex-out"'
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "the string survives as TOML"  'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert \"a = 1\" in d[\"note\"]" "$HOME/.codex/config.toml"'
+fi
+
+# A handler the installer rewrites loses its trust, as Codex will treat it: keeping
+# the old entry made notify.js stand down while Codex skipped the changed hook.
+fresh_home
+mkdir -p "$HOME/.codex"
+CODEX_CFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\nnotify = ["/usr/bin/say"]\n' > "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state."/elsewhere/config.toml:session_start:0:0"]\ntrusted_hash = "sha256:other"\n'
+  for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+    printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:%s"\n' "$CODEX_CFG" "$e" "$e"
+  done
+} >> "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "unchanged hooks keep their trust" '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 8 ]'
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"st1","cwd":"/tmp/proj"}'
+check "trusted: notify stands down"    '[ ! -e "$HOME/.agentbar/state.d/codex-st1.json" ]'
+# The node moved: seen from the installer, every handler's command changed.
+sed -i.bak 's|^command = "\\"[^\\"]*\\" |command = "\\"/old/node\\" |' "$CODEX_CFG"
+check "an old node is seeded"          '[ "$(grep -c "/old/node" "$CODEX_CFG")" = 7 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "rewritten hooks lose their trust" '! grep -q "/old/node" "$CODEX_CFG" && [ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 1 ] && grep -q "sha256:other" "$CODEX_CFG"'
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"st1","cwd":"/tmp/proj"}'
+check "stale trust: notify reports"    '[ -f "$HOME/.agentbar/state.d/codex-st1.json" ]'
 
 # A `]` in the home path is legal inside the quotes. Read up to the first `]`, our
 # own line was not recognised, and a stray copy under a table was never taken out.

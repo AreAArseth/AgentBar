@@ -18,6 +18,9 @@ function tomlOutline(t) {
   const n = t.length;
   let mode = "code", depth = 0, lineStart = 0, atLineStart = true, headerSeen = false, dirty = false, broken = false;
   const statements = [];
+  // Where each comment with a line to itself starts (its #), outside every string,
+  // array and inline table: a marker comment only counts as one of these.
+  const comments = [];
   let topLevelEnd = null, firstHeader = null;
   const triple = (i, q) => t[i] === q && t[i + 1] === q && t[i + 2] === q;
   // An escape never swallows a line ending: the line bookkeeping has to see it.
@@ -61,7 +64,7 @@ function tomlOutline(t) {
       } else i++;
     } else {
       if (blank) { i++; continue; }
-      if (c === "#") { mode = "comment"; i++; continue; }
+      if (c === "#") { if (atLineStart) comments.push(i); mode = "comment"; i++; continue; }
       if (atLineStart) {
         atLineStart = false;
         if (c === "[") {
@@ -90,7 +93,7 @@ function tomlOutline(t) {
   // Back at the top level: no string, array or inline table left open. When not, the
   // rest describes a file TOML would not read either, and nothing may be written.
   const complete = !broken && depth === 0 && (mode === "code" || mode === "comment" || mode === "header");
-  return { statements, topLevelEnd, firstHeader, complete };
+  return { statements, topLevelEnd, firstHeader, complete, comments };
 }
 
 // One escape in a basic string, the backslash at t[i]: TOML 1.0's set plus 1.1's
@@ -263,34 +266,97 @@ function tomlInlineTable(t, i) {
   }
 }
 
-// Event -> the state key of the handler that runs AgentBar's codex/hook.js; mirrors
-// Diagnostics.codexHookKeys. Groups are the event's [[hooks.<Event>]] tables in file
-// order, handlers the [[hooks.<Event>.hooks]] tables under each, counted from zero the
-// way Codex's discovery enumerates them.
-function codexHookKeys(t, outline, cfgPath) {
-  const out = {}, group = {}, handler = {};
-  let current = null;
+// The first comment line reading exactly `first` and the next one after it reading
+// exactly `last`: { from, to }, from the one's # to the other's end, or null. Only
+// comments with a line to themselves count, so the same text inside a multi-line
+// string is the string's; mirrors TOMLOutline.commentBlock.
+function tomlCommentBlock(t, outline, first, last) {
+  const line = (i) => tomlLineFrom(t, i).replace(/[ \t\r]+$/, "");
+  const begin = outline.comments.find((i) => line(i) === first);
+  if (begin === undefined) return null;
+  const end = outline.comments.find((i) => i > begin && line(i) === last);
+  return end === undefined ? null : { from: begin, to: end + line(end).length };
+}
+
+// AgentBar's handler for each event: { group, handler, tables }, positions counted
+// the way Codex's discovery counts them and `tables` the text of its group and
+// handler tables, which is what Codex's trust hash covers. A handler is AgentBar's when
+// its decoded command runs codex/hook.js from AgentBar's hooks folder; a comment naming
+// that path is not the command. Mirrors HookInstaller.codexAgentBarHandlers.
+function codexAgentBarHandlers(t, outline) {
+  const out = {}, group = {}, handler = {}, groupTable = {};
+  let open = null, groupOpen = null;
+  const close = (end) => {
+    if (groupOpen) { groupTable[groupOpen.ev] = [groupOpen.start, end]; groupOpen = null; }
+    const h = open;
+    open = null;
+    if (!h || !h.ours || h.ev in out) return;
+    const g = groupTable[h.ev];
+    const body = (g ? t.slice(g[0], g[1]) : "") + t.slice(h.start, end);
+    const tables = body.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).join("\n");
+    out[h.ev] = { group: group[h.ev], handler: handler[h.ev], tables };
+  };
   for (const s of outline.statements) {
     if (s.header) {
-      current = null;
+      close(s.lineStart);
       if (!t.startsWith("[[", s.start)) continue;
       const p = tomlKeyPath(t, s);
       if (!p || p[0] !== "hooks" || p.length < 2) continue;
       const ev = p[1];
-      if (p.length === 2) { group[ev] = (group[ev] ?? -1) + 1; handler[ev] = -1; }
-      else if (p.length === 3 && p[2] === "hooks" && group[ev] !== undefined) {
+      if (p.length === 2) {
+        group[ev] = (group[ev] ?? -1) + 1; handler[ev] = -1;
+        delete groupTable[ev];
+        groupOpen = { ev, start: s.lineStart };
+      } else if (p.length === 3 && p[2] === "hooks" && group[ev] !== undefined) {
         handler[ev] += 1;
-        current = { ev, key: `${cfgPath}:${codexEventLabel(ev)}:${group[ev]}:${handler[ev]}` };
+        open = { ev, start: s.lineStart, ours: false };
       }
-    } else if (current && !(current.ev in out)) {
+    } else if (open && !open.ours) {
       const a = tomlAssignment(t, s);
       if (a && a.key.length === 1 && a.key[0] === "command" &&
-          // The decoded value only: a comment after it naming our path does not make
-          // someone else's handler ours.
-          (tomlString(t, a.value)?.value ?? "").includes("/.agentbar/hooks/codex/hook.js")) out[current.ev] = current.key;
+          (tomlString(t, a.value)?.value ?? "").includes("/.agentbar/hooks/codex/hook.js")) open.ours = true;
     }
   }
+  close(t.length);
   return out;
+}
+
+// Event -> the state key of AgentBar's own handler; mirrors Diagnostics.codexHookKeys.
+function codexHookKeys(t, outline, cfgPath) {
+  const out = {};
+  for (const [ev, h] of Object.entries(codexAgentBarHandlers(t, outline))) {
+    out[ev] = `${cfgPath}:${codexEventLabel(ev)}:${h.group}:${h.handler}`;
+  }
+  return out;
+}
+
+// `t` without Codex's [hooks.state] entries for `keys` (a Set), in any spelling: the
+// [hooks.state."k"] table with its keys, or a "k".… / "k" = { … } line under
+// [hooks.state]; mirrors HookInstaller.removingCodexTrust.
+function codexRemoveTrust(t, keys) {
+  const outline = tomlOutline(t);
+  if (!outline.complete) return t;
+  const cut = [];
+  let table = [], dropping = null;
+  for (const s of outline.statements) {
+    if (s.header) {
+      if (dropping !== null) { cut.push([dropping, s.lineStart]); dropping = null; }
+      table = t.startsWith("[[", s.start) ? null : tomlKeyPath(t, s);
+      if (table && table.length === 3 && table[0] === "hooks" && table[1] === "state" && keys.has(table[2])) dropping = s.lineStart;
+      continue;
+    }
+    const a = dropping === null && table && tomlAssignment(t, s);
+    if (!a) continue;
+    const full = table.concat(a.key);
+    if (full.length >= 3 && full[0] === "hooks" && full[1] === "state" && keys.has(full[2])) {
+      const nl = t.indexOf("\n", a.value);
+      cut.push([s.lineStart, nl < 0 ? t.length : nl + 1]);
+    }
+  }
+  if (dropping !== null) cut.push([dropping, t.length]);
+  let out = "", from = 0;
+  for (const [x, y] of cut) { out += t.slice(from, x); from = y; }
+  return out + t.slice(from);
 }
 
 // State key -> { trusted, disabled }, in any of TOML's spellings: [hooks.state."k"]
@@ -351,4 +417,5 @@ function codexNotifyWired(t) {
 module.exports = {
   tomlOutline, tomlStringArray, tomlBasicString, tomlClaims,
   codexHookKeys, codexHookStates, codexHookTrusted, codexNotifyWired,
+  codexAgentBarHandlers, codexRemoveTrust, tomlCommentBlock, codexEventLabel,
 };

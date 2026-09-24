@@ -378,18 +378,80 @@ import Testing
         #expect(Self.install(next) == next)
     }
 
-    /// A real rewrite (node moved) keeps the trust too. Codex will call the hooks
-    /// changed, because they are, but that is Codex's question, not our deletion.
-    @Test func aRewrittenBlockKeepsTheTrustBesideIt() {
+    private static let cfgPath = "/Users/x/.codex/config.toml"
+
+    /// A rewrite with nothing to change in AgentBar's handlers (only Codex's trust
+    /// inside the block to move out) keeps every trust entry.
+    @Test func aRewriteThatChangesNoHandlerKeepsItsTrust() {
         let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
         guard case .write(let next, true) = HookInstaller.codexHooksPlan(
-            config: trusted, node: "/usr/local/bin/node", dir: Self.hooksDir) else {
+            config: trusted, node: "/opt/homebrew/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
+            Issue.record("expected the trust to be moved out"); return
+        }
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath).isEmpty)
+    }
+
+    /// A handler whose tables changed (the node moved) is one Codex no longer trusts:
+    /// its hash covers those tables. Keeping the old entries told doctor and notify.js
+    /// the hooks were trusted while Codex skipped them, and notify.js fell silent.
+    /// Entries for another config file stay.
+    @Test func aRewrittenHandlerLosesItsTrust() {
+        let other = "\n[hooks.state.\"/elsewhere/config.toml:session_start:0:0\"]\ntrusted_hash = \"sha256:other\"\n"
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig)) + other
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/usr/local/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
             Issue.record("expected a rewrite"); return
         }
         #expect(next.contains("\\\"/usr/local/bin/node\\\""))
         #expect(!next.contains("\\\"/opt/homebrew/bin/node\\\""))
-        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 1)
+        #expect(next.contains("sha256:other"))
         #expect(next.components(separatedBy: HookInstaller.codexBegin).count - 1 == 1)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath).count == 7)
+        #expect(TOMLOutline(next).isComplete)
+    }
+
+    /// Only the handler that changed loses its trust; the other six keep theirs.
+    @Test func onlyTheChangedHandlerLosesItsTrust() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        let edited = trusted.replacingOccurrences(of: "statusMessage = \"Waiting for you in AgentBar\"",
+                                                  with: "statusMessage = \"Old wording\"")
+        #expect(edited != trusted)
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: edited, node: "/opt/homebrew/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
+            Issue.record("expected a rewrite"); return
+        }
+        #expect(!next.contains("permission_request:0:0"))
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 6)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath) == ["PermissionRequest"])
+    }
+
+    /// Both markers inside one multi-line string, with whole TOML between them. The
+    /// inside reads fine on its own, so only the markers' own place in the file tells
+    /// this apart from a block: they are the string's text, not comment lines, and
+    /// the block replacement must not overwrite the middle of the user's string.
+    @Test func markersInsideAStringAreNotABlock() {
+        let config = "note = \"\"\"\n\(HookInstaller.codexBegin)\na = 1\n\(HookInstaller.codexEnd)\n\"\"\"\n"
+        let outline = TOMLOutline(config)
+        #expect(outline.isComplete)
+        #expect(outline.commentLines.isEmpty)
+        #expect(HookInstaller.codexBlockRange(config, outline: outline) == nil)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/n", dir: Self.hooksDir, path: Self.cfgPath) == .unchanged)
+        #expect(HookInstaller.withoutCodexBlock(config) == config)
+    }
+
+    @Test func realMarkersAreStandaloneCommentLines() {
+        let block = Self.withBlock("model = \"o3\"\n")
+        let outline = TOMLOutline(block)
+        let range = HookInstaller.codexBlockRange(block, outline: outline)
+        #expect(range.map { String(block[$0]) }?.hasPrefix(HookInstaller.codexBegin) == true)
+        #expect(range.map { String(block[$0]) }?.hasSuffix(HookInstaller.codexEnd) == true)
+        // A marker with something before it on the line is not one.
+        let indented = block.replacingOccurrences(of: "\n" + HookInstaller.codexBegin,
+                                                  with: "\nx = 1 " + HookInstaller.codexBegin)
+        #expect(indented != block)
+        #expect(HookInstaller.codexBlockRange(indented, outline: TOMLOutline(indented)) == nil)
     }
 
     @Test func onlyTablesWeDidNotWriteCountAsForeign() {

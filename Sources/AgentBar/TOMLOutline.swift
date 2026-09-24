@@ -27,6 +27,10 @@ struct TOMLOutline {
     }
 
     let statements: [Statement]
+    /// Where each comment that has a line to itself starts (its `#`), outside every
+    /// string, array and inline table. A marker comment only counts as one of these:
+    /// the same text inside a multi-line string is the string's.
+    let commentLines: [String.Index]
     /// Just past the line ending the last top-level statement; nil when there is none.
     let topLevelEnd: String.Index?
     /// Start of the line holding the first table header; nil for a file without one.
@@ -52,6 +56,7 @@ struct TOMLOutline {
         var headerSeen = false
         var dirty = false
         var found: [(line: Int, start: Int, header: Bool, top: Bool)] = []
+        var comments: [Int] = []
         var topEnd: Int?
         var header: Int?
         var broken = false
@@ -116,7 +121,12 @@ struct TOMLOutline {
                 }
             case .code:
                 if blank { i += 1; continue }
-                if c == hash { mode = .comment; i += 1; continue }
+                if c == hash {
+                    if atLineStart { comments.append(i) }
+                    mode = .comment
+                    i += 1
+                    continue
+                }
                 if atLineStart {
                     atLineStart = false
                     if c == lbr {
@@ -151,6 +161,23 @@ struct TOMLOutline {
         }
         topLevelEnd = topEnd.map(at)
         firstHeader = header.map(at)
+        commentLines = comments.map(at)
+    }
+
+    /// The first comment line reading exactly `first` and the next one after it
+    /// reading exactly `last`, as the range from the one's `#` to the other's end.
+    /// Only comments that have their line to themselves count.
+    func commentBlock(from first: String, to last: String, in text: String) -> Range<String.Index>? {
+        func line(_ i: String.Index) -> Substring {
+            let end = text[i...].firstIndex(where: \.isNewline) ?? text.endIndex
+            var line = text[i..<end]
+            while line.last == " " || line.last == "\t" { line = line.dropLast() }
+            return line
+        }
+        guard let begin = commentLines.first(where: { line($0) == first }),
+              let end = commentLines.first(where: { $0 > begin && line($0) == last })
+        else { return nil }
+        return begin..<line(end).endIndex
     }
 
     /// The top-level statement assigning exactly `key`, however it is spelled: bare,

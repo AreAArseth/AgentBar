@@ -464,36 +464,13 @@ enum Diagnostics {
         }
     }
 
-    /// Event → the state key of the handler that runs AgentBar's `codex/hook.js`.
-    /// Groups are the event's `[[hooks.<Event>]]` tables in file order, handlers the
-    /// `[[hooks.<Event>.hooks]]` tables under each, both counted from zero the way
-    /// Codex's discovery enumerates them.
+    /// Event → the state key of the handler that runs AgentBar's `codex/hook.js`,
+    /// found by the same lookup the installer uses when it decides which trust a
+    /// rewrite made stale (`HookInstaller.codexAgentBarHandlers`).
     static func codexHookKeys(_ text: String, outline: TOMLOutline, path: String) -> [String: String] {
-        var out: [String: String] = [:]
-        var group: [String: Int] = [:], handler: [String: Int] = [:]
-        var current: (event: String, key: String)?
-        for s in outline.statements {
-            if s.isHeader {
-                current = nil
-                guard outline.isArrayHeader(s, in: text), let p = outline.keyPath(of: s, in: text),
-                      p.first == "hooks", p.count >= 2 else { continue }
-                let event = p[1]
-                if p.count == 2 {
-                    group[event, default: -1] += 1
-                    handler[event] = -1
-                } else if p.count == 3, p[2] == "hooks", let g = group[event] {
-                    handler[event, default: -1] += 1
-                    current = (event, "\(path):\(codexEventLabel(event)):\(g):\(handler[event]!)")
-                }
-            } else if let c = current, out[c.event] == nil,
-                      let a = outline.assignment(of: s, in: text), a.key == ["command"],
-                      // The decoded value only: a comment after it naming our path
-                      // does not make someone else's handler ours.
-                      outline.string(at: a.value, in: text)?.contains("/.agentbar/hooks/codex/hook.js") == true {
-                out[c.event] = c.key
-            }
-        }
-        return out
+        Dictionary(uniqueKeysWithValues: HookInstaller.codexAgentBarHandlers(text, outline: outline).map {
+            ($0.key, "\(path):\(codexEventLabel($0.key)):\($0.value.group):\($0.value.handler)")
+        })
     }
 
     /// State key → what `[hooks.state]` records for it, in any of TOML's spellings:

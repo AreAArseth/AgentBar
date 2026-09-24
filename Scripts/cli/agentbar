@@ -1439,6 +1439,10 @@ const tomlClaims = (...a) => codexToml().tomlClaims(...a);
 const codexHookKeys = (...a) => codexToml().codexHookKeys(...a);
 const codexHookStates = (...a) => codexToml().codexHookStates(...a);
 const codexNotifyWired = (...a) => codexToml().codexNotifyWired(...a);
+const codexAgentBarHandlers = (...a) => codexToml().codexAgentBarHandlers(...a);
+const codexRemoveTrust = (...a) => codexToml().codexRemoveTrust(...a);
+const tomlCommentBlock = (...a) => codexToml().tomlCommentBlock(...a);
+const codexEventLabel = (...a) => codexToml().codexEventLabel(...a);
 
 const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
 const CODEX_END = "# <<< agentbar <<<";
@@ -1446,10 +1450,16 @@ const CODEX_END = "# <<< agentbar <<<";
 // it carries the same path on every line, and a blind match would read it as a wired
 // notify and never install notify again.
 function codexWithoutBlock(t) {
-  const b = t.indexOf(CODEX_BEGIN);
-  if (b < 0) return t;
-  const e = t.indexOf(CODEX_END, b);
-  return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
+  const r = codexBlockRange(t);
+  return r ? t.slice(0, r.from) + t.slice(r.to) : t;
+}
+
+// Our block, from the # of the begin marker to the end of the end marker, when both
+// are comments with a line to themselves in the file's own structure: the same text
+// inside a multi-line string is that string's, however well-formed the TOML between
+// the two copies. Mirrors HookInstaller.codexBlockRange.
+function codexBlockRange(t) {
+  return tomlCommentBlock(t, tomlOutline(t), CODEX_BEGIN, CODEX_END);
 }
 
 const CODEX_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"];
@@ -1711,10 +1721,14 @@ function installHooks() {
     blockLines.push(CODEX_END);
     const block = blockLines.join("\n");
 
-    const b = toml.indexOf(CODEX_BEGIN);
-    const e = b < 0 ? -1 : toml.indexOf(CODEX_END, b);
+    const range = tomlOutline(toml).complete ? codexBlockRange(toml) : null;
+    const b = range ? range.from : -1, e = range ? range.to - CODEX_END.length : -1;
     if (!tomlOutline(toml).complete) console.error(`skip: ${file} ends inside an unterminated value — left untouched`);
-    else if (b >= 0 && e >= 0) {
+    else if (!range && (toml.includes(CODEX_BEGIN) || toml.includes(CODEX_END))) {
+      // Marker text that is not a pair of standalone comment lines is someone else's
+      // (inside a string, say): replacing or appending around it is a guess.
+      console.error(`skip: ${file} has AgentBar's markers where they are not comment lines — left untouched`);
+    } else if (range) {
       const current = toml.slice(b, e + CODEX_END.length);
       if (current === block) report("codex hooks   " + file, false);
       else {
@@ -1725,7 +1739,18 @@ function installHooks() {
         const foreign = codexForeignTables(toml.slice(b + CODEX_BEGIN.length, e));
         if (foreign === null) console.error(`skip: ${file} has AgentBar's markers around text that is not whole TOML — left untouched`);
         else {
-          writeToml(toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length));
+          let next = toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length);
+          // A handler whose tables changed (a node that moved, a new timeout) is one
+          // Codex no longer trusts: its hash covers exactly those tables. Keeping the
+          // old entry would tell doctor and notify.js otherwise, and notify.js would
+          // fall silent while nothing reports the session. The entry goes.
+          const before = codexAgentBarHandlers(toml, tomlOutline(toml));
+          const after = codexAgentBarHandlers(next, tomlOutline(next));
+          const stale = new Set(Object.entries(before)
+            .filter(([ev, old]) => !after[ev] || after[ev].tables !== old.tables)
+            .map(([ev, old]) => `${file}:${codexEventLabel(ev)}:${old.group}:${old.handler}`));
+          if (stale.size) next = codexRemoveTrust(next, stale);
+          writeToml(next);
           report("codex hooks   " + file, true);
         }
       }
