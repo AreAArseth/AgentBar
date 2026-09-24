@@ -3,6 +3,22 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **In-app updates work from a standard account.** Installing an update began by
+  moving the running `AgentBar.app` out of `/Applications`, which only an
+  administrator may do, so a standard user who owns the app got a bare *Install
+  failed* every time. The updater now tries before it decides: when the folder the
+  app sits in is writable it swaps the bundle as before; when it is not but every
+  file in the bundle is yours, it replaces what is inside the bundle instead, with a
+  full copy of the old one to put back if anything fails, and the relaunch script
+  restores in place too (its old restore would have emptied the bundle it could not
+  remove). When neither is possible — someone else installed it — the menu row says
+  **Updating to x.y.z needs an administrator**, asks before downloading anything,
+  and the running copy is left exactly as it was.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added
