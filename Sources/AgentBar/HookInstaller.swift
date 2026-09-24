@@ -204,29 +204,48 @@ enum HookInstaller {
         try fm.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         guard var root = readConfig(at: settingsURL) else { return }
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
+        root["hooks"] = claudeHooks(root["hooks"] as? [String: Any] ?? [:], node: node,
+                                    dir: hooksDir.appendingPathComponent("claude").path)
 
-        let dir = hooksDir.appendingPathComponent("claude").path
-        let events: [(event: String, cmd: String, matcher: Bool, timeout: Int?)] = [
-            ("SessionStart",     "\"\(node)\" \"\(dir)/lifecycle.js\" start", false, nil),
-            ("SessionEnd",       "\"\(node)\" \"\(dir)/lifecycle.js\" end", false, nil),
-            ("UserPromptSubmit", "\"\(node)\" \"\(dir)/update.js\" prompt", false, nil),
-            ("PreToolUse",       "\"\(node)\" \"\(dir)/update.js\" pre", true, nil),
-            ("PostToolUse",      "\"\(node)\" \"\(dir)/update.js\" post", true, nil),
-            // Blocking approval hook: its own wait is 600s, so give Claude Code slack.
-            // (No Notification hook: late permission notifications used to overwrite
-            // newer state and strand sessions on "needs approval".)
-            ("PermissionRequest","\"\(node)\" \"\(dir)/permission.js\"", true, 630),
-            ("Stop",             "\"\(node)\" \"\(dir)/update.js\" stop", false, nil),
-            // "Compacting…" while the session summarises its context. There is no
-            // PostCompact here on purpose: the SessionStart (source "compact") that
-            // follows every compaction already ends it, and an event name an older
-            // Claude Code does not know is a settings file it may refuse.
-            ("PreCompact",       "\"\(node)\" \"\(dir)/update.js\" compact", false, nil),
-        ]
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: settingsURL) // never leave settings.json half-written
+        note("claude")
+    }
 
+    /// The events Claude Code fires, and the script and argument that answer each.
+    static let claudeEvents: [(event: String, script: String, arg: String?, matcher: Bool, timeout: Int?)] = [
+        ("SessionStart",     "lifecycle.js", "start",   false, nil),
+        ("SessionEnd",       "lifecycle.js", "end",     false, nil),
+        ("UserPromptSubmit", "update.js",    "prompt",  false, nil),
+        ("PreToolUse",       "update.js",    "pre",     true,  nil),
+        ("PostToolUse",      "update.js",    "post",    true,  nil),
+        // Blocking approval hook: its own wait is 600s, so give Claude Code slack.
+        // (No Notification hook: late permission notifications used to overwrite
+        // newer state and strand sessions on "needs approval".)
+        ("PermissionRequest", "permission.js", nil,     true,  630),
+        ("Stop",             "update.js",    "stop",    false, nil),
+        // "Compacting…" while the session summarises its context. There is no
+        // PostCompact here on purpose: the SessionStart (source "compact") that
+        // follows every compaction already ends it, and an event name an older
+        // Claude Code does not know is a settings file it may refuse.
+        ("PreCompact",       "update.js",    "compact", false, nil),
+    ]
+
+    /// Claude Code runs a hook's command through `/bin/sh -c`. Where that is dash
+    /// (Debian, Ubuntu) the shell forks node rather than becoming it, so the hook's
+    /// parent is a shell that exits with it — and `pid: process.ppid` is what every
+    /// reader prunes a row by. `exec` makes the shell become node on every `sh`.
+    static func claudeCommand(node: String, dir: String, script: String, arg: String?) -> String {
+        "exec \"\(node)\" \"\(dir)/\(script)\"" + (arg.map { " " + $0 } ?? "")
+    }
+
+    /// The user's `hooks` object with AgentBar's Claude entries replaced. Pure, so
+    /// "an older install is rewritten, never duplicated" is a test rather than a hope.
+    static func claudeHooks(_ existing: [String: Any], node: String, dir: String) -> [String: Any] {
+        var hooks = existing
         // Drop earlier AgentBar entries from EVERY event (path match), so events we
-        // no longer register (e.g. Notification) don't linger from old installs.
+        // no longer register (e.g. Notification) don't linger from old installs,
+        // and a command whose shape changed (the `exec` prefix) replaces its old self.
         for (event, value) in hooks {
             guard var rules = value as? [[String: Any]] else { continue }
             rules.removeAll { rule in
@@ -237,20 +256,19 @@ enum HookInstaller {
             if rules.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = rules }
         }
 
-        for e in events {
+        for e in claudeEvents {
             var rules = hooks[e.event] as? [[String: Any]] ?? []
-            var hookEntry: [String: Any] = ["type": "command", "command": e.cmd]
+            var hookEntry: [String: Any] = [
+                "type": "command",
+                "command": claudeCommand(node: node, dir: dir, script: e.script, arg: e.arg),
+            ]
             if let t = e.timeout { hookEntry["timeout"] = t }
             var rule: [String: Any] = ["hooks": [hookEntry]]
             if e.matcher { rule["matcher"] = "*" }
             rules.append(rule)
             hooks[e.event] = rules
         }
-        root["hooks"] = hooks
-
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try writeIfChanged(data, to: settingsURL) // never leave settings.json half-written
-        note("claude")
+        return hooks
     }
 
     // MARK: - Codex (~/.codex/config.toml: the hooks block, and the notify bridge)

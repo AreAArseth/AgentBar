@@ -1488,15 +1488,20 @@ function installHooks() {
     if (raw) claudeDirs.add(raw.replace(/^~/, os.homedir()));
   } catch {}
   const dir = path.join(hooksDir, "claude");
+  // Claude Code runs these through `/bin/sh -c`, and on Debian/Ubuntu that is dash,
+  // which forks node instead of becoming it: the hook's parent is then a shell that
+  // exits with it, and that pid is what every reader prunes the row by. `exec`
+  // makes the shell become node. The removal below matches by path, so an older
+  // install without it is replaced rather than duplicated.
   const claudeEvents = [
-    ["SessionStart", `"${node}" "${dir}/lifecycle.js" start`, false, null],
-    ["SessionEnd", `"${node}" "${dir}/lifecycle.js" end`, false, null],
-    ["UserPromptSubmit", `"${node}" "${dir}/update.js" prompt`, false, null],
-    ["PreToolUse", `"${node}" "${dir}/update.js" pre`, true, null],
-    ["PostToolUse", `"${node}" "${dir}/update.js" post`, true, null],
-    ["PermissionRequest", `"${node}" "${dir}/permission.js"`, true, 630],
-    ["Stop", `"${node}" "${dir}/update.js" stop`, false, null],
-    ["PreCompact", `"${node}" "${dir}/update.js" compact`, false, null],
+    ["SessionStart", `exec "${node}" "${dir}/lifecycle.js" start`, false, null],
+    ["SessionEnd", `exec "${node}" "${dir}/lifecycle.js" end`, false, null],
+    ["UserPromptSubmit", `exec "${node}" "${dir}/update.js" prompt`, false, null],
+    ["PreToolUse", `exec "${node}" "${dir}/update.js" pre`, true, null],
+    ["PostToolUse", `exec "${node}" "${dir}/update.js" post`, true, null],
+    ["PermissionRequest", `exec "${node}" "${dir}/permission.js"`, true, 630],
+    ["Stop", `exec "${node}" "${dir}/update.js" stop`, false, null],
+    ["PreCompact", `exec "${node}" "${dir}/update.js" compact`, false, null],
   ];
   for (const cfgDir of claudeDirs) {
     const file = path.join(cfgDir, "settings.json");
