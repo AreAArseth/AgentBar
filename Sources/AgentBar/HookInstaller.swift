@@ -266,6 +266,10 @@ enum HookInstaller {
         // Two independent keys in one file, applied in order. `notify` is the older
         // integration and stays: it is the only thing that reports a Codex session
         // until the human accepts the hooks in Codex's own trust prompt.
+        guard TOMLOutline(config).isComplete else {
+            NSLog("AgentBar: ~/.codex/config.toml ends inside an unterminated value, not touching it")
+            return
+        }
         var text = config
         switch codexPlan(config: text, node: node, script: script) {
         case .foreignNotify:
@@ -274,10 +278,10 @@ enum HookInstaller {
             break
         case .write(let next, let repaired):
             text = next
-            if repaired { NSLog("AgentBar: repaired a dead node path in ~/.codex/config.toml") }
+            if repaired { NSLog("AgentBar: repaired its notify line in ~/.codex/config.toml") }
         }
         if case .write(let next, _) = codexHooksPlan(config: text, node: node,
-                                                     dir: hooksDir.path) {
+                                                     dir: hooksDir.path, path: configURL.path) {
             text = next
         }
         if text != config { try text.write(to: configURL, atomically: true, encoding: .utf8) }
@@ -336,20 +340,161 @@ enum HookInstaller {
 
     /// Replace our block where it already is, or append it at the end. Pure, so the
     /// "unknown keys survive byte for byte" promise is a test rather than a hope.
-    static func codexHooksPlan(config: String, node: String, dir: String) -> CodexPlan {
+    ///
+    /// `path` is the config file's own path, which Codex puts in every trust key.
+    /// With it, a handler this rewrites loses its trust entry (see below); without
+    /// it, trust entries are left as they are.
+    static func codexHooksPlan(config: String, node: String, dir: String, path: String? = nil) -> CodexPlan {
+        let outline = TOMLOutline(config)
+        guard outline.isComplete else { return .unchanged }
         let block = codexHooksBlock(node: node, dir: dir)
-        if let begin = config.range(of: codexBegin),
-           let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex) {
-            let current = String(config[begin.lowerBound..<end.upperBound])
+        if let range = codexBlockRange(config, outline: outline) {
+            let current = String(config[range])
             if current == block { return .unchanged }
+            // Codex adds a new table at the end of the document, ahead of the trailing
+            // comment, and that comment is our end marker: the `[hooks.state]` written
+            // when a human trusts these hooks lands inside this block. Replacing the
+            // block whole deleted it on the next launch and Codex asked all over again.
+            // Every table here that is not ours moves below the marker, intact.
+            let inner = config.index(range.lowerBound, offsetBy: codexBegin.count)
+                ..< config.index(range.upperBound, offsetBy: -codexEnd.count)
+            guard let foreign = codexForeignTables(in: String(config[inner])) else { return .unchanged }
             var next = config
-            next.replaceSubrange(begin.lowerBound..<end.upperBound, with: block)
+            next.replaceSubrange(range, with: foreign.isEmpty ? block : block + "\n\n" + foreign)
+            // A handler whose tables changed (a node that moved, a new timeout) is one
+            // Codex no longer trusts: its hash covers exactly those tables, so it skips
+            // the hook until a human answers again. Keeping the old entry would tell
+            // doctor and notify.js otherwise, and notify.js would fall silent while
+            // nothing reports the session. The entry goes, as Codex will treat it.
+            if let path {
+                let before = codexAgentBarHandlers(config, outline: TOMLOutline(config))
+                let after = codexAgentBarHandlers(next, outline: TOMLOutline(next))
+                let stale = Set(before.compactMap { event, old -> String? in
+                    after[event]?.tables == old.tables ? nil
+                        : "\(path):\(Diagnostics.codexEventLabel(event)):\(old.group):\(old.handler)"
+                })
+                if !stale.isEmpty { next = removingCodexTrust(for: stale, in: next) }
+            }
             return .write(next, repaired: true)
         }
+        // Marker text that is not a pair of standalone comment lines is someone
+        // else's (inside a string, say): nothing here can tell what replacing or
+        // appending around it would mean, so the file is left as it is.
+        if config.contains(codexBegin) || config.contains(codexEnd) { return .unchanged }
         var next = config
         if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
         if !next.isEmpty { next += "\n" }
         return .write(next + block + "\n", repaired: false)
+    }
+
+    /// Our block, from the `#` of the begin marker to the end of the end marker, when
+    /// both are comments with a line to themselves in the file's own structure. The
+    /// same text inside a multi-line string is part of that string, however
+    /// well-formed the TOML between the two copies happens to be.
+    static func codexBlockRange(_ text: String, outline: TOMLOutline) -> Range<String.Index>? {
+        outline.commentBlock(from: codexBegin, to: codexEnd, in: text)
+    }
+
+    /// AgentBar's handler for each event: its group and handler positions, counted the
+    /// way Codex's discovery counts them (`[[hooks.<Event>]]` groups in file order,
+    /// `[[hooks.<Event>.hooks]]` handlers under each), and the text of its group and
+    /// handler tables, which is what Codex's trust hash covers. A handler is AgentBar's
+    /// when its decoded `command` runs `codex/hook.js` from AgentBar's hooks folder; a
+    /// comment naming that path is not the command.
+    static func codexAgentBarHandlers(_ text: String, outline: TOMLOutline)
+        -> [String: (group: Int, handler: Int, tables: String)] {
+        var out: [String: (group: Int, handler: Int, tables: String)] = [:]
+        var group: [String: Int] = [:], handler: [String: Int] = [:]
+        var groupTable: [String: Range<String.Index>] = [:]
+        var open: (event: String, start: String.Index, ours: Bool)?
+        var groupOpen: (event: String, start: String.Index)?
+
+        func close(at end: String.Index) {
+            if let g = groupOpen { groupTable[g.event] = g.start..<end; groupOpen = nil }
+            guard let h = open else { return }
+            open = nil
+            guard h.ours, out[h.event] == nil, let g = group[h.event], let i = handler[h.event] else { return }
+            let body = (groupTable[h.event].map { String(text[$0]) } ?? "") + text[h.start..<end]
+            let tables = body.split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                .joined(separator: "\n")
+            out[h.event] = (g, i, tables)
+        }
+
+        for s in outline.statements {
+            if s.isHeader {
+                close(at: s.lineStart)
+                guard outline.isArrayHeader(s, in: text), let p = outline.keyPath(of: s, in: text),
+                      p.first == "hooks", p.count >= 2 else { continue }
+                let event = p[1]
+                if p.count == 2 {
+                    group[event, default: -1] += 1
+                    handler[event] = -1
+                    groupTable[event] = nil
+                    groupOpen = (event, s.lineStart)
+                } else if p.count == 3, p[2] == "hooks", group[event] != nil {
+                    handler[event, default: -1] += 1
+                    open = (event, s.lineStart, false)
+                }
+            } else if let h = open, !h.ours,
+                      let a = outline.assignment(of: s, in: text), a.key == ["command"],
+                      outline.string(at: a.value, in: text)?.contains("/.agentbar/hooks/codex/hook.js") == true {
+                open?.ours = true
+            }
+        }
+        close(at: text.endIndex)
+        return out
+    }
+
+    /// `text` without Codex's `[hooks.state]` entries for `keys`, in any spelling:
+    /// the `[hooks.state."k"]` table with its keys, or a `"k".…` / `"k" = { … }` line
+    /// under `[hooks.state]`.
+    static func removingCodexTrust(for keys: Set<String>, in text: String) -> String {
+        let outline = TOMLOutline(text)
+        guard outline.isComplete else { return text }
+        var cut: [Range<String.Index>] = []
+        var table: [String]? = []
+        var dropping: String.Index?
+        for s in outline.statements {
+            if s.isHeader {
+                if let from = dropping { cut.append(from..<s.lineStart); dropping = nil }
+                table = outline.isArrayHeader(s, in: text) ? nil : outline.keyPath(of: s, in: text)
+                if let t = table, t.count == 3, t[0] == "hooks", t[1] == "state", keys.contains(t[2]) {
+                    dropping = s.lineStart
+                }
+                continue
+            }
+            guard dropping == nil, let t = table, let a = outline.assignment(of: s, in: text) else { continue }
+            let full = t + a.key
+            if full.count >= 3, full[0] == "hooks", full[1] == "state", keys.contains(full[2]) {
+                cut.append(wholeLines(of: s.lineStart..<a.value, in: text))
+            }
+        }
+        if let from = dropping { cut.append(from..<text.endIndex) }
+        var out = "", from = text.startIndex
+        for r in cut { out += text[from..<r.lowerBound]; from = r.upperBound }
+        return out + text[from...]
+    }
+
+    /// The tables between our markers that `codexHooksBlock` did not write, each with
+    /// its keys, in the order they stood. Nil when the text between the markers does
+    /// not read as whole TOML on its own (a marker inside someone's string, say):
+    /// then there is no telling what a replacement would cut, and nothing is replaced.
+    static func codexForeignTables(in inner: String) -> String? {
+        let ours = Set(codexEvents.flatMap { ["[[hooks.\($0.event)]]", "[[hooks.\($0.event).hooks]]"] })
+        let outline = TOMLOutline(inner)
+        guard outline.isComplete else { return nil }
+        let headers = outline.statements.filter(\.isHeader)
+        var out: [String] = []
+        for (i, h) in headers.enumerated() {
+            let lineEnd = inner[h.start...].firstIndex(where: \.isNewline) ?? inner.endIndex
+            let header = inner[h.start..<lineEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+            if ours.contains(header) { continue }
+            let next = i + 1 < headers.count ? headers[i + 1].lineStart : inner.endIndex
+            out.append(inner[h.lineStart..<next].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return out.joined(separator: "\n\n")
     }
 
     /// What `installCodex` should do with the TOML it found.
@@ -373,18 +518,48 @@ enum HookInstaller {
         config: String, node: String, script: String,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> CodexPlan {
-        let ours = "notify = [\"\(node)\", \"\(script)\"]"
-        let ourLine = #"(?m)^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
+        let ours = "notify = [\(TOMLOutline.basicString(node)), \(TOMLOutline.basicString(script))]"
+        let outline = TOMLOutline(config)
+        // A file that ends inside an unterminated value is one TOML will not read
+        // either, and every position below would be a guess into that value.
+        guard outline.isComplete else { return .unchanged }
+        // Ours is a notify array with our hooks path in it, read as TOML reads it: a
+        // `]` inside a quoted node or home path belongs to the path.
+        let mine = outline.statements.compactMap { s -> (top: Bool, line: Range<String.Index>, values: [String])? in
+            guard let array = outline.stringArray(assignedTo: "notify", by: s, in: config),
+                  array.values.contains(where: { $0.contains("/.agentbar/hooks/codex/") })
+            else { return nil }
+            return (s.isTopLevel, s.lineStart..<array.end, array.values)
+        }
 
-        if let line = config.range(of: ourLine, options: .regularExpression) {
-            guard let interpreter = firstQuoted(String(config[line])), !isExecutable(interpreter)
+        // Our line under a table header is what every release up to 1.30.0 wrote into
+        // a file that had tables: Codex reads it as that table's key and either rejects
+        // the whole config or quietly never notifies. It carries our path, so it is
+        // ours to take out; what happens next is decided on the file without it.
+        let stray = mine.filter { !$0.top }.map { wholeLines(of: $0.line, in: config) }
+        if !stray.isEmpty {
+            var fixed = "", from = config.startIndex
+            for r in stray {
+                fixed += config[from..<r.lowerBound]
+                from = r.upperBound
+            }
+            fixed += config[from...]
+            if case .write(let next, _) = codexPlan(config: fixed, node: node, script: script,
+                                                   isExecutable: isExecutable) {
+                return .write(next, repaired: true)
+            }
+            return .write(fixed, repaired: true)
+        }
+
+        if let line = mine.first?.line {
+            guard let interpreter = mine.first?.values.first, !isExecutable(interpreter)
             else { return .unchanged }
             var next = config
             next.replaceSubrange(line, with: ours)
             return .write(next, repaired: true)
         }
-        // Our marker somewhere the line pattern could not read — a comment, hand-edited
-        // formatting, a `notify` spread over several lines: leave it alone rather than
+        // Our marker somewhere the array reader could not read — a comment, a value
+        // that is not an array of one-line strings: leave it alone rather than
         // appending a second notify key.
         //
         // Our own hooks block is cut out first, and that is not a detail. It carries the
@@ -392,33 +567,44 @@ enum HookInstaller {
         // `notify` at all would read as "notify is already wired" and notify would never
         // be installed again.
         if withoutCodexBlock(config).contains("/.agentbar/hooks/codex/") { return .unchanged }
-        if config.range(of: #"^\s*notify\s*="#, options: .regularExpression) != nil {
-            return .foreignNotify
-        }
+        // Codex takes one top-level `notify`, on whatever line the user put it.
+        // So does anything else that already defines `notify` (`notify.x`, `[notify]`),
+        // and a key that cannot be read at all: adding ours beside either would be a
+        // duplicate key, and Codex refuses the whole file for one.
+        if outline.claims("notify", in: config) { return .foreignNotify }
+
+        // Never at the end of the file: after a table header, a bare key is that
+        // table's. It goes after the last top-level statement, or above the first
+        // header when there is none.
         var next = config
-        if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
-        return .write(next + ours + "\n", repaired: false)
+        if let end = outline.topLevelEnd {
+            let lead = end == config.endIndex && !config.hasSuffix("\n") ? "\n" : ""
+            next.insert(contentsOf: lead + ours + "\n", at: end)
+        } else if let header = outline.firstHeader {
+            next.insert(contentsOf: ours + "\n\n", at: header)
+        } else {
+            if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
+            next += ours + "\n"
+        }
+        return .write(next, repaired: false)
+    }
+
+    /// `range` widened to whole lines, including the line ending after it. `isNewline`
+    /// rather than `"\n"`: a CRLF ending is one `Character`, and never equals `"\n"`.
+    static func wholeLines(of range: Range<String.Index>, in text: String) -> Range<String.Index> {
+        let end = text[range.upperBound...].firstIndex(where: \.isNewline).map { text.index(after: $0) }
+            ?? text.endIndex
+        return range.lowerBound..<end
     }
 
     /// The config with AgentBar's own hooks block removed, for the questions that are
     /// about what the *user* put in the file.
     static func withoutCodexBlock(_ config: String) -> String {
-        guard let begin = config.range(of: codexBegin),
-              let end = config.range(of: codexEnd, range: begin.upperBound..<config.endIndex)
-        else { return config }
+        guard let range = codexBlockRange(config, outline: TOMLOutline(config)) else { return config }
         var out = config
-        out.removeSubrange(begin.lowerBound..<end.upperBound)
+        out.removeSubrange(range)
         return out
     }
-
-    /// The first `"…"` in a TOML line — the interpreter in `notify = ["node", "script"]`.
-    static func firstQuoted(_ s: String) -> String? {
-        guard let open = s.firstIndex(of: "\""),
-              let close = s[s.index(after: open)...].firstIndex(of: "\"")
-        else { return nil }
-        return String(s[s.index(after: open)..<close])
-    }
-
     // MARK: - Cursor CLI (~/.cursor/hooks.json)
 
     private static func installCursor() throws {

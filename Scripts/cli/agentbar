@@ -1346,9 +1346,17 @@ function doctor(json) {
       const cfg = path.join(H, ".codex/config.toml");
       const toml = read(cfg) || "";
       if (toml.includes("# >>> agentbar >>>")) {
-        const trusted = toml.includes(`hooks.state."${cfg}:session_start:`);
+        const missing = codexUntrustedEvents(toml, cfg);
+        const trusted = missing.length === 0;
         add("codex.hooks", "Codex has accepted its hooks", trusted ? "ok" : "warn",
-            trusted ? null : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
+            trusted ? null
+              : missing.length === CODEX_EVENTS.length
+                // Whether the older notify bridge covers for the hooks: AgentBar stands
+                // aside for a user's notify, and its own line may be commented out.
+                ? (codexNotifyWired(toml)
+                  ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                  : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing. AgentBar's older notify bridge is not wired in this config either (another program owns `notify`, or AgentBar's line is commented out), so Codex sessions do not appear here at all until the hooks are accepted.")
+                : `Accepted except ${missing.join(", ")}. Codex runs only the hooks it was told to trust, and skips the rest in silence.`,
             trusted ? null : "Start a Codex session and accept the hooks it asks about.");
       }
     }
@@ -1415,6 +1423,149 @@ function doctor(json) {
   const bad = out.filter((c) => c.status === "fail").length;
   const warn = out.filter((c) => c.status === "warn").length;
   console.log(`\n${out.length} checks - ${bad} failed - ${warn} worth a look`);
+}
+
+// MARK: - TOML outline (hooks/codex/toml.js; mirrors Sources/AgentBar/TOMLOutline.swift)
+
+// The Codex config reader lives beside notify.js, which has to answer doctor's trust
+// question on its own. Loaded on first use, so every command that never touches
+// ~/.codex/config.toml keeps working without it.
+let codexTomlModule = null;
+const codexToml = () => codexTomlModule || (codexTomlModule = require(path.join(__dirname, "..", "hooks", "codex", "toml.js")));
+const tomlOutline = (...a) => codexToml().tomlOutline(...a);
+const tomlStringArray = (...a) => codexToml().tomlStringArray(...a);
+const tomlBasicString = (...a) => codexToml().tomlBasicString(...a);
+const tomlClaims = (...a) => codexToml().tomlClaims(...a);
+const codexHookKeys = (...a) => codexToml().codexHookKeys(...a);
+const codexHookStates = (...a) => codexToml().codexHookStates(...a);
+const codexNotifyWired = (...a) => codexToml().codexNotifyWired(...a);
+const codexAgentBarHandlers = (...a) => codexToml().codexAgentBarHandlers(...a);
+const codexRemoveTrust = (...a) => codexToml().codexRemoveTrust(...a);
+const tomlCommentBlock = (...a) => codexToml().tomlCommentBlock(...a);
+const codexEventLabel = (...a) => codexToml().codexEventLabel(...a);
+
+const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
+const CODEX_END = "# <<< agentbar <<<";
+// AgentBar's own hooks block, cut out before any "is notify already ours?" question —
+// it carries the same path on every line, and a blind match would read it as a wired
+// notify and never install notify again.
+function codexWithoutBlock(t) {
+  const r = codexBlockRange(t);
+  return r ? t.slice(0, r.from) + t.slice(r.to) : t;
+}
+
+// Our block, from the # of the begin marker to the end of the end marker, when both
+// are comments with a line to themselves in the file's own structure: the same text
+// inside a multi-line string is that string's, however well-formed the TOML between
+// the two copies. Mirrors HookInstaller.codexBlockRange.
+function codexBlockRange(t) {
+  return tomlCommentBlock(t, tomlOutline(t), CODEX_BEGIN, CODEX_END);
+}
+
+const CODEX_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"];
+
+// The tables between our markers that install-hooks did not write, each with its
+// keys, in the order they stood; mirrors HookInstaller.codexForeignTables. Null when
+// the inside does not read as whole TOML (a marker inside someone's string): then
+// there is no telling what a replacement would cut, and nothing is replaced.
+function codexForeignTables(inner) {
+  const ours = new Set(CODEX_EVENTS.flatMap((e) => [`[[hooks.${e}]]`, `[[hooks.${e}.hooks]]`]));
+  const outline = tomlOutline(inner);
+  if (!outline.complete) return null;
+  const headers = outline.statements.filter((s) => s.header);
+  const out = [];
+  headers.forEach((h, i) => {
+    const nl = inner.indexOf("\n", h.start);
+    if (ours.has(inner.slice(h.start, nl < 0 ? inner.length : nl).trim())) return;
+    const next = i + 1 < headers.length ? headers[i + 1].lineStart : inner.length;
+    out.push(inner.slice(h.lineStart, next).trim());
+  });
+  return out.join("\n\n");
+}
+
+// AgentBar's events whose own hook has no trusted, enabled entry in Codex's
+// [hooks.state]; mirrors Diagnostics.codexUntrustedEvents. Codex keys an entry
+// "<source path>:<event>:<group>:<handler>", group and handler counted by position in
+// this file, and writes `trusted_hash` into it when a human accepts that hook. So
+// the key checked is the one AgentBar's own handler occupies: a user's hooks for the
+// same event come first, and their trust says nothing about ours. Presence is all
+// this can see: whether the hash still matches is Codex's own arithmetic.
+function codexUntrustedEvents(toml, cfgPath) {
+  const outline = tomlOutline(toml);
+  // A file that ends inside an open value reads differently to Codex, if it reads at
+  // all; nothing in it counts as accepted.
+  if (!outline.complete) return CODEX_EVENTS.slice();
+  const keys = codexHookKeys(toml, outline, cfgPath);
+  const states = codexHookStates(toml, outline);
+  return CODEX_EVENTS.filter((e) => {
+    const st = keys[e] && states[keys[e]];
+    return !st || !st.trusted || st.disabled;
+  });
+}
+
+// What install-hooks does with Codex's notify key; mirrors HookInstaller.codexPlan.
+// Returns { kind: "unchanged" | "foreign" | "write", text, repaired }.
+function codexNotifyPlan(toml, ours, isAlive) {
+  const outline = tomlOutline(toml);
+  // A file that ends inside an unterminated value is one TOML will not read either,
+  // and every position below would be a guess into that value.
+  if (!outline.complete) return { kind: "unchanged" };
+  // Ours is a notify array with our hooks path in it, read as TOML reads it: a `]`
+  // inside a quoted node or home path belongs to the path.
+  const mine = [];
+  for (const s of outline.statements) {
+    const a = tomlStringArray(toml, s, "notify");
+    if (a && a.values.some((v) => v.includes("/.agentbar/hooks/codex/"))) {
+      mine.push({ top: s.top, from: s.lineStart, to: a.end, values: a.values });
+    }
+  }
+
+  // Our line under a table header is what every release up to 1.30.0 wrote into a
+  // file that had tables: Codex reads it as that table's key and either rejects the
+  // whole config or quietly never notifies. It carries our path, so it is ours to take
+  // out; what happens next is decided on the file without it.
+  const stray = mine.filter((m) => !m.top);
+  if (stray.length) {
+    let fixed = "", from = 0;
+    for (const m of stray) {
+      const nl = toml.indexOf("\n", m.to);
+      fixed += toml.slice(from, m.from);
+      from = nl < 0 ? toml.length : nl + 1;
+    }
+    fixed += toml.slice(from);
+    const next = codexNotifyPlan(fixed, ours, isAlive);
+    return { kind: "write", text: next.kind === "write" ? next.text : fixed, repaired: true };
+  }
+
+  if (mine.length) {
+    // Ours already — but "ours" is not "working". Every other config here is
+    // rewritten whenever its content differs, so a moved node heals on the next
+    // run. Codex used to stop at the marker, which made it the one integration
+    // where a stale interpreter was permanent. Re-verify the interpreter.
+    const [{ from, to, values }] = mine;
+    const interp = values[0];
+    if (interp === undefined || isAlive(interp)) return { kind: "unchanged" };
+    return { kind: "write", text: toml.slice(0, from) + ours + toml.slice(to), repaired: true };
+  }
+  // Our marker somewhere the array reader could not read (a comment, a value that is
+  // not an array of one-line strings): leave it alone rather than appending another.
+  if (codexWithoutBlock(toml).includes("/.agentbar/hooks/codex/")) return { kind: "unchanged" };
+  // Codex takes one top-level `notify`, on whatever line the user put it. So does
+  // anything else that already defines it (`notify.x`, `[notify]`), and a key that
+  // cannot be read at all: ours beside either is a duplicate key, and Codex refuses
+  // the whole file for one.
+  if (tomlClaims(toml, outline, "notify")) return { kind: "foreign" };
+
+  // Never at the end of the file: after a table header, a bare key is that table's.
+  // It goes after the last top-level statement, or above the first header.
+  const end = outline.topLevelEnd, header = outline.firstHeader;
+  let text;
+  if (end !== null) {
+    const lead = end === toml.length && !toml.endsWith("\n") ? "\n" : "";
+    text = toml.slice(0, end) + lead + ours + "\n" + toml.slice(end);
+  } else if (header !== null) text = toml.slice(0, header) + ours + "\n\n" + toml.slice(header);
+  else text = toml + (toml && !toml.endsWith("\n") ? "\n" : "") + ours + "\n";
+  return { kind: "write", text, repaired: false };
 }
 
 function installHooks() {
@@ -1524,7 +1675,7 @@ function installHooks() {
   if (fs.existsSync(codexDir)) {
     const file = path.join(codexDir, "config.toml");
     let toml = ""; try { toml = fs.readFileSync(file, "utf8"); } catch {}
-    const ours = `notify = ["${node}", "${path.join(hooksDir, "codex", "notify.js")}"]`;
+    const ours = `notify = [${tomlBasicString(node)}, ${tomlBasicString(path.join(hooksDir, "codex", "notify.js"))}]`;
     // tmp+rename like every other config write here — a crash mid-write must
     // not truncate the user's Codex config.
     const writeToml = (next) => {
@@ -1532,39 +1683,14 @@ function installHooks() {
       fs.writeFileSync(t, next);
       fs.renameSync(t, file);
     };
-    // AgentBar's own hooks block, cut out before any "is notify already ours?"
-    // question — it carries the same path on every line, and a blind match would
-    // read it as a wired notify and never install notify again.
-    const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
-    const CODEX_END = "# <<< agentbar <<<";
-    const withoutBlock = (t) => {
-      const b = t.indexOf(CODEX_BEGIN);
-      if (b < 0) return t;
-      const e = t.indexOf(CODEX_END, b);
-      return e < 0 ? t : t.slice(0, b) + t.slice(e + CODEX_END.length);
-    };
-    const line = toml.match(/^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*\/\.agentbar\/hooks\/codex\/[^\]]*\]/m);
-    if (line) {
-      // Ours already — but "ours" is not "working". Every other config here is
-      // rewritten whenever its content differs, so a moved node heals on the next
-      // run. Codex used to stop at the marker, which made it the one integration
-      // where a stale interpreter was permanent. Re-verify the interpreter.
-      const interp = (line[0].match(/"([^"]*)"/) || [])[1];
-      let alive = false;
-      try { fs.accessSync(interp, fs.constants.X_OK); alive = true; } catch {}
-      if (alive) report("codex   " + file, false);
-      else { writeToml(toml.replace(line[0], ours)); report("codex   " + file, true); }
-    }
-    // Our marker somewhere the line regex could not read (hand-edited formatting,
-    // a comment): leave it alone rather than appending a second notify key.
-    else if (withoutBlock(toml).includes("/.agentbar/hooks/codex/")) report("codex   " + file, false);
-    else if (/^\s*notify\s*=/m.test(toml)) console.error(`skip: ${file} already has a notify hook — left untouched`);
-    else {
-      if (toml && !toml.endsWith("\n")) toml += "\n";
-      writeToml(toml + ours + "\n");
-      toml += ours + "\n";
+    const executable = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } };
+    const plan = codexNotifyPlan(toml, ours, executable);
+    if (plan.kind === "foreign") console.error(`skip: ${file} already has a notify hook — left untouched`);
+    else if (plan.kind === "write") {
+      writeToml(plan.text);
+      toml = plan.text; // the hooks block below builds on this, not on what was read
       report("codex   " + file, true);
-    }
+    } else report("codex   " + file, false);
 
     // The hooks block — the real integration. Codex speaks Claude's dialect, so
     // these point at the shared claude/ scripts through codex/hook.js, which is
@@ -1595,12 +1721,39 @@ function installHooks() {
     blockLines.push(CODEX_END);
     const block = blockLines.join("\n");
 
-    const b = toml.indexOf(CODEX_BEGIN);
-    const e = b < 0 ? -1 : toml.indexOf(CODEX_END, b);
-    if (b >= 0 && e >= 0) {
+    const range = tomlOutline(toml).complete ? codexBlockRange(toml) : null;
+    const b = range ? range.from : -1, e = range ? range.to - CODEX_END.length : -1;
+    if (!tomlOutline(toml).complete) console.error(`skip: ${file} ends inside an unterminated value — left untouched`);
+    else if (!range && (toml.includes(CODEX_BEGIN) || toml.includes(CODEX_END))) {
+      // Marker text that is not a pair of standalone comment lines is someone else's
+      // (inside a string, say): replacing or appending around it is a guess.
+      console.error(`skip: ${file} has AgentBar's markers where they are not comment lines — left untouched`);
+    } else if (range) {
       const current = toml.slice(b, e + CODEX_END.length);
       if (current === block) report("codex hooks   " + file, false);
-      else { writeToml(toml.slice(0, b) + block + toml.slice(e + CODEX_END.length)); report("codex hooks   " + file, true); }
+      else {
+        // Codex adds a new table at the end of the document, ahead of the trailing
+        // comment, and that comment is our end marker: the [hooks.state] written when
+        // a human trusts these hooks lands inside this block. Replacing it whole
+        // deleted that trust on the next run. Tables here that are not ours move below.
+        const foreign = codexForeignTables(toml.slice(b + CODEX_BEGIN.length, e));
+        if (foreign === null) console.error(`skip: ${file} has AgentBar's markers around text that is not whole TOML — left untouched`);
+        else {
+          let next = toml.slice(0, b) + block + (foreign ? "\n\n" + foreign : "") + toml.slice(e + CODEX_END.length);
+          // A handler whose tables changed (a node that moved, a new timeout) is one
+          // Codex no longer trusts: its hash covers exactly those tables. Keeping the
+          // old entry would tell doctor and notify.js otherwise, and notify.js would
+          // fall silent while nothing reports the session. The entry goes.
+          const before = codexAgentBarHandlers(toml, tomlOutline(toml));
+          const after = codexAgentBarHandlers(next, tomlOutline(next));
+          const stale = new Set(Object.entries(before)
+            .filter(([ev, old]) => !after[ev] || after[ev].tables !== old.tables)
+            .map(([ev, old]) => `${file}:${codexEventLabel(ev)}:${old.group}:${old.handler}`));
+          if (stale.size) next = codexRemoveTrust(next, stale);
+          writeToml(next);
+          report("codex hooks   " + file, true);
+        }
+      }
     } else {
       let next = toml;
       if (next && !next.endsWith("\n")) next += "\n";

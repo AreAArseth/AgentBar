@@ -139,19 +139,388 @@ import Testing
                                         script: Self.script, isExecutable: { _ in false }) == .unchanged)
     }
 
-    // MARK: - firstQuoted
+    // MARK: - Codex: notify has to land where TOML reads it as top-level
 
-    @Test(arguments: [
-        ("notify = [\"/usr/bin/node\", \"/x/notify.js\"]", "/usr/bin/node"),
-        ("notify = [\"\", \"/x\"]", ""),
-    ])
-    func firstQuotedReadsTheInterpreter(_ line: String, _ want: String) {
-        #expect(HookInstaller.firstQuoted(line) == want)
+    /// The shape that broke a real config: the user's own `notify` on line 4, a file
+    /// ending in a string table, and every release up to 1.30.0 appending its line
+    /// under that table, where Codex refuses the whole file ("invalid type: sequence,
+    /// expected a string").
+    private static let userConfig = """
+        model = "gpt-5"
+        model_reasoning_effort = "high"
+        approvals_reviewer = "guardian_subagent"
+        notify = ["/Users/x/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+        service_tier = "default"
+
+        [projects."/Users/x"]
+        trust_level = "trusted"
+
+        [mcp_servers.node_repl]
+        command = "node"
+        args = ["repl.js"]
+
+        [mcp_servers.node_repl.env]
+        NODE_OPTIONS = ""
+
+        [features]
+        js_repl = false
+
+        [shell_environment_policy.set]
+        NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "8e86beb8"
+
+        """
+    private static let hooksDir = "/Users/x/.agentbar/hooks"
+    private static let oursLine = "notify = [\"/opt/homebrew/bin/node\", \"\(script)\"]\n"
+
+    private static func withBlock(_ config: String) -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: config, node: "/opt/homebrew/bin/node", dir: hooksDir) else { return config }
+        return next
     }
 
-    @Test(arguments: ["notify = []", "", "no quotes here", "\"unterminated"])
-    func firstQuotedIsNilWithoutAClosedPair(_ line: String) {
-        #expect(HookInstaller.firstQuoted(line) == nil)
+    /// Both steps `installCodex` takes, in its order.
+    private static func install(_ config: String) -> String {
+        var text = config
+        if case .write(let next, _) = HookInstaller.codexPlan(
+            config: text, node: "/opt/homebrew/bin/node", script: script, isExecutable: { _ in true }) {
+            text = next
+        }
+        if case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: text, node: "/opt/homebrew/bin/node", dir: hooksDir) {
+            text = next
+        }
+        return text
+    }
+
+    @Test func aForeignNotifyBelowLineOneIsStillForeign() {
+        #expect(HookInstaller.codexPlan(config: Self.userConfig, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// The exact file 1.30.0 left behind: our line under `[shell_environment_policy.set]`,
+    /// the hooks block after it. The repair takes our line out and nothing else; the
+    /// user's own notify on line 4 stays the one Codex runs.
+    @Test func theLineAnEarlierReleaseWroteUnderATableIsTakenBackOut() {
+        let healthy = Self.withBlock(Self.userConfig)
+        let broken = healthy.replacingOccurrences(
+            of: "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = \"8e86beb8\"\n",
+            with: "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = \"8e86beb8\"\n" + Self.oursLine)
+        #expect(broken != healthy)
+
+        let plan = HookInstaller.codexPlan(config: broken, node: "/opt/homebrew/bin/node",
+                                           script: Self.script, isExecutable: { _ in true })
+        guard case .write(let next, let repaired) = plan else {
+            Issue.record("the stray line must be removed, got \(plan)"); return
+        }
+        #expect(repaired)
+        #expect(next == healthy)
+        #expect(Self.install(broken) == healthy)
+        #expect(Self.install(healthy) == healthy)
+    }
+
+    /// A CRLF file: the line ending is one `Character` in Swift, and a search for
+    /// `"\n"` that misses it would take the rest of the file along with the stray line.
+    @Test func theRepairTakesOneLineOutOfACRLFFile() {
+        let healthy = Self.withBlock(Self.userConfig).replacingOccurrences(of: "\n", with: "\r\n")
+        let broken = healthy.replacingOccurrences(
+            of: "SHA256S = \"8e86beb8\"\r\n",
+            with: "SHA256S = \"8e86beb8\"\r\n" + Self.oursLine.replacingOccurrences(of: "\n", with: "\r\n"))
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a repair"); return
+        }
+        #expect(next == healthy)
+    }
+
+    /// With no notify of the user's, the stray one is moved rather than dropped.
+    @Test func aStrayLineWithoutAForeignNotifyMovesToTheTopLevel() {
+        let mine = Self.userConfig.replacingOccurrences(of: "notify = [\"/Users/x/.codex", with: "# was: [\"/Users/x/.codex")
+        let broken = mine + Self.oursLine
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a repair"); return
+        }
+        #expect(next.components(separatedBy: "notify = [").count - 1 == 1)
+        #expect(next.contains("service_tier = \"default\"\n" + Self.oursLine + "\n[projects."))
+        #expect(next.hasSuffix("SHA256S = \"8e86beb8\"\n"))
+    }
+
+    /// A first install onto a file that ends in a table: before, the line went to the
+    /// end and became that table's key even with no notify anywhere.
+    @Test func aFirstInstallGoesAfterTheLastTopLevelKeyNotAtTheEnd() {
+        let config = "model = \"o3\"\n\n[profiles.mine]\nmodel = \"o4\"\n"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next == "model = \"o3\"\n" + Self.oursLine + "\n[profiles.mine]\nmodel = \"o4\"\n")
+        #expect(HookInstaller.codexPlan(config: next, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+    }
+
+    @Test func aFileThatStartsWithATableGetsNotifyAboveIt() {
+        let config = "# my codex config\n[profiles.mine]\nmodel = \"o4\"\n"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next == "# my codex config\n" + Self.oursLine + "\n[profiles.mine]\nmodel = \"o4\"\n")
+    }
+
+    /// `notify` that is not a top-level key: a comment, the inside of a multi-line
+    /// string, a key of a table. None of them is the user's hook, so ours goes in,
+    /// after the multi-line string rather than inside it.
+    @Test func notifyThatIsNotATopLevelKeyIsNotForeign() {
+        let config = """
+            # notify = ["/usr/bin/say"]
+            developer_instructions = \"""
+            notify = ["not a key"]
+            [not.a.header]
+            \"""
+
+            [tui]
+            notify = true
+
+            """
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next.contains("[not.a.header]\n\"\"\"\n" + Self.oursLine + "\n[tui]"))
+    }
+
+    /// A nested array whose rows start with `[` is not a table header, so the notify
+    /// after it is still top-level, and still the user's.
+    @Test(arguments: [
+        "model = \"o3\"\nmatrix = [\n  [\"a\", \"b\"],\n]\nnotify = [\"/usr/bin/say\"]\n[t]\nk = 1\n",
+        "model = \"o3\"\n\"notify\" = [\"/usr/bin/say\"]\n[t]\n",
+        "model = \"o3\"\n  notify=[\"/usr/bin/say\"] # mine\n",
+    ])
+    func aTopLevelNotifyInAnyShapeIsForeign(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// TOML reads all of these as `notify` or as something under it; adding ours
+    /// beside any of them is a duplicate key and Codex refuses the file.
+    @Test(arguments: [
+        "model = \"o3\"\n\"\\u006eotify\" = [\"/usr/bin/say\"]\n[t]\n",
+        "model = \"o3\"\n\"not\\x69fy\" = [\"/usr/bin/say\"]\n",
+        "model = \"o3\"\nnotify.command = \"/usr/bin/say\"\n",
+        "model = \"o3\"\n\n[notify]\ncommand = \"/usr/bin/say\"\n",
+        "model = \"o3\"\n\"\\q\" = 1\n",
+    ])
+    func aKeyThatIsOrMightBeNotifyMakesAgentBarStandDown(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// A file that ends inside an unterminated value: every position in it is a guess,
+    /// and the first "top-level" line after the opening `"""` is string content.
+    @Test(arguments: [
+        "model = \"o3\"\ninstructions = \"\"\"\nnever closed\n",
+        "model = \"o3\"\nargs = [\n  \"a\",\n",
+    ])
+    func aFileThatEndsInsideAValueIsLeftAlone(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
+    }
+
+    /// The hand workaround for the broken file, our stray line commented out, keeps
+    /// AgentBar standing down: deleting it would have had the old installer write it
+    /// back, so this is what a user's config may look like when the fix arrives.
+    @Test func theCommentedOutWorkaroundIsLeftAlone() {
+        let config = Self.withBlock(Self.userConfig + "# " + Self.oursLine)
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+        #expect(Self.install(config) == config)
+    }
+
+    // MARK: - Codex: a human's trust survives the next launch
+
+    /// Where Codex's own writer (`config/batchWrite`, codex-cli 0.156.1) put the trust
+    /// a human gave: at the end of the document, ahead of its trailing comment — which
+    /// is our end marker. Every launch after that replaced the block whole, the seven
+    /// `trusted_hash` entries went with it, and Codex asked about "7 hooks new or
+    /// changed" all over again.
+    private static func trustedByCodex(_ config: String) -> String {
+        let cfg = "/Users/x/.codex/config.toml"
+        let state = "[hooks.state]\n\n" + ["session_start", "session_end", "user_prompt_submit",
+                                            "pre_tool_use", "post_tool_use", "stop", "permission_request"]
+            .map { "[hooks.state.\"\(cfg):\($0):0:0\"]\ntrusted_hash = \"sha256:\($0)\"\n\n" }.joined()
+        return config.replacingOccurrences(of: HookInstaller.codexEnd, with: state + HookInstaller.codexEnd)
+    }
+
+    @Test func trustCodexWroteInsideTheBlockIsMovedOutNotDeleted() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        #expect(trusted.components(separatedBy: "trusted_hash").count - 1 == 7)
+
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/opt/homebrew/bin/node", dir: Self.hooksDir) else {
+            Issue.record("the block must be rewritten without the foreign tables"); return
+        }
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        guard let end = next.range(of: HookInstaller.codexEnd),
+              let state = next.range(of: "[hooks.state]") else {
+            Issue.record("marker or state missing"); return
+        }
+        #expect(state.lowerBound > end.upperBound)
+        #expect(next.hasPrefix(Self.withBlock(Self.userConfig).trimmingCharacters(in: .newlines)))
+        #expect(HookInstaller.codexHooksPlan(config: next, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
+        #expect(Self.install(next) == next)
+    }
+
+    private static let cfgPath = "/Users/x/.codex/config.toml"
+
+    /// A rewrite with nothing to change in AgentBar's handlers (only Codex's trust
+    /// inside the block to move out) keeps every trust entry.
+    @Test func aRewriteThatChangesNoHandlerKeepsItsTrust() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/opt/homebrew/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
+            Issue.record("expected the trust to be moved out"); return
+        }
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 7)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath).isEmpty)
+    }
+
+    /// A handler whose tables changed (the node moved) is one Codex no longer trusts:
+    /// its hash covers those tables. Keeping the old entries told doctor and notify.js
+    /// the hooks were trusted while Codex skipped them, and notify.js fell silent.
+    /// Entries for another config file stay.
+    @Test func aRewrittenHandlerLosesItsTrust() {
+        let other = "\n[hooks.state.\"/elsewhere/config.toml:session_start:0:0\"]\ntrusted_hash = \"sha256:other\"\n"
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig)) + other
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: trusted, node: "/usr/local/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
+            Issue.record("expected a rewrite"); return
+        }
+        #expect(next.contains("\\\"/usr/local/bin/node\\\""))
+        #expect(!next.contains("\\\"/opt/homebrew/bin/node\\\""))
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 1)
+        #expect(next.contains("sha256:other"))
+        #expect(next.components(separatedBy: HookInstaller.codexBegin).count - 1 == 1)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath).count == 7)
+        #expect(TOMLOutline(next).isComplete)
+    }
+
+    /// Only the handler that changed loses its trust; the other six keep theirs.
+    @Test func onlyTheChangedHandlerLosesItsTrust() {
+        let trusted = Self.trustedByCodex(Self.withBlock(Self.userConfig))
+        let edited = trusted.replacingOccurrences(of: "statusMessage = \"Waiting for you in AgentBar\"",
+                                                  with: "statusMessage = \"Old wording\"")
+        #expect(edited != trusted)
+        guard case .write(let next, true) = HookInstaller.codexHooksPlan(
+            config: edited, node: "/opt/homebrew/bin/node", dir: Self.hooksDir, path: Self.cfgPath) else {
+            Issue.record("expected a rewrite"); return
+        }
+        #expect(!next.contains("permission_request:0:0"))
+        #expect(next.components(separatedBy: "trusted_hash").count - 1 == 6)
+        #expect(Diagnostics.codexUntrustedEvents(config: next, path: Self.cfgPath) == ["PermissionRequest"])
+    }
+
+    /// Both markers inside one multi-line string, with whole TOML between them. The
+    /// inside reads fine on its own, so only the markers' own place in the file tells
+    /// this apart from a block: they are the string's text, not comment lines, and
+    /// the block replacement must not overwrite the middle of the user's string.
+    @Test func markersInsideAStringAreNotABlock() {
+        let config = "note = \"\"\"\n\(HookInstaller.codexBegin)\na = 1\n\(HookInstaller.codexEnd)\n\"\"\"\n"
+        let outline = TOMLOutline(config)
+        #expect(outline.isComplete)
+        #expect(outline.commentLines.isEmpty)
+        #expect(HookInstaller.codexBlockRange(config, outline: outline) == nil)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/n", dir: Self.hooksDir, path: Self.cfgPath) == .unchanged)
+        #expect(HookInstaller.withoutCodexBlock(config) == config)
+    }
+
+    @Test func realMarkersAreStandaloneCommentLines() {
+        let block = Self.withBlock("model = \"o3\"\n")
+        let outline = TOMLOutline(block)
+        let range = HookInstaller.codexBlockRange(block, outline: outline)
+        #expect(range.map { String(block[$0]) }?.hasPrefix(HookInstaller.codexBegin) == true)
+        #expect(range.map { String(block[$0]) }?.hasSuffix(HookInstaller.codexEnd) == true)
+        // A marker with something before it on the line is not one.
+        let indented = block.replacingOccurrences(of: "\n" + HookInstaller.codexBegin,
+                                                  with: "\nx = 1 " + HookInstaller.codexBegin)
+        #expect(indented != block)
+        #expect(HookInstaller.codexBlockRange(indented, outline: TOMLOutline(indented)) == nil)
+    }
+
+    @Test func onlyTablesWeDidNotWriteCountAsForeign() {
+        let inner = "\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = \"command\"\r\n\n"
+            + "[hooks.state.\"/c:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n\n"
+            + "[[hooks.PreToolUse]]\r\n[[hooks.PreToolUse.hooks]]\ntimeout = 5\n\n"
+            + "[profiles.mine] # the user's\nmodel = \"o4\"\n"
+        #expect(HookInstaller.codexForeignTables(in: inner)
+                == "[hooks.state.\"/c:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n\n[profiles.mine] # the user's\nmodel = \"o4\"")
+    }
+
+    /// A begin marker inside someone's multi-line string: the text up to our end marker
+    /// does not read as whole TOML, so there is no telling what a replacement would cut.
+    @Test func aBlockWhoseInsideIsNotWholeTOMLIsNotReplaced() {
+        let config = "note = \"\"\"\n\(HookInstaller.codexBegin)\n\"\"\"\n\n\(HookInstaller.codexEnd)\n"
+        #expect(TOMLOutline(config).isComplete)
+        #expect(HookInstaller.codexForeignTables(in: "\n\"\"\"\n\n") == nil)
+        #expect(HookInstaller.codexHooksPlan(config: config, node: "/opt/homebrew/bin/node",
+                                             dir: Self.hooksDir) == .unchanged)
+    }
+
+    // MARK: - Codex: our notify line, read as TOML rather than up to the first `]`
+
+    private static let bracketNode = "/opt/node]x/bin/node"
+    private static let bracketScript = "/Users/a]b/.agentbar/hooks/codex/notify.js"
+    private static let bracketLine = "notify = [\"\(bracketNode)\", \"\(bracketScript)\"]\n"
+
+    /// A `]` in the node or home path is legal inside the quotes. Cut at the first
+    /// `]`, the line was never recognised, and the stray copy an earlier release left
+    /// under a table was never taken out.
+    @Test func aStrayLineWithABracketInItsPathIsStillRepaired() {
+        let healthy = Self.withBlock(Self.userConfig)
+        let broken = healthy.replacingOccurrences(
+            of: "SHA256S = \"8e86beb8\"\n", with: "SHA256S = \"8e86beb8\"\n" + Self.bracketLine)
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: Self.bracketNode, script: Self.bracketScript,
+            isExecutable: { _ in true }) else {
+            Issue.record("the stray line must be removed"); return
+        }
+        #expect(next == healthy)
+    }
+
+    @Test func aBracketInThePathIsReadAsOursAtTheTopLevelToo() {
+        let config = "model = \"o3\"\n" + Self.bracketLine
+        #expect(HookInstaller.codexPlan(config: config, node: Self.bracketNode, script: Self.bracketScript,
+                                        isExecutable: { _ in true }) == .unchanged)
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: config, node: "/usr/local/bin/node", script: Self.bracketScript,
+            isExecutable: { $0 != Self.bracketNode }) else {
+            Issue.record("a dead interpreter with a bracket in it must be replaced"); return
+        }
+        #expect(next == "model = \"o3\"\nnotify = [\"/usr/local/bin/node\", \"\(Self.bracketScript)\"]\n")
+    }
+
+    /// What we write has to read back as what we meant, whatever the path holds.
+    @Test func ourLineIsEscapedAndReadsBackAsWritten() {
+        let node = "/Users/q\"uote\\slash]/bin/node"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: "model = \"o3\"\n", node: node, script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        let outline = TOMLOutline(next)
+        let values = outline.statements.lazy.compactMap {
+            outline.stringArray(assignedTo: "notify", by: $0, in: next)?.values
+        }.first
+        #expect(values == [node, Self.script])
+        #expect(HookInstaller.codexPlan(config: next, node: node, script: Self.script,
+                                        isExecutable: { _ in true }) == .unchanged)
     }
 
     // MARK: - Node paths

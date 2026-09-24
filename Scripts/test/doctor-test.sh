@@ -135,9 +135,79 @@ mkdir -p "$HOME/.codex"
 check "no block, no trust row"          '[ "$(status_of codex.hooks)" = absent ]'
 "$CLI" install-hooks >/dev/null 2>&1
 check "codex hooks await acceptance"    '[ "$(status_of codex.hooks)" = warn ]'
+check "the notify bridge covers for them" '"$CLI" doctor | grep -q "still appear, from the older notify bridge"'
 DCFG="$HOME/.codex/config.toml"
 printf '\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
+# Trust is given hook by hook: one accepted is not all accepted.
+check "codex hooks partly accepted warn" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionEnd"'
+for e in session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
 check "codex hooks accepted passes"     '[ "$(status_of codex.hooks)" = ok ]'
+printf 'enabled = false\n' >> "$DCFG"
+check "a disabled codex hook warns"     '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
+# The same file with CRLF endings and a blank line before the switch.
+grep -v '^enabled = false$' "$DCFG" | sed 's/$/\r/' > "$DCFG.tmp" && printf '\r\nenabled = false\r\n' >> "$DCFG.tmp" && mv "$DCFG.tmp" "$DCFG"
+check "a disabled hook warns under CRLF" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
+# The user's own SessionStart hook comes first, so AgentBar's sits in group 1. Trust
+# for the user's group 0 is not trust for AgentBar's; the key is cut to its event no more.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/usr/local/bin/mine"\n' > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
+check "the user's own trust is not ours" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionStart\."'
+printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
+check "trust at our own group passes"  '[ "$(status_of codex.hooks)" = ok ]'
+# TOML's other spellings of the same entries: inline tables and dotted keys.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state]\n'
+  for e in session_start session_end user_prompt_submit; do printf '"%s:%s:0:0" = { trusted_hash = "sha256:x" }\n' "$DCFG" "$e"; done
+  for e in pre_tool_use post_tool_use stop; do printf '"%s:%s:0:0".trusted_hash = "sha256:x"\n' "$DCFG" "$e"; done
+  printf '"%s:permission_request:0:0" = { trusted_hash = "sha256:x", enabled = false }\n' "$DCFG"
+} >> "$DCFG"
+check "inline and dotted trust are read" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest\."'
+# A config that ends inside an open value accepts nothing, whatever it seems to hold.
+printf '"%s:permission_request:0:1" = { trusted_hash = "sha256:x" }\nnote = """\nnever closed\n' "$DCFG" >> "$DCFG"
+check "an open value accepts nothing"  '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Written, but not yet accepted"'
+# A comment naming our path does not make the user's handler ours; only the command
+# value counts. Read raw, the user's group 0 passed for AgentBar's.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/mine" # old: %s/.agentbar/hooks/codex/hook.js\n' "$HOME" > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+  printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
+done
+check "a comment is not our handler"   '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionStart\."'
+# AgentBar stands aside for the user's own notify, and its own line is commented out:
+# no bridge covers for the unaccepted hooks, and the warning must not promise one.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\nnotify = ["/usr/bin/say", "done"]\n\n[t]\nk = "v"\n# notify = ["/n", "%s/.agentbar/hooks/codex/notify.js"]\n' "$HOME" > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "no bridge is promised"          '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "do not appear here at all" && ! "$CLI" doctor | grep -q "still appear"'
+# An inline entry is read as a table: a comment after it is not trust.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state]\n'
+  for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+    printf '"%s:%s:0:0" = {} # trusted_hash = "sha256:x"\n' "$DCFG" "$e"
+  done
+} >> "$DCFG"
+check "a comment is not trust"         '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Written, but not yet accepted"'
 
 # --- the rules file, reported the way the app reports it -------------------------
 # A rules file that will not parse is the one failure that is invisible by design:

@@ -3,6 +3,50 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **AgentBar could stop Codex from starting.** Codex takes one top-level `notify`,
+  and the installer's check for somebody else's only looked at the first line of
+  `~/.codex/config.toml`. With the user's own `notify` anywhere below it, AgentBar
+  added a second one, and it added it at the end of the file, where TOML files a
+  bare key under the last table. In a config ending in
+  `[shell_environment_policy.set]` Codex refused the whole file (*invalid type:
+  sequence, expected a string*), and the Codex CLI and app would not open until
+  someone hand-edited it. The same placement hit a first install onto any config
+  ending in a table, even with no `notify` anywhere: the key landed where Codex
+  never reads it.
+
+  Now the installer, and the Linux CLI's `install-hooks`, read enough of the TOML
+  to tell a top-level key from a table's, skipping comments, strings and
+  multi-line arrays. A `notify` of the user's on any line stays theirs and AgentBar
+  stands down. AgentBar's own line goes after the last top-level key, never after a
+  table header. A config an earlier release broke is repaired on the next launch:
+  the line carrying AgentBar's hooks path is taken out from under the table, and
+  the user's `notify` is left as the one Codex runs, or AgentBar's moves to the top
+  if there is no other. A hand workaround that commented that line out is left as
+  it is. AgentBar's block markers only count as comment lines of their own: the
+  same text inside one of your multi-line strings is left alone, where it used to
+  have the middle of the string replaced.
+- **AgentBar deleted the trust you gave its hooks in Codex.** Codex writes that trust into
+  `[hooks.state]` at the end of `~/.codex/config.toml`, ahead of the file's last
+  comment. That comment is the end of AgentBar's own block, so the trust landed
+  inside it, and the next launch replaced the block with a fresh copy and deleted
+  the trust along with it. Codex then asked about "7 hooks new or changed" again,
+  every time. The installer, and `install-hooks`, now move any table in that
+  block they did not write to just below it, untouched. You will need to accept
+  the hooks in Codex once more after updating; from then on the answer stays. When
+  AgentBar itself changes one of its hooks (a node that moved, say), that hook's old
+  trust entry goes too: Codex no longer trusts the changed hook, and keeping the entry
+  had the notify bridge fall silent while nothing reported the session.
+  `agentbar doctor` also looks for trust on all seven hooks rather than the first
+  one, at the entry AgentBar's own hook occupies, and names any that are missing or
+  switched off. The older `notify` bridge now stays on until AgentBar's own
+  SessionStart hook is trusted: a trusted SessionStart hook of your own used to make
+  it stand down while AgentBar's still did not run, and the Codex session never
+  appeared.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added

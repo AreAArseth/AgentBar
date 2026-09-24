@@ -511,6 +511,169 @@ grep -v "^notify = " "$CODEX_CFG" > "$HOME/.codex/c.tmp" && mv "$HOME/.codex/c.t
 check "notify removed for the test"    '! grep -q "^notify = " "$CODEX_CFG"'
 "$CLI" install-hooks >/dev/null 2>&1
 check "notify reinstalled beside block" 'grep -q "^notify = " "$CODEX_CFG" && grep -q "^# >>> agentbar >>>" "$CODEX_CFG"'
+# Where it goes matters as much as whether: after a table header a bare key is that
+# table's, and every release up to 1.30.0 appended notify at the end of the file.
+check "codex notify is top-level"      '[ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" -lt "$(grep -n "^\[profiles.mine\]" "$CODEX_CFG" | cut -d: -f1)" ]'
+
+# The config that broke Codex: the user's own notify on line 4, a file ending in a
+# string table, and our line appended under it by an earlier release. Codex read it
+# as a key of [shell_environment_policy.set] and refused to load the file.
+fresh_home
+mkdir -p "$HOME/.codex"
+CODEX_CFG="$HOME/.codex/config.toml"
+cat > "$CODEX_CFG" <<'EOF'
+model = "gpt-5"
+model_reasoning_effort = "high"
+approvals_reviewer = "guardian_subagent"
+notify = ["/home/user/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+service_tier = "default"
+
+[projects."/home/user"]
+trust_level = "trusted"
+
+[mcp_servers.node_repl]
+command = "node"
+args = ["repl.js"]
+
+[mcp_servers.node_repl.env]
+NODE_OPTIONS = ""
+
+[shell_environment_policy.set]
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "8e86beb8"
+EOF
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "a notify on line 4 is foreign"  'grep -q "already has a notify hook" "$TESTROOT/codex-out" && [ "$(grep -c "notify = " "$CODEX_CFG")" = 1 ]'
+check "the foreign notify still leads" '[ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" = 4 ]'
+CODEX_HEALTHY="$(cat "$CODEX_CFG")"
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+const t=fs.readFileSync(f,"utf8").replace(/(SHA256S = "8e86beb8"\n)/,
+  `$1notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`);
+fs.writeFileSync(f,t);' "$CODEX_CFG" "$HOME/.agentbar/hooks"
+check "the broken shape is seeded"     '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 2 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "the stray notify is taken out"  '[ "$CODEX_HEALTHY" = "$(cat "$CODEX_CFG")" ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "the repair is idempotent"       '[ "$CODEX_HEALTHY" = "$(cat "$CODEX_CFG")" ]'
+# Where a TOML parser is at hand, ask it too: notify is the user's, at the top level.
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "codex config parses as TOML"  'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert d[\"notify\"][1]==\"turn-ended\"; assert \"notify\" not in d[\"shell_environment_policy\"][\"set\"]" "$CODEX_CFG"'
+fi
+# The hand workaround (our stray line commented out) keeps AgentBar standing down.
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/(SHA256S = "8e86beb8"\n)/,
+  `$1# notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`));' "$CODEX_CFG" "$HOME/.agentbar/hooks"
+CODEX_COMMENTED="$(cat "$CODEX_CFG")"
+"$CLI" install-hooks >/dev/null 2>&1
+check "the commented workaround stays" '[ "$CODEX_COMMENTED" = "$(cat "$CODEX_CFG")" ]'
+# With no notify of the user's, the stray one moves up rather than disappearing.
+grep -v "SkyComputerUseClient" "$CODEX_CFG" | grep -v "^# notify" > "$HOME/.codex/c.tmp" && mv "$HOME/.codex/c.tmp" "$CODEX_CFG"
+printf 'notify = ["/usr/bin/node", "%s/codex/notify.js"]\n' "$HOME/.agentbar/hooks" >> "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "a lone stray notify moves up"   '[ "$(grep -c "^notify = " "$CODEX_CFG")" = 1 ] && [ "$(grep -n "^notify = " "$CODEX_CFG" | cut -d: -f1)" = 5 ]'
+
+# A human's trust has to survive the next run. Codex's own writer puts [hooks.state]
+# at the end of the document, ahead of the trailing comment, which is our end marker,
+# so it lands inside our block, and replacing the block whole used to delete it.
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1];
+const ev=["session_start","session_end","user_prompt_submit","pre_tool_use","post_tool_use","stop","permission_request"];
+const state="[hooks.state]\n\n"+ev.map((e)=>`[hooks.state."${f}:${e}:0:0"]\ntrusted_hash = "sha256:${e}"\n\n`).join("");
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("# <<< agentbar <<<",state+"# <<< agentbar <<<"));' "$CODEX_CFG"
+check "trust seeded inside the block"  '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 7 ] && [ "$(grep -n "^\[hooks.state\]" "$CODEX_CFG" | cut -d: -f1)" -lt "$(grep -n "^# <<< agentbar <<<" "$CODEX_CFG" | cut -d: -f1)" ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "codex trust survives install"   '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 7 ]'
+check "codex trust moved below block"  '[ "$(grep -n "^\[hooks.state\]" "$CODEX_CFG" | cut -d: -f1)" -gt "$(grep -n "^# <<< agentbar <<<" "$CODEX_CFG" | cut -d: -f1)" ]'
+check "codex hooks block still once"   '[ "$(grep -c "^# >>> agentbar >>>" "$CODEX_CFG")" = 1 ] && [ "$(grep -c "^\[\[hooks.Stop\]\]" "$CODEX_CFG")" = 1 ]'
+CODEX_TRUSTED="$(cat "$CODEX_CFG")"
+"$CLI" install-hooks >/dev/null 2>&1
+check "trusted config is left alone"   '[ "$CODEX_TRUSTED" = "$(cat "$CODEX_CFG")" ]'
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "trusted config parses as TOML" 'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert len(d[\"hooks\"][\"state\"])==7; assert len(d[\"hooks\"][\"Stop\"])==1" "$CODEX_CFG"'
+fi
+
+# Every spelling TOML reads as notify, or as something under it, is the user's: a
+# second one beside it is a duplicate key and Codex refuses the file.
+for shape in '"\u006eotify" = ["/usr/bin/say"]' 'notify.command = "/usr/bin/say"' '[notify]'; do
+  fresh_home
+  mkdir -p "$HOME/.codex"
+  printf 'model = "o3"\n%s\n\n[profiles.mine]\nmodel = "o4"\n' "$shape" > "$HOME/.codex/config.toml"
+  "$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+  check "codex stands down for $shape" 'grep -q "already has a notify hook" "$TESTROOT/codex-out" && ! grep -q "/.agentbar/hooks/codex/notify.js" "$HOME/.codex/config.toml"'
+done
+# A file that ends inside an unterminated value is left exactly as it was.
+fresh_home
+mkdir -p "$HOME/.codex"
+printf 'model = "o3"\ninstructions = """\nnever closed\n' > "$HOME/.codex/config.toml"
+CODEX_OPEN="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "an unterminated value is untouched" '[ "$CODEX_OPEN" = "$(cat "$HOME/.codex/config.toml")" ] && grep -q "unterminated value" "$TESTROOT/codex-out"'
+# Markers around text that is not whole TOML (the begin marker inside a string):
+# there is no telling what replacing the block would cut, so it is not replaced.
+printf 'note = """\n# >>> agentbar >>> written by AgentBar; edit outside these two lines\n"""\n\n# <<< agentbar <<<\n' > "$HOME/.codex/config.toml"
+CODEX_ODD="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+# (AgentBar's own notify line may go in above; that part of the file is top-level.)
+check "odd markers are not replaced"   '[ "$CODEX_ODD" = "$(grep -v "^notify = " "$HOME/.codex/config.toml")" ] && ! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "codex.*left untouched" "$TESTROOT/codex-out"'
+# Both markers inside one multi-line string, with whole TOML between them: the
+# inside reads fine on its own, and the block replacement used to overwrite the
+# middle of the user's string. Only standalone comment lines are markers.
+printf 'note = """\n# >>> agentbar >>> written by AgentBar; edit outside these two lines\na = 1\n# <<< agentbar <<<\n"""\n' > "$HOME/.codex/config.toml"
+CODEX_ODD="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "markers in a string are text"   '[ "$CODEX_ODD" = "$(grep -v "^notify = " "$HOME/.codex/config.toml")" ] && ! grep -q "^\[\[hooks" "$HOME/.codex/config.toml" && grep -q "not comment lines" "$TESTROOT/codex-out"'
+if python3 -c 'import tomllib' 2>/dev/null; then
+  check "the string survives as TOML"  'python3 -c "import sys,tomllib; d=tomllib.load(open(sys.argv[1],\"rb\")); assert \"a = 1\" in d[\"note\"]" "$HOME/.codex/config.toml"'
+fi
+
+# A handler the installer rewrites loses its trust, as Codex will treat it: keeping
+# the old entry made notify.js stand down while Codex skipped the changed hook.
+fresh_home
+mkdir -p "$HOME/.codex"
+CODEX_CFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\nnotify = ["/usr/bin/say"]\n' > "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+{
+  printf '\n[hooks.state."/elsewhere/config.toml:session_start:0:0"]\ntrusted_hash = "sha256:other"\n'
+  for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use stop permission_request; do
+    printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:%s"\n' "$CODEX_CFG" "$e" "$e"
+  done
+} >> "$CODEX_CFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "unchanged hooks keep their trust" '[ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 8 ]'
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"st1","cwd":"/tmp/proj"}'
+check "trusted: notify stands down"    '[ ! -e "$HOME/.agentbar/state.d/codex-st1.json" ]'
+# The node moved: seen from the installer, every handler's command changed.
+sed -i.bak 's|^command = "\\"[^\\"]*\\" |command = "\\"/old/node\\" |' "$CODEX_CFG"
+check "an old node is seeded"          '[ "$(grep -c "/old/node" "$CODEX_CFG")" = 7 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "rewritten hooks lose their trust" '! grep -q "/old/node" "$CODEX_CFG" && [ "$(grep -c "^trusted_hash" "$CODEX_CFG")" = 1 ] && grep -q "sha256:other" "$CODEX_CFG"'
+"$NODE" Scripts/hooks/codex/notify.js '{"type":"agent-turn-complete","thread-id":"st1","cwd":"/tmp/proj"}'
+check "stale trust: notify reports"    '[ -f "$HOME/.agentbar/state.d/codex-st1.json" ]'
+
+# A `]` in the home path is legal inside the quotes. Read up to the first `]`, our
+# own line was not recognised, and a stray copy under a table was never taken out.
+fresh_home
+export HOME="$TESTROOT/home]b.$$"
+mkdir -p "$HOME/.agentbar/state.d" "$HOME/.codex"
+printf 'model = "o3"\nnotify = ["/usr/bin/say"]\n\n[shell_environment_policy.set]\nK = "v"\n' > "$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+CODEX_HEALTHY="$(cat "$HOME/.codex/config.toml")"
+"$NODE" -e '
+const fs=require("fs"),f=process.argv[1],hooks=process.argv[2];
+fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/(K = "v"\n)/,`$1notify = ["/usr/bin/node", "${hooks}/codex/notify.js"]\n`));' "$HOME/.codex/config.toml" "$HOME/.agentbar/hooks"
+check "a bracketed stray is seeded"    'grep -q "home\]b" "$HOME/.codex/config.toml" && [ "$(grep -c "^notify = " "$HOME/.codex/config.toml")" = 2 ]'
+"$CLI" install-hooks >/dev/null 2>&1
+check "a bracketed stray is removed"   '[ "$CODEX_HEALTHY" = "$(cat "$HOME/.codex/config.toml")" ]'
+fresh_home
+export HOME="$TESTROOT/home]c.$$"
+mkdir -p "$HOME/.agentbar/state.d" "$HOME/.codex"
+printf 'model = "o3"\n\n[profiles.mine]\nmodel = "o4"\n' > "$HOME/.codex/config.toml"
+"$CLI" install-hooks >/dev/null 2>&1
+CODEX_BRACKET="$(cat "$HOME/.codex/config.toml")"
+"$CLI" install-hooks >"$TESTROOT/codex-out" 2>&1
+check "a bracketed home is idempotent" '[ "$CODEX_BRACKET" = "$(cat "$HOME/.codex/config.toml")" ] && grep -q "home\]c.*notify.js" "$HOME/.codex/config.toml" && grep -q "^ok .*codex  " "$TESTROOT/codex-out"'
 
 # --- the record, as something you can hand to somebody ---------------------------
 fresh_home

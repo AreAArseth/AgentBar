@@ -407,15 +407,118 @@ enum Diagnostics {
         let url = home.appendingPathComponent(".codex/config.toml")
         guard let text = try? String(contentsOf: url, encoding: .utf8),
               text.contains(HookInstaller.codexBegin) else { return [] }
-        // Codex writes this key when a hook is accepted; it is
-        // "<source path>:<event>:<group>:<index>", and the source is this file.
-        let trusted = text.contains("hooks.state.\"\(url.path):session_start:")
+        let missing = codexUntrustedEvents(config: text, path: url.path)
+        let all = missing.count == HookInstaller.codexEvents.count
         return [Check(id: "codex.hooks", title: "Codex has accepted its hooks",
-                      status: trusted ? .ok : .warn,
-                      detail: trusted ? nil
-                        : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here.",
-                      fix: trusted ? nil
+                      status: missing.isEmpty ? .ok : .warn,
+                      detail: missing.isEmpty ? nil
+                        : all ? codexUnacceptedDetail(notifyWired: codexNotifyWired(config: text))
+                        : "Accepted except \(missing.joined(separator: ", ")). Codex runs only the hooks it was told to trust, and skips the rest in silence.",
+                      fix: missing.isEmpty ? nil
                         : "Start a Codex session and accept the hooks it asks about.")]
+    }
+
+    /// What "not yet accepted" costs depends on whether the older notify bridge is
+    /// there to cover for the hooks. It often is not: AgentBar stands aside for a
+    /// `notify` of the user's, and its own line may have been commented out by hand.
+    static func codexUnacceptedDetail(notifyWired: Bool) -> String {
+        notifyWired
+            ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+            : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing. AgentBar's older notify bridge is not wired in this config either (another program owns `notify`, or AgentBar's line is commented out), so Codex sessions do not appear here at all until the hooks are accepted."
+    }
+
+    /// Whether AgentBar's own notify line is live: a top-level `notify` array naming
+    /// its hooks path, in a file that reads to the end. A stray copy under a table is
+    /// not live, and neither is a commented-out one.
+    static func codexNotifyWired(config: String) -> Bool {
+        let outline = TOMLOutline(config)
+        guard outline.isComplete else { return false }
+        return outline.statements.contains { s in
+            s.isTopLevel && (outline.stringArray(assignedTo: "notify", by: s, in: config)?.values
+                .contains { $0.contains("/.agentbar/hooks/codex/") } ?? false)
+        }
+    }
+
+    /// AgentBar's events whose own hook has no trusted, enabled entry in Codex's
+    /// `[hooks.state]`.
+    ///
+    /// Codex keys an entry "<source path>:<event>:<group>:<handler>", the group and
+    /// handler counted by position in this file, and writes a `trusted_hash` into it
+    /// when a human accepts that hook; `enabled = false` is the human switching it
+    /// off. So the key checked is the one AgentBar's own handler occupies: a user's
+    /// hooks for the same event come first, and their trust says nothing about ours.
+    ///
+    /// Presence is all this can see. Whether the hash still matches the hook is
+    /// Codex's own arithmetic over its own structs; when it does not, Codex asks again
+    /// at the next session, which is the one place that question has a reliable answer.
+    static func codexUntrustedEvents(config: String, path: String) -> [String] {
+        let outline = TOMLOutline(config)
+        // A file that ends inside an open value reads differently to Codex, if it
+        // reads at all; nothing in it counts as accepted.
+        guard outline.isComplete else { return HookInstaller.codexEvents.map(\.event) }
+        let keys = codexHookKeys(config, outline: outline, path: path)
+        let states = codexHookStates(config, outline: outline)
+        return HookInstaller.codexEvents.map(\.event).filter { event in
+            guard let key = keys[event], let state = states[key] else { return true }
+            return !state.trusted || state.disabled
+        }
+    }
+
+    /// Event → the state key of the handler that runs AgentBar's `codex/hook.js`,
+    /// found by the same lookup the installer uses when it decides which trust a
+    /// rewrite made stale (`HookInstaller.codexAgentBarHandlers`).
+    static func codexHookKeys(_ text: String, outline: TOMLOutline, path: String) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: HookInstaller.codexAgentBarHandlers(text, outline: outline).map {
+            ($0.key, "\(path):\(codexEventLabel($0.key)):\($0.value.group):\($0.value.handler)")
+        })
+    }
+
+    /// State key → what `[hooks.state]` records for it, in any of TOML's spellings:
+    /// `[hooks.state."k"]` tables, `"k".trusted_hash = …` dotted keys under
+    /// `[hooks.state]`, or `"k" = { trusted_hash = … }` inline tables.
+    static func codexHookStates(_ text: String, outline: TOMLOutline)
+        -> [String: (trusted: Bool, disabled: Bool)] {
+        var out: [String: (trusted: Bool, disabled: Bool)] = [:]
+        var table: [String]? = []
+        for s in outline.statements {
+            if s.isHeader {
+                table = outline.isArrayHeader(s, in: text) ? nil : outline.keyPath(of: s, in: text)
+                continue
+            }
+            guard let t = table, let a = outline.assignment(of: s, in: text) else { continue }
+            let full = t + a.key
+            guard full.count >= 3, full[0] == "hooks", full[1] == "state" else { continue }
+            let key = full[2]
+            let value = String(text[a.value...].prefix(while: { !$0.isNewline }))
+            var state = out[key] ?? (false, false)
+            switch full.count {
+            case 4 where full[3] == "trusted_hash":
+                state.trusted = true
+            case 4 where full[3] == "enabled":
+                state.disabled = value.hasPrefix("false")
+            case 3 where value.hasPrefix("{"):
+                // Read as a table, so a comment after it counts for nothing.
+                guard let pairs = outline.inlineTable(at: a.value, in: text) else { continue }
+                for p in pairs where p.key.count == 1 {
+                    if p.key[0] == "trusted_hash" { state.trusted = true }
+                    if p.key[0] == "enabled" && !p.quoted && p.value == "false" { state.disabled = true }
+                }
+            default:
+                continue
+            }
+            out[key] = state
+        }
+        return out
+    }
+
+    /// `SessionStart` → `session_start`, the spelling Codex uses in its state keys.
+    static func codexEventLabel(_ event: String) -> String {
+        var out = ""
+        for c in event {
+            if c.isUppercase && !out.isEmpty { out.append("_") }
+            out.append(contentsOf: c.lowercased())
+        }
+        return out
     }
 
     private static func lastSeenCheck(_ i: Integration, base: URL, now: TimeInterval) -> Check {

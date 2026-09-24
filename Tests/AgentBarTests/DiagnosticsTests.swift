@@ -123,13 +123,164 @@ import Testing
         #expect(row?.fix != nil)
     }
 
+    /// "Sessions still appear, from the older notify bridge" is only true when that
+    /// bridge is wired. AgentBar stands aside for a user's own notify, and its own
+    /// line may be commented out by hand; then nothing reports a Codex session.
+    @Test(arguments: [
+        ("notify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", true),
+        ("notify = [\"/usr/bin/say\", \"done\"]\n\n[t]\n# notify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", false),
+        ("model = \"o3\"\n\n[t]\nnotify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", false),
+        ("model = \"o3\"\n", false),
+    ])
+    func theUnacceptedWarningSaysWhetherTheNotifyBridgeIsThere(_ config: String, _ wired: Bool) throws {
+        #expect(Diagnostics.codexNotifyWired(config: config) == wired)
+        try write(".codex/config.toml", block(config))
+        let detail = check("codex.hooks")?.detail ?? ""
+        #expect(detail.contains("still appear") == wired)
+        #expect(detail.contains("do not appear here at all") == !wired)
+    }
+
+    private func trustState(_ cfg: String, _ labels: [String], group: Int = 0, extra: String = "") -> String {
+        "[hooks.state]\n\n" + labels.map {
+            "[hooks.state.\"\(cfg):\($0):\(group):0\"]\ntrusted_hash = \"sha256:x\"\n\($0 == "stop" ? extra : "")\n"
+        }.joined()
+    }
+
+    private static let labels = ["session_start", "session_end", "user_prompt_submit", "pre_tool_use",
+                                 "post_tool_use", "stop", "permission_request"]
+
+    /// The block exactly as the installer writes it, pointing into this test's home.
+    private func block(_ config: String = "model = \"o3\"\n") -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: config, node: "/n", dir: home.appendingPathComponent(".agentbar/hooks").path)
+        else { return config }
+        return next
+    }
+
+    private static func block(at dir: String, after config: String) -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(config: config, node: "/n", dir: dir)
+        else { return config }
+        return next
+    }
+
     @Test func codexHooksAcceptedPass() throws {
         let cfg = home.appendingPathComponent(".codex/config.toml").path
-        try write(".codex/config.toml", "model = \"o3\"\n\(HookInstaller.codexBegin)\n"
-                  + "command = \"/x/.agentbar/hooks/codex/hook.js\"\n\(HookInstaller.codexEnd)\n"
-                  + "[hooks.state.\"\(cfg):session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n")
+        try write(".codex/config.toml", block() + trustState(cfg, Self.labels))
         #expect(check("codex.hooks")?.status == .ok)
         #expect(check("codex.hooks")?.fix == nil)
+    }
+
+    /// Trust is given hook by hook. Only `session_start` used to be looked at, so a
+    /// Codex that would still skip the approval hook read as fully accepted.
+    @Test func codexHooksPartlyAcceptedNameWhatIsMissing() throws {
+        let cfg = home.appendingPathComponent(".codex/config.toml").path
+        try write(".codex/config.toml", block() + trustState(cfg, ["session_start"]))
+        let row = check("codex.hooks")
+        #expect(row?.status == .warn)
+        #expect(row?.detail?.contains("PermissionRequest") == true)
+        #expect(row?.detail?.contains("SessionStart") == false)
+    }
+
+    /// `enabled = false` is the human switching a hook off: trusted, and still not run.
+    @Test func aDisabledCodexHookIsNotAccepted() {
+        let cfg = "/h/.codex/config.toml"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: "model = \"o3\"\n")
+        #expect(Diagnostics.codexUntrustedEvents(
+            config: wired + trustState(cfg, Self.labels, extra: "enabled = false\n"), path: cfg) == ["Stop"])
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState(cfg, Self.labels), path: cfg).isEmpty)
+        // CRLF, with a blank line before the switch: still switched off.
+        let crlf = (wired + trustState(cfg, Self.labels, extra: "\nenabled = false\n"))
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        #expect(Diagnostics.codexUntrustedEvents(config: crlf, path: cfg) == ["Stop"])
+        // Another file's trust says nothing about this one.
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState("/other.toml", Self.labels),
+                                                 path: cfg).count == 7)
+    }
+
+    /// The user's own hooks for the same events come first, so AgentBar's groups sit
+    /// at index 1. Trust for the user's index-0 hooks must not count as trust for
+    /// AgentBar's: before, the key was cut down to its event and this read `ok`.
+    @Test func trustForTheUsersOwnHooksIsNotTrustForAgentBars() {
+        let cfg = "/h/.codex/config.toml"
+        let mine = "model = \"o3\"\n\n" + ["SessionStart", "Stop", "PermissionRequest"].map {
+            "[[hooks.\($0)]]\n[[hooks.\($0).hooks]]\ntype = \"command\"\ncommand = \"/usr/local/bin/mine\"\n"
+        }.joined(separator: "\n")
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: mine)
+        let theirs = trustState(cfg, Self.labels, group: 0)
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + theirs, path: cfg)
+                == ["SessionStart", "Stop", "PermissionRequest"])
+
+        // AgentBar's own keys, at the group each event really has it in.
+        let ours = "[hooks.state.\"\(cfg):session_start:1:0\"]\ntrusted_hash = \"sha256:a\"\n"
+            + "[hooks.state.\"\(cfg):stop:1:0\"]\ntrusted_hash = \"sha256:a\"\n"
+            + "[hooks.state.\"\(cfg):permission_request:1:0\"]\ntrusted_hash = \"sha256:a\"\nenabled = false\n"
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + theirs + ours, path: cfg) == ["PermissionRequest"])
+    }
+
+    /// A comment naming our path does not make the user's handler ours: only the
+    /// decoded command value counts. Read raw to the line's end, the user's group 0
+    /// was taken for AgentBar's and its trust passed the check.
+    @Test func aCommentNamingOurPathIsNotOurHandler() {
+        let cfg = "/h/.codex/config.toml"
+        let mine = "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\n"
+            + "command = \"/mine\" # old: /h/.agentbar/hooks/codex/hook.js\n\n"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: mine)
+        #expect(Diagnostics.codexHookKeys(wired, outline: TOMLOutline(wired), path: cfg)["SessionStart"]
+                == "\(cfg):session_start:1:0")
+        let trustMine = "[hooks.state.\"\(cfg):session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n"
+        #expect(Diagnostics.codexUntrustedEvents(config: wired + trustState(cfg, Self.labels.filter { $0 != "session_start" }) + trustMine,
+                                                 path: cfg) == ["SessionStart"])
+    }
+
+    /// A config that ends inside an open value is one Codex reads differently, if at
+    /// all: nothing in it counts as accepted, whatever trust entries it seems to hold.
+    @Test func anIncompleteConfigAcceptsNothing() {
+        let cfg = "/h/.codex/config.toml"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: "model = \"o3\"\n")
+        let trusted = wired + trustState(cfg, Self.labels)
+        #expect(Diagnostics.codexUntrustedEvents(config: trusted, path: cfg).isEmpty)
+        #expect(Diagnostics.codexUntrustedEvents(config: trusted + "note = \"\"\"\nnever closed\n", path: cfg).count == 7)
+    }
+
+    /// An inline entry is read as a table: a comment after it is not part of it, and
+    /// a quoted "false" is a string, not a switch.
+    @Test func aCommentAfterAnInlineEntryCountsForNothing() {
+        let text = "[hooks.state]\n\"a\" = {} # trusted_hash = \"x\"\n"
+            + "\"c\" = { trusted_hash = \"x\" } # enabled = false\n"
+            + "\"d\" = { trusted_hash = \"x\", enabled = \"false\" }\n"
+        let states = Diagnostics.codexHookStates(text, outline: TOMLOutline(text))
+        #expect(states["a"]?.trusted != true)
+        #expect(states["c"]?.trusted == true && states["c"]?.disabled == false)
+        #expect(states["d"]?.trusted == true && states["d"]?.disabled == false)
+    }
+
+    /// Handlers are counted inside their own group, groups across the file, and a
+    /// user's group after AgentBar's block moves nothing.
+    @Test func agentBarsKeyIsTheGroupAndHandlerItsCommandSitsIn() {
+        let cfg = "/h/.codex/config.toml"
+        let before = "[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = \"a\"\n"
+            + "[[hooks.PreToolUse.hooks]]\ncommand = \"b\"\n\n"
+            + "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ncommand = \"c\"\n"
+        let wired = Self.block(at: "/h/.agentbar/hooks", after: before)
+            + "\n[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = \"after\"\n"
+        let keys = Diagnostics.codexHookKeys(wired, outline: TOMLOutline(wired), path: cfg)
+        #expect(keys["PreToolUse"] == "\(cfg):pre_tool_use:2:0")
+        #expect(keys["SessionStart"] == "\(cfg):session_start:0:0")
+        #expect(keys.count == 7)
+    }
+
+    /// Codex writes tables, but TOML has three spellings for the same entry, and
+    /// quoted keys are decoded before they are compared.
+    @Test func everySpellingOfAStateEntryIsRead() {
+        let text = "[hooks.state]\n\"k1\".trusted_hash = \"sha256:a\"\n"
+            + "\"k2\" = { trusted_hash = \"sha256:b\", enabled = false }\n"
+            + "\"k\\u0033\" = { trusted_hash = \"sha256:c\" }\n\n"
+            + "[hooks.state.\"k4\"]\nenabled = false\n"
+        let states = Diagnostics.codexHookStates(text, outline: TOMLOutline(text))
+        #expect(states["k1"]?.trusted == true && states["k1"]?.disabled == false)
+        #expect(states["k2"]?.trusted == true && states["k2"]?.disabled == true)
+        #expect(states["k3"]?.trusted == true)
+        #expect(states["k4"]?.trusted == false && states["k4"]?.disabled == true)
     }
 
     /// No block, no row: a Codex user who has never had the hooks written should not
