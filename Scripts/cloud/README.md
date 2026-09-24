@@ -56,6 +56,13 @@ is still alive **there**. Rows read `gpu: my-repo`; a click opens `ssh://<host>`
   keep working.
 - Host strings are checked before they reach `ssh`'s argv — letters, digits, `.`,
   `_`, `-`, one `@`, never a leading dash.
+- **Read by owner when it can be.** When the host has AgentBar's collector
+  (installed by the same `agentbar install-hooks`), the poller reads that: only
+  the sessions that machine owns, prompts and recaps left on it
+  ([docs/remote-protocol.md](../../docs/remote-protocol.md)). A home mounted on
+  several machines *needs* it — declare it with `agentbar configure-cluster
+  --shared-home` and add each node as its own host; without the collector such a
+  host shows nothing and the log says why.
 
 Keys may also come from `CURSOR_API_KEY` / `DEVIN_API_KEY` in the launchd
 environment instead of the file.

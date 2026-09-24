@@ -16,6 +16,14 @@ All notable changes to AgentBar are documented here. This project follows
   owner), and only that machine ever probes, prunes, shows or deletes it. A machine
   that cannot say who it is writes nothing rather than guessing. Standalone homes
   are unchanged byte for byte. `agentbar doctor` reports it as `remote.cluster`.
+- **The ssh mirror reads a host by its owner.** `agentbar install-hooks` now also
+  installs a small collector, and when a mirrored host has it, the poller reads
+  that instead of the raw folder: only the sessions that machine owns, checked on
+  that machine, with prompts and recaps kept there. On a shared home that is the
+  only correct read — without it, every node showed every node's sessions, their
+  pids checked on the wrong machine — so a shared home without the collector now
+  says so in the poller's log and shows nothing. Hosts without it read exactly as
+  before. Format: `docs/remote-protocol.md`.
 
 ## 1.30.0 - 2026-09-24
 

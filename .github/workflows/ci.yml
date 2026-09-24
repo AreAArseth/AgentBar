@@ -32,6 +32,8 @@ jobs:
         run: node --test Scripts/cloud/test/*.test.js
       - name: Run shared-home test suite
         run: node --test Scripts/test/*.test.js
+      - name: Run remote collector test suite
+        run: node --test Scripts/remote/test/*.test.js
 
   linux-tests:
     name: Hook + CLI tests (Linux)
@@ -55,6 +57,8 @@ jobs:
         run: node --test Scripts/cloud/test/*.test.js
       - name: Run shared-home test suite
         run: node --test Scripts/test/*.test.js
+      - name: Run remote collector test suite
+        run: node --test Scripts/remote/test/*.test.js
 
   build:
     name: Build app (universal)

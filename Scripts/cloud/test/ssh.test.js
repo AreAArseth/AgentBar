@@ -121,3 +121,142 @@ test("ssh: rows per host are capped", () => {
   assert.equal(rows.length, 50);
   assert.match(warnings[0], /more than 50/);
 });
+
+// MARK: - Owner-aware reads (state layout 2, docs/remote-protocol.md)
+
+const cp = require("child_process");
+const REPO = path.join(__dirname, "..", "..");
+
+const frames = (hello, snapshot) => `\x1e${ssh.COLLECTOR}\nWelcome to devbox\n${JSON.stringify(hello)}\n${JSON.stringify(snapshot)}\n`;
+const SRC = "00000000-0000-4000-8000-00000000000a";
+const BOOT = "00000000-0000-4000-8000-000000000b01";
+const STREAM = "00000000-0000-4000-8000-000000000501";
+const hdr = (type, seq) => ({ v: 2, type, sourceId: SRC, bootId: BOOT, streamId: STREAM, seq, sentAt: NOW });
+const hello = { ...hdr("hello", 0), heartbeatSeconds: 10, stateLayout: 2, sharedHome: true };
+const session = (id, extra = {}) => ({ id, ownerSourceId: SRC, ownerBootId: BOOT, agent: "claude", state: "tool",
+  label: "Editing", project: "web", started: true, startedAt: NOW - 60, updatedAt: NOW - 1, ...extra });
+
+test("ssh: the collector's snapshot becomes the same rows, without prompts", () => {
+  const snap = { ...hdr("snapshot", 1), sessions: [session("s1"), session("s2", { state: "permission" })],
+                 counts: { owned: 2, foreign: 3, legacy: 0, oldBoot: 0 }, truncated: false };
+  const { rows, warnings } = ssh.normalize([{ host: "devbox", name: "devbox", out: frames(hello, snap) }], DEFAULTS.ssh, NOW);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(rows.map((r) => r.id), ["devbox-s1", "devbox-s2"]);
+  assert.equal(rows[0].project, "devbox: web");
+  assert.equal(rows[0].prompt, "");
+  assert.equal(rows[0].started_at, NOW - 60);
+  assert.equal(toProtocolRow(rows[1], ssh, NOW, 1).state, "question");
+});
+
+test("ssh: a collector that speaks for another machine is not believed", () => {
+  const foreign = { ...hdr("snapshot", 1), sessions: [session("s1", { ownerSourceId: "00000000-0000-4000-8000-00000000000b" })],
+                    counts: {}, truncated: false };
+  const r1 = ssh.normalize([{ host: "h", name: "h", out: frames(hello, foreign) }], DEFAULTS.ssh, NOW);
+  assert.equal(r1.rows.length, 0);
+  assert.match(r1.warnings[0], /not its own/);
+  const otherStream = { ...hdr("snapshot", 1), streamId: "00000000-0000-4000-8000-000000000502", sessions: [], counts: {} };
+  assert.match(ssh.normalize([{ host: "h", name: "h", out: frames(hello, otherStream) }], DEFAULTS.ssh, NOW).warnings[0],
+               /not its own/);
+  const none = ssh.normalize([{ host: "h", name: "h", out: `\x1e${ssh.COLLECTOR}\n` }], DEFAULTS.ssh, NOW);
+  assert.match(none.warnings[0], /no snapshot/);
+});
+
+test("ssh: a shared home without the collector says so and shows nothing", () => {
+  const { rows, warnings } = ssh.normalize([{ host: "h", name: "h", out: `\x1e${ssh.SHARED_WITHOUT_COLLECTOR}\n` }],
+                                           DEFAULTS.ssh, NOW);
+  assert.equal(rows.length, 0);
+  assert.match(warnings[0], /shared by several machines/);
+});
+
+// Two machines sharing one home, and the real remote script run through the same
+// tcsh-with-a-banner stand-in as above — once through the collector, once
+// through the plain sh read.
+const withEnv = async (vars, fn) => {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  try { return await fn(); } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+};
+const sharedHome = () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "agentbar-ssh-shared-"));
+  fs.mkdirSync(path.join(home, ".agentbar", "state.d"), { recursive: true });
+  const env = { ...process.env, HOME: home, AGENTBAR_FORCE_APP: "1" };
+  delete env.AGENTBAR_SOURCE_ID;
+  cp.spawnSync(process.execPath, [path.join(REPO, "cli", "agentbar"), "configure-cluster", "--shared-home"], { env });
+  const machine = (name) => {
+    fs.writeFileSync(path.join(home, `machine-${name}`), `raw-machine-${name}\n`);
+    fs.writeFileSync(path.join(home, `boot-${name}`), `raw-boot-${name}\n`);
+    return { AGENTBAR_MACHINE_ID_FILE: path.join(home, `machine-${name}`),
+             AGENTBAR_BOOT_ID_FILE: path.join(home, `boot-${name}`) };
+  };
+  const write = (m, id, tool) => cp.spawnSync(process.execPath, [path.join(REPO, "hooks", "claude", "update.js"), "pre"],
+    { env: { ...env, ...m }, input: JSON.stringify({ session_id: id, cwd: "/work/web", tool_name: tool }) });
+  const login = fs.existsSync("/bin/tcsh") ? "/bin/tcsh" : "/bin/sh";
+  const fake = path.join(home, "fake-ssh");
+  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\necho "Welcome to devbox"\nHOME="${home}" exec ${login} -c "$*"\n`);
+  fs.chmodSync(fake, 0o755);
+  const installCollector = () => {
+    const bin = path.join(home, ".agentbar", "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "agentbar-remote"),
+      `#!/bin/sh\nexec '${process.execPath}' '${path.join(REPO, "remote", "stream.js")}' "$@"\n`, { mode: 0o755 });
+  };
+  return { home, machine, write, fake, installCollector };
+};
+
+test("ssh: through the collector, each machine of a shared home reports only its own rows", async () => {
+  const s = sharedHome();
+  const a = s.machine("a"), b = s.machine("b");
+  // Same session id on both machines, and the hooks' parent (this process) is
+  // alive on both — exactly what the plain read cannot tell apart.
+  s.write(a, "session-1", "Edit");
+  s.write(b, "session-1", "Bash");
+  s.installCollector();
+  try {
+    const read = (m) => withEnv(m, async () => ssh.normalize(await ssh.fetchRaw({ bin: s.fake, hosts: ["devbox"] }),
+                                                              DEFAULTS.ssh, NOW));
+    const fromA = await read(a), fromB = await read(b);
+    assert.deepEqual(fromA.warnings, []);
+    assert.deepEqual(fromA.rows.map((r) => [r.id, r.label]), [["devbox-session-1", "Editing"]]);
+    assert.deepEqual(fromB.rows.map((r) => [r.id, r.label]), [["devbox-session-1", "Running command"]]);
+    assert.ok(!JSON.stringify([fromA, fromB]).includes("raw-machine"));
+  } finally {
+    fs.rmSync(s.home, { recursive: true, force: true });
+  }
+});
+
+test("ssh: without the collector, a shared home answers with a notice and no rows", async () => {
+  const s = sharedHome();
+  const a = s.machine("a");
+  s.write(a, "session-1", "Edit");
+  try {
+    const out = await withEnv(a, async () => ssh.normalize(await ssh.fetchRaw({ bin: s.fake, hosts: ["devbox"] }),
+                                                           DEFAULTS.ssh, NOW));
+    assert.equal(out.rows.length, 0);
+    assert.match(out.warnings[0], /shared by several machines/);
+  } finally {
+    fs.rmSync(s.home, { recursive: true, force: true });
+  }
+});
+
+test("ssh: the plain read never takes a cluster node's row as a standalone machine's", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "agentbar-ssh-"));
+  const d = path.join(home, ".agentbar", "state.d");
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, "mine.json"), JSON.stringify({ agent: "claude", state: "thinking", sessionId: "mine",
+    pid: process.pid, started: true, ts: NOW }));
+  fs.writeFileSync(path.join(d, "0123456789abcdef-0123456789abcdef0123456789abcdef.json"), JSON.stringify({
+    agent: "claude", state: "thinking", sessionId: "node", pid: process.pid, ownerPid: process.pid,
+    ownerSourceId: SRC, ownerBootId: BOOT, stateLayout: 2, started: true, ts: NOW }));
+  const login = fs.existsSync("/bin/tcsh") ? "/bin/tcsh" : "/bin/sh";
+  const fake = path.join(home, "fake-ssh");
+  fs.writeFileSync(fake, `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; shift\necho "Welcome to devbox"\nHOME="${home}" exec ${login} -c "$*"\n`);
+  fs.chmodSync(fake, 0o755);
+  try {
+    const { rows } = ssh.normalize(await ssh.fetchRaw({ bin: fake, hosts: ["devbox"] }), DEFAULTS.ssh, NOW);
+    assert.deepEqual(rows.map((r) => r.id), ["devbox-mine"]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

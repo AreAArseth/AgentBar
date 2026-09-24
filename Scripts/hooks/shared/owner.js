@@ -31,6 +31,7 @@ const cp = require("child_process");
 const LAYOUT = 2;
 const CLUSTER_FILE = "remote-cluster.json";
 const SALT_FILE = "identity-salt";
+const SOURCE_FILE = "source-id";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const readText = (file) => {
@@ -141,6 +142,24 @@ function resolve(base) {
   return { shared: true, sourceId, bootId: hmacUuid(s, "agentbar-boot", boot) };
 }
 
+// The collector's identity. Shared mode is the same answer the hooks get, or a
+// refusal with a reason; standalone mode names this home with a random id kept
+// in it, since there is only one machine to name.
+function collectorIdentity(base) {
+  const mode = clusterMode(base);
+  if (mode === "invalid") return { error: "cluster-config-invalid" };
+  if (mode === "shared") {
+    const own = resolve(base);
+    return own ? { ...own, stateLayout: LAYOUT } : { error: "cluster-identity-unavailable" };
+  }
+  const s = ensureSalt(base);
+  const sourceId = explicitSource()
+    || createOnce(path.join(base, SOURCE_FILE), crypto.randomUUID()).toLowerCase();
+  if (!s || !UUID.test(sourceId)) return { error: "standalone-identity-unavailable" };
+  return { shared: false, sourceId, bootId: hmacUuid(s, "agentbar-boot", bootIdentity() || "unknown"),
+           stateLayout: 1 };
+}
+
 const token = (value, n) => crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, n);
 
 // Layout 2 names a file by who owns it and which session it is, both hashed to
@@ -175,6 +194,6 @@ const fromEarlierBoot = (row, own) => !!(own && own.shared && row && row.ownerBo
 
 module.exports = {
   LAYOUT, CLUSTER_FILE, SALT_FILE, UUID,
-  clusterMode, resolve, stateFile, stamp, mayManage, fromEarlierBoot,
+  clusterMode, resolve, collectorIdentity, stateFile, stamp, mayManage, fromEarlierBoot,
   ensureSalt, createOnce, hmacUuid,
 };

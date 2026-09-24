@@ -19,6 +19,17 @@
 //
 // Hosts come only from ~/.agentbar/cloud.json, and are checked before they reach
 // ssh's argv: a "host" starting with "-" would be read as an option.
+//
+// Two ways to read a host, chosen on the host. When AgentBar's collector is
+// installed there (`agentbar install-hooks` puts it at ~/.agentbar/bin/
+// agentbar-remote), the script runs it once: one hello and one snapshot of the
+// rows THAT machine owns, already projected and capped (docs/remote-protocol.md).
+// That is the only correct read of a home several machines share — the rows of
+// every node sit in one state.d, and a pid is only meaningful on the node that
+// issued it (state layout 2, docs/protocol.md). Without the collector, the plain
+// sh script below reads the folder itself, and it cannot compute which node it is
+// on, so a shared home answers with a notice and no rows rather than every node's
+// rows checked against the wrong machine's pids.
 
 const { execFile } = require("child_process");
 const { epoch } = require("../lib/policy");
@@ -28,14 +39,32 @@ const agentId = "claude"; // fallback only: every remote row names its own agent
 const prefix = "ssh-";
 
 const SEP = "\x1e";
+// What the script prints, after a separator, to say which read it did.
+const COLLECTOR = "agentbar-collector";
+const SHARED_WITHOUT_COLLECTOR = "agentbar-shared-home-needs-collector";
 
-// Prints each live row's JSON followed by a record separator. The pid check
-// runs remotely, because a pid means nothing on this machine: a row whose agent
-// died without its end hook firing would otherwise sit in the bar for a day.
+// The collector when it is installed; otherwise each live row's JSON preceded by
+// a record separator. The pid check runs remotely, because a pid means nothing on
+// this machine: a row whose agent died without its end hook firing would
+// otherwise sit in the bar for a day. A shared home without the collector prints
+// only its notice, and a standalone home skips any row a cluster node wrote
+// (`ownerSourceId`), so a rolled-back cluster's files are never read as its own.
 const REMOTE = [
+  'c="$HOME/.agentbar/bin/agentbar-remote"',
+  'if [ -x "$c" ]; then',
+  `  printf '\\036${COLLECTOR}\\n'`,
+  '  "$c" --protocol 2 --once </dev/null',
+  "  exit 0",
+  "fi",
+  'k="$HOME/.agentbar/remote-cluster.json"',
+  'if [ -f "$k" ] && ! grep -q \'"sharedHome": *false\' "$k"; then',
+  `  printf '\\036${SHARED_WITHOUT_COLLECTOR}\\n'`,
+  "  exit 0",
+  "fi",
   'd="$HOME/.agentbar/state.d"',
   'for f in "$d"/*.json; do',
   '  [ -f "$f" ] || continue',
+  "  grep -q '\"ownerSourceId\"' \"$f\" && continue",
   "  pid=$(sed -n 's/.*\"pid\": *\\([0-9][0-9]*\\).*/\\1/p' \"$f\" | head -n 1)",
   '  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf \'\\036\\n\'; cat "$f"; printf \'\\n\'; fi',
   "done",
@@ -113,6 +142,48 @@ const MAX_ROWS_PER_HOST = 50;
 
 const STATES = new Set(["idle", "thinking", "tool", "permission", "question", "done", "error"]);
 
+const toRun = (h, cfg, now, r) => {
+  const state = STATES.has(r.state) ? r.state : "idle";
+  const waiting = state === "permission" || state === "question";
+  return {
+    id: `${h.name}-${r.sessionId || "unknown"}`,
+    agentId: KNOWN_AGENTS.has(r.agent) ? r.agent : agentId,
+    state: state === "tool" ? "thinking" : state,
+    label: waiting ? `Waiting on you on ${h.name}` : (r.label || ""),
+    project: `${h.name}: ${r.project || "~"}`,
+    prompt: r.prompt || "",
+    recap: r.recap || "",
+    url: `ssh://${h.host}`,
+    started_at: pastTime(r.started_at, now),
+    updated_at: pastTime(r.ts, now) || now,
+    recentHours: cfg.recentHours,
+  };
+};
+
+// The collector's frames: one hello, then one snapshot. Believed only when the
+// snapshot is the hello's own stream and every row is owned by the machine that
+// sent it — a collector may not speak for another node, or another boot of
+// itself. Lines that are not JSON (an rc file's banner) are skipped. Rows come
+// back in the shape the sh read produces, so everything after is shared; the
+// collector keeps prompts and recaps on the machine that has them.
+const fromCollector = (text) => {
+  let hello = null, snap = null;
+  for (const line of text.split("\n")) {
+    let f;
+    try { f = JSON.parse(line); } catch { continue; }
+    if (!f || typeof f !== "object" || f.v !== 2) continue;
+    if (f.type === "hello" && !hello) hello = f;
+    else if (f.type === "snapshot" && hello && !snap) snap = f;
+  }
+  if (!hello || !snap) return { error: "the collector sent no snapshot" };
+  const same = snap.sourceId === hello.sourceId && snap.bootId === hello.bootId && snap.streamId === hello.streamId;
+  const sessions = Array.isArray(snap.sessions) ? snap.sessions : [];
+  const owned = sessions.every((s) => s && s.ownerSourceId === hello.sourceId && s.ownerBootId === hello.bootId);
+  if (!same || !owned) return { error: "the collector reported rows that are not its own" };
+  return { rows: sessions.map((s) => ({ agent: s.agent, state: s.state, label: s.label, project: s.project,
+                                        sessionId: s.id, started: true, started_at: s.startedAt, ts: s.updatedAt })) };
+};
+
 const normalize = (raw, cfg, now) => {
   const rows = [];
   const warnings = [];
@@ -125,35 +196,37 @@ const normalize = (raw, cfg, now) => {
       continue;
     }
     let count = 0;
+    let candidates = [];
     for (const chunk of String(h.out || "").split(SEP)) {
-      if (count >= MAX_ROWS_PER_HOST) { warnings.push(`${h.name}: more than ${MAX_ROWS_PER_HOST} sessions, rest skipped`); break; }
       const text = chunk.trim();
       if (!text) continue;
+      if (text.startsWith(COLLECTOR)) {
+        const c = fromCollector(text.slice(COLLECTOR.length));
+        if (c.error) warnings.push(`${h.name}: ${c.error}`);
+        candidates = c.rows || [];
+        break;
+      }
+      if (text.startsWith(SHARED_WITHOUT_COLLECTOR)) {
+        warnings.push(`${h.name}: its home is shared by several machines — run \`agentbar install-hooks\` there so it can say which sessions are its own`);
+        candidates = [];
+        break;
+      }
       let r;
       try { r = JSON.parse(text); } catch { continue; }
+      candidates.push(r);
+    }
+    for (const r of candidates) {
+      if (count >= MAX_ROWS_PER_HOST) { warnings.push(`${h.name}: more than ${MAX_ROWS_PER_HOST} sessions, rest skipped`); break; }
       if (!r || typeof r !== "object" || r.started === false) continue;
       // A row that is itself a mirror (the remote runs this poller too) stays
       // there: mirroring a mirror turns one session into a chain of them.
       if (r.entrypoint === "cloud") continue;
-      const state = STATES.has(r.state) ? r.state : "idle";
-      const waiting = state === "permission" || state === "question";
       count++;
-      rows.push({
-        id: `${h.name}-${r.sessionId || "unknown"}`,
-        agentId: KNOWN_AGENTS.has(r.agent) ? r.agent : agentId,
-        state: state === "tool" ? "thinking" : state,
-        label: waiting ? `Waiting on you on ${h.name}` : (r.label || ""),
-        project: `${h.name}: ${r.project || "~"}`,
-        prompt: r.prompt || "",
-        recap: r.recap || "",
-        url: `ssh://${h.host}`,
-        started_at: pastTime(r.started_at, now),
-        updated_at: pastTime(r.ts, now) || now,
-        recentHours: cfg.recentHours,
-      });
+      rows.push(toRun(h, cfg, now, r));
     }
   }
   return { rows, warnings, keepPrefixes };
 };
 
-module.exports = { vendor, agentId, prefix, fetchRaw, normalize, hostsOf, validHost, REMOTE };
+module.exports = { vendor, agentId, prefix, fetchRaw, normalize, hostsOf, validHost, REMOTE,
+                   COLLECTOR, SHARED_WITHOUT_COLLECTOR };
