@@ -27,6 +27,16 @@ All notable changes to AgentBar are documented here. This project follows
   the user's `notify` is left as the one Codex runs, or AgentBar's moves to the top
   if there is no other. A hand workaround that commented that line out is left as
   it is.
+- **AgentBar deleted the trust you gave its hooks in Codex.** Codex writes that trust into
+  `[hooks.state]` at the end of `~/.codex/config.toml`, ahead of the file's last
+  comment. That comment is the end of AgentBar's own block, so the trust landed
+  inside it, and the next launch replaced the block with a fresh copy and deleted
+  the trust along with it. Codex then asked about "7 hooks new or changed" again,
+  every time. The installer, and `install-hooks`, now move any table in that
+  block they did not write to just below it, untouched. You will need to accept
+  the hooks in Codex once more after updating; from then on the answer stays.
+  `agentbar doctor` also looks for trust on all seven hooks rather than the first
+  one, and names any that are missing or switched off.
 
 ## 1.30.0 - 2026-09-24
 
