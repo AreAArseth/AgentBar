@@ -141,7 +141,7 @@ enum Diagnostics {
     static let quietDays = 14
 
     /// Hook script directories that must have survived the copy into `~/.agentbar/hooks/`.
-    static let hookDirs = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode"]
+    static let hookDirs = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode", "shared"]
     /// Scripts run through their own shebang rather than an explicit interpreter —
     /// a GUI-launched host inherits the launchd PATH, so `env node` never fires.
     /// Keyed by the agent that runs them: the installer only pins a script when its

@@ -19,6 +19,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
+const owner = require("../shared/owner.js");
 
 const base = path.join(os.homedir(), ".agentbar");
 const stateDir = path.join(base, "state.d");
@@ -272,6 +273,12 @@ function run() {
   // payload has no such key, and Copilot's is this event's own name.
   if (p.hookName === "permissionRequest") { dialect = "copilot"; p = normaliseCopilot(p); }
 
+  // The session's row, named for the machine that owns it on a shared home.
+  // Null when a shared home cannot say which machine this is: the request still
+  // goes out, only the row is not written — a guessed owner would be worse.
+  const own = owner.resolve(base);
+  const statePath = own ? owner.stateFile(stateDir, rowId(p.session_id), own) : "";
+
   try {
 
     // AskUserQuestion is Claude asking the human, not asking for permission. The
@@ -295,19 +302,18 @@ function run() {
     // session and get out of the way — PostToolUse flips the state back after the
     // wizard is answered.
     if (isQuestion && questions.length === 0) {
-      try {
+      if (statePath) try {
         const q = (((p.tool_input || {}).questions || [])[0] || {});
-        const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
         fs.mkdirSync(stateDir, { recursive: true });
         let prev = {};
         try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
-        writeAtomic(statePath, { ...prev, agent, state: "question",
+        writeAtomic(statePath, owner.stamp({ ...prev, agent, state: "question",
           label: "❓ " + oneLine(q.question || "Waiting for your answer"),
           // rowId, like the file this is being written into and like every other
           // writer of this row: a raw id here means the field and the file name
           // disagree for any agent that carries a prefix.
           sessionId: rowId(p.session_id), pid: process.ppid, started: true,
-          ts: Math.floor(Date.now() / 1000) });
+          ts: Math.floor(Date.now() / 1000) }, own));
       } catch {}
       process.exit(0);
     }
@@ -343,16 +349,15 @@ function run() {
     fs.mkdirSync(ansDir, { recursive: true });
 
     // The session row itself shows what's pending, even before the menu opens.
-    try {
-      const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
+    if (statePath) try {
       fs.mkdirSync(stateDir, { recursive: true });
       let prev = {};
       try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
-      writeAtomic(statePath, { ...prev, agent,
+      writeAtomic(statePath, owner.stamp({ ...prev, agent,
         state: isQuestion ? "question" : "permission",
         label: isQuestion ? "❓ " + oneLine(questions[0].question) : display,
         sessionId: rowId(p.session_id), pid: process.ppid, started: true,
-        ts: Math.floor(Date.now() / 1000) });
+        ts: Math.floor(Date.now() / 1000) }, own));
     } catch {}
 
     // A leftover answer under this name (orphan of a crashed twin, prompt_id
@@ -402,7 +407,6 @@ function run() {
     process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
     const deadline = Date.now() + TIMEOUT_MS;
-    const statePath = path.join(stateDir, rowId(p.session_id) + ".json");
     // The wizard renders alongside a question wait — and the plan dialog
     // alongside a plan wait — so both can be answered in the terminal while
     // this hook still polls. The next event then moves the session off the
@@ -410,6 +414,7 @@ function run() {
     // would stay up (and answerable, uselessly) for the rest of the wait.
     const waitingState = isQuestion ? "question" : "permission";
     const answeredElsewhere = () => {
+      if (!statePath) return false;
       try {
         const s = JSON.parse(fs.readFileSync(statePath, "utf8"));
         return s.state !== waitingState;
@@ -470,8 +475,8 @@ function run() {
                 let prev = {};
                 try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
                 if (prev.state === "question") {
-                  writeAtomic(statePath, { ...prev, agent, state: "thinking",
-                    label: "Thinking…", ts: Math.floor(Date.now() / 1000) });
+                  writeAtomic(statePath, owner.stamp({ ...prev, agent, state: "thinking",
+                    label: "Thinking…", ts: Math.floor(Date.now() / 1000) }, own));
                 }
               } catch {}
             }

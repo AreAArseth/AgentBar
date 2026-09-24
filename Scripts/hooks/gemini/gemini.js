@@ -3,11 +3,13 @@
 // stdin payload's hook_event_name) to a per-session state file in
 // ~/.agentbar/state.d/. Observe-only: writes state, emits nothing, exits fast.
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
+const owner = require("../shared/owner.js");
 
 const AGENT = "gemini";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 
 // Gemini event name -> AgentBar state. Exactly the events HookInstaller registers.
 const STATE = {
@@ -73,7 +75,10 @@ function run() {
 
   const id = j.session_id || j.sessionId || "";
   const cwd = j.cwd || "";
-  const statePath = path.join(stateDir, safeId(id) + ".json");
+  // A shared home that cannot say which machine this is gets no row at all.
+  const own = owner.resolve(base);
+  if (!own) return process.exit(0);
+  const statePath = owner.stateFile(stateDir, safeId(id), own);
 
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }
   if (state === "end") {
@@ -88,10 +93,14 @@ function run() {
       let cleared = 0;
       for (const f of fs.readdirSync(stateDir)) {
         const p = path.join(stateDir, f);
-        let owner = 0;
-        try { owner = Number(JSON.parse(fs.readFileSync(p, "utf8")).pid) || 0; } catch {}
-        if (owner > 0) {
-          try { process.kill(owner, 0); continue; } catch (e) {
+        let row;
+        try { row = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+        // On a shared home only this node's own rows are its to judge.
+        if (!owner.mayManage(row, own)) continue;
+        const pid = owner.fromEarlierBoot(row, own) ? 0
+          : Number(row && (own.shared ? row.ownerPid : row.pid)) || 0;
+        if (pid > 0) {
+          try { process.kill(pid, 0); continue; } catch (e) {
             if (e.code === "EPERM") continue; // exists, just not ours to signal
           }
         }
@@ -109,7 +118,7 @@ function run() {
   const ts = Math.floor(Date.now() / 1000);
   const oneLine = (s) => sliceSafe(String(s).replace(/\s+/g, " ").trim(), 120);
   try {
-    writeAtomic(statePath, {
+    writeAtomic(statePath, owner.stamp({
       ...prev, agent: AGENT, state,
       label: j.tool_name ? String(j.tool_name) : (state === "done" ? "Done" : ""),
       // An event without cwd must not erase the project an earlier one knew.
@@ -122,7 +131,7 @@ function run() {
       started_at: prev.started_at || ts, // set once; elapsed depends on it never moving
       ...(typeof j.prompt === "string" && j.prompt.trim() ? { prompt: oneLine(j.prompt) } : {}),
       ts,
-    });
+    }, own));
   } catch (e) { warn("state write " + statePath, e); }
   // Launch ONLY when nothing is running: with two copies on disk LaunchServices
   // may resolve the bundle ID to the OTHER copy and start a second instance —

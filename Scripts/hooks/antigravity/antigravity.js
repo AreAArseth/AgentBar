@@ -5,11 +5,13 @@
 // Payload fields differ between the desktop app and the CLI generation of the
 // contract (conversationId/workspacePaths vs session_id/cwd), so both are read.
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
+const owner = require("../shared/owner.js");
 
 const AGENT = "antigravity";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 
 // Antigravity has no SessionStart/SessionEnd: the file appears on first activity
 // and leaves via the app's pid/staleness pruning. PostInvocation fires between
@@ -86,7 +88,10 @@ function run() {
   const cwd = j.cwd || (Array.isArray(workspaces) && workspaces[0]) || "";
   const tool = j.tool_name || j.toolName
     || (j.toolCall && (j.toolCall.name || j.toolCall.tool)) || "";
-  const statePath = path.join(stateDir, safeId(id) + ".json");
+  // A shared home that cannot say which machine this is gets no row at all.
+  const own = owner.resolve(base);
+  if (!own) return process.exit(0);
+  const statePath = owner.stateFile(stateDir, safeId(id), own);
 
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch {}
   let prev = {}; try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
@@ -94,7 +99,7 @@ function run() {
   // blank must not erase what an earlier event knew — protocol merge rule.
   const dir = cwd || prev.cwd || "";
   try {
-    writeAtomic(statePath, {
+    writeAtomic(statePath, owner.stamp({
       ...prev, agent: AGENT, state,
       label: state === "tool" && tool ? String(tool) : (state === "done" ? "Done" : ""),
       project: dir ? path.basename(dir) : (prev.project || ""), cwd: dir, sessionId: id,
@@ -104,7 +109,7 @@ function run() {
       term_program: isApp() ? "" : (process.env.TERM_PROGRAM || ""),
       pid: process.ppid, started: true,
       ts: Math.floor(Date.now() / 1000),
-    });
+    }, own));
   } catch {}
   // First sighting of this session: make sure a frontend is up. Launch ONLY when
   // nothing is running — with two copies on disk LaunchServices may resolve the

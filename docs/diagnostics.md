@@ -109,6 +109,8 @@ Where each agent lives, and what says it is ours:
 | `frontend.present` | somebody can answer a blocking hook: the app on macOS (`pgrep -x AgentBar`), a fresh `watcher.json` heartbeat anywhere. CLI only; the app knows this about itself |
 | `rules.file` | `~/.agentbar/rules.json` parses and every rule in it is valid. **`fail` when it does not**, naming the rule — this is the one failure in the app that is invisible by design: no rule fires, every prompt comes back, and that is indistinguishable from AgentBar working normally. `skipped` when there is no file, which is most people. The detail counts the rules by mode (answering / watching / off). Reported by both halves, and the CLI's wording says the app is what applies them — a `doctor --json` pasted into a bug report is often the only thing anybody sees |
 
+| `remote.cluster` | whether this home is declared shared (`agentbar configure-cluster --shared-home`), which machine this is (a hash, never a hostname), and how many rows are this machine's, other machines', from before shared mode, or from an earlier boot. `skipped` on a standalone home; **`fail`** when the declaration is not understood or this machine has no unique identity (its hooks then write nothing); `warn` while rows from before shared mode remain. CLI only — the app runs on the Mac, whose home is its own |
+
 ### macOS only
 
 | id | asserts |
