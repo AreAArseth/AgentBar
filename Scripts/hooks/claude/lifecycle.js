@@ -4,6 +4,7 @@
 // Also serves agents with Claude-compatible hooks (Qwen Code): the installer
 // registers the same script with AGENTBAR_AGENT set to the agent's id.
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -164,7 +165,7 @@ function run() {
         sessionId: id ? rowId(id) : (prev.sessionId || ""),
         entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || prev.entrypoint || "",
         term_program: process.env.TERM_PROGRAM || prev.term_program || "",
-        pid: process.ppid,
+        pid: agentPid(),
         started: continues ? prev.started === true : false,
         // Set once and preserved from then on — elapsed depends on it never moving.
         started_at: prev.started_at || ts,

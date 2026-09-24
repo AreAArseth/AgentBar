@@ -1479,6 +1479,21 @@ function installHooks() {
     return true;
   };
   const report = (name, changed) => console.log(`${changed ? "wired" : "ok   "}  ${name}`);
+  // Take AgentBar's own handlers (a command under `marker`) out of every rule,
+  // in place. A rule can hold several, and the user's siblings in it stay, with
+  // the rule, unless nothing of theirs is left.
+  const dropOurHandlers = (hooks, marker) => {
+    const ours = (h) => String((h && h.command) || "").includes(marker);
+    for (const [ev, rules] of Object.entries(hooks)) {
+      if (!Array.isArray(rules)) continue;
+      const kept = rules.flatMap((rule) => {
+        if (!rule || !Array.isArray(rule.hooks) || !rule.hooks.some(ours)) return [rule];
+        const theirs = rule.hooks.filter((h) => !ours(h));
+        return theirs.length ? [{ ...rule, hooks: theirs }] : [];
+      });
+      if (kept.length) hooks[ev] = kept; else delete hooks[ev];
+    }
+  };
 
   // Claude Code — <configDir>/settings.json (default + CLAUDE_CONFIG_DIR + hint file)
   const claudeDirs = new Set([path.join(os.homedir(), ".claude")]);
@@ -1488,26 +1503,27 @@ function installHooks() {
     if (raw) claudeDirs.add(raw.replace(/^~/, os.homedir()));
   } catch {}
   const dir = path.join(hooksDir, "claude");
+  // Claude Code runs these through `/bin/sh -c`, and on Debian/Ubuntu that is dash,
+  // which forks node instead of becoming it: the hook's parent is then a shell that
+  // exits with it, and that pid is what every reader prunes the row by. `exec`
+  // makes the shell become node. The removal below matches by path, so an older
+  // install without it is replaced rather than duplicated.
   const claudeEvents = [
-    ["SessionStart", `"${node}" "${dir}/lifecycle.js" start`, false, null],
-    ["SessionEnd", `"${node}" "${dir}/lifecycle.js" end`, false, null],
-    ["UserPromptSubmit", `"${node}" "${dir}/update.js" prompt`, false, null],
-    ["PreToolUse", `"${node}" "${dir}/update.js" pre`, true, null],
-    ["PostToolUse", `"${node}" "${dir}/update.js" post`, true, null],
-    ["PermissionRequest", `"${node}" "${dir}/permission.js"`, true, 630],
-    ["Stop", `"${node}" "${dir}/update.js" stop`, false, null],
-    ["PreCompact", `"${node}" "${dir}/update.js" compact`, false, null],
+    ["SessionStart", `exec "${node}" "${dir}/lifecycle.js" start`, false, null],
+    ["SessionEnd", `exec "${node}" "${dir}/lifecycle.js" end`, false, null],
+    ["UserPromptSubmit", `exec "${node}" "${dir}/update.js" prompt`, false, null],
+    ["PreToolUse", `exec "${node}" "${dir}/update.js" pre`, true, null],
+    ["PostToolUse", `exec "${node}" "${dir}/update.js" post`, true, null],
+    ["PermissionRequest", `exec "${node}" "${dir}/permission.js"`, true, 630],
+    ["Stop", `exec "${node}" "${dir}/update.js" stop`, false, null],
+    ["PreCompact", `exec "${node}" "${dir}/update.js" compact`, false, null],
   ];
   for (const cfgDir of claudeDirs) {
     const file = path.join(cfgDir, "settings.json");
     const root = readConfig(file);
     if (root === null) continue;
     const hooks = root.hooks && typeof root.hooks === "object" ? root.hooks : {};
-    for (const [ev, rules] of Object.entries(hooks)) {
-      if (!Array.isArray(rules)) continue;
-      const kept = rules.filter((rule) => !((rule.hooks || []).some((h) => String(h.command || "").includes("/.agentbar/hooks/claude/"))));
-      if (kept.length) hooks[ev] = kept; else delete hooks[ev];
-    }
+    dropOurHandlers(hooks, "/.agentbar/hooks/claude/");
     for (const [ev, cmd, matcher, timeout] of claudeEvents) {
       const entry = { type: "command", command: cmd };
       if (timeout) entry.timeout = timeout;
@@ -1661,9 +1677,9 @@ function installHooks() {
     if (root !== null) {
       const hooks = root.hooks && typeof root.hooks === "object" ? root.hooks : {};
       const cmd = `"${node}" "${path.join(hooksDir, "gemini", "gemini.js")}"`;
-      const ours = (g) => (g.hooks || []).some((h) => String(h.command || "").includes("/.agentbar/hooks/gemini/"));
+      dropOurHandlers(hooks, "/.agentbar/hooks/gemini/");
       for (const ev of ["SessionStart", "SessionEnd", "BeforeAgent", "BeforeTool", "AfterTool", "AfterAgent"]) {
-        hooks[ev] = (Array.isArray(hooks[ev]) ? hooks[ev] : []).filter((g) => !ours(g))
+        hooks[ev] = (Array.isArray(hooks[ev]) ? hooks[ev] : [])
           .concat([{ hooks: [{ type: "command", command: cmd, timeout: 5000 }] }]);
       }
       root.hooks = hooks;
@@ -1683,11 +1699,7 @@ function installHooks() {
     const root = readConfig(file);
     if (root !== null) {
       const hooks = root.hooks && typeof root.hooks === "object" ? root.hooks : {};
-      for (const [ev, rules] of Object.entries(hooks)) {
-        if (!Array.isArray(rules)) continue;
-        const kept = rules.filter((rule) => !((rule.hooks || []).some((h) => String(h.command || "").includes("/.agentbar/hooks/claude/"))));
-        if (kept.length) hooks[ev] = kept; else delete hooks[ev];
-      }
+      dropOurHandlers(hooks, "/.agentbar/hooks/claude/");
       const qwenEvents = [
         ["SessionStart", `"${node}" "${dir}/lifecycle.js" start`, false],
         ["SessionEnd", `"${node}" "${dir}/lifecycle.js" end`, false],

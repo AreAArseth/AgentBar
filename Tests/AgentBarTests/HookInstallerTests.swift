@@ -186,4 +186,125 @@ import Testing
         #expect(HookInstaller.realPath(resolved) == real)
         #expect(HookInstaller.stableNodePaths.contains(resolved))
     }
+
+    // MARK: - Claude: every command execs node
+
+    private static let claudeDir = "/Users/x/.agentbar/hooks/claude"
+
+    private static func agentBarCommands(_ hooks: [String: Any]) -> [String: [String]] {
+        hooks.mapValues { value in
+            ((value as? [[String: Any]]) ?? []).flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
+                .compactMap { $0["command"] as? String }
+                .filter { $0.contains("/.agentbar/hooks/claude/") }
+        }.filter { !$0.value.isEmpty }
+    }
+
+    /// Claude Code runs hooks through `/bin/sh -c`, and dash forks a lone command
+    /// rather than becoming it — the hook's parent is then a shell that exits with
+    /// it, and that pid is what the row is pruned by. Every command must `exec`.
+    @Test func everyClaudeCommandExecsNode() {
+        let hooks = HookInstaller.claudeHooks([:], node: "/usr/bin/node", dir: Self.claudeDir)
+        let ours = Self.agentBarCommands(hooks)
+        #expect(ours.count == HookInstaller.claudeEvents.count)
+        for (event, commands) in ours {
+            #expect(commands.count == 1, "\(event) must carry exactly one AgentBar entry")
+            #expect(commands.allSatisfy { $0.hasPrefix("exec \"/usr/bin/node\" \"\(Self.claudeDir)/") })
+        }
+        #expect(ours["PermissionRequest"] == ["exec \"/usr/bin/node\" \"\(Self.claudeDir)/permission.js\""])
+        #expect(ours["SessionStart"] == ["exec \"/usr/bin/node\" \"\(Self.claudeDir)/lifecycle.js\" start"])
+    }
+
+    /// The repair: an install from before the prefix is replaced where it stands,
+    /// an event AgentBar no longer registers is dropped, and the user's own hooks —
+    /// including one in the same event — stay exactly where they were.
+    @Test func anOlderClaudeInstallIsReplacedNotDuplicated() throws {
+        let old = "\"/usr/bin/node\" \"\(Self.claudeDir)"
+        let existing: [String: Any] = [
+            "SessionStart": [["hooks": [["type": "command", "command": "\(old)/lifecycle.js\" start"]]],
+                             ["hooks": [["type": "command", "command": "echo mine"]]]],
+            "Stop": [["hooks": [["type": "command", "command": "\(old)/update.js\" stop"]]]],
+            "Notification": [["hooks": [["type": "command", "command": "\(old)/update.js\" notify"]]]],
+        ]
+        let once = HookInstaller.claudeHooks(existing, node: "/usr/bin/node", dir: Self.claudeDir)
+        let ours = Self.agentBarCommands(once)
+        #expect(Set(ours.keys) == Set(HookInstaller.claudeEvents.map(\.event)))
+        #expect(ours.values.allSatisfy { $0.count == 1 && $0[0].hasPrefix("exec ") })
+        let start = try #require(once["SessionStart"] as? [[String: Any]])
+        #expect(start.count == 2)
+        #expect(((start[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String) == "echo mine")
+
+        let twice = HookInstaller.claudeHooks(once, node: "/usr/bin/node", dir: Self.claudeDir)
+        let a = try JSONSerialization.data(withJSONObject: once, options: .sortedKeys)
+        let b = try JSONSerialization.data(withJSONObject: twice, options: .sortedKeys)
+        #expect(a == b, "a second install must change nothing")
+    }
+
+    /// A rule may hold several handlers. Only AgentBar's own leaves it: the user's
+    /// sibling stays, in the same rule, with the rule's matcher and other keys.
+    @Test func aUserHookSharingARuleWithAgentBarsSurvives() throws {
+        let existing: [String: Any] = [
+            "PreToolUse": [["matcher": "Bash", "note": "mine",
+                            "hooks": [["type": "command", "command": "\"/usr/bin/node\" \"\(Self.claudeDir)/update.js\" pre"],
+                                      ["type": "command", "command": "echo sibling"]]]],
+        ]
+        let once = HookInstaller.claudeHooks(existing, node: "/usr/bin/node", dir: Self.claudeDir)
+        let rules = try #require(once["PreToolUse"] as? [[String: Any]])
+        #expect(rules.count == 2)
+        #expect(rules[0]["matcher"] as? String == "Bash")
+        #expect(rules[0]["note"] as? String == "mine")
+        let kept = try #require(rules[0]["hooks"] as? [[String: Any]])
+        #expect(kept.compactMap { $0["command"] as? String } == ["echo sibling"])
+        #expect(Self.agentBarCommands(once)["PreToolUse"]?.count == 1)
+
+        let twice = HookInstaller.claudeHooks(once, node: "/usr/bin/node", dir: Self.claudeDir)
+        let a = try JSONSerialization.data(withJSONObject: once, options: .sortedKeys)
+        let b = try JSONSerialization.data(withJSONObject: twice, options: .sortedKeys)
+        #expect(a == b, "a second install must change nothing")
+    }
+
+    // MARK: - Qwen and Gemini: the same rule shape, the same promise
+
+    /// One rule holding AgentBar's handler and the user's, under `event`. After
+    /// `merge` the user's rule is still there with its matcher and only its own
+    /// handler, AgentBar's appears exactly once in its own rule, and a second
+    /// merge changes nothing.
+    private static func expectSiblingSurvives(
+        event: String, ourCommand: String, marker: String,
+        merge: ([String: Any]) -> [String: Any]
+    ) throws {
+        let existing: [String: Any] = [
+            event: [["matcher": "Bash", "note": "mine",
+                     "hooks": [["type": "command", "command": ourCommand],
+                               ["type": "command", "command": "echo sibling"]]]],
+        ]
+        let once = merge(existing)
+        let rules = try #require(once[event] as? [[String: Any]])
+        #expect(rules.count == 2)
+        #expect(rules[0]["matcher"] as? String == "Bash")
+        #expect(rules[0]["note"] as? String == "mine")
+        let kept = try #require(rules[0]["hooks"] as? [[String: Any]])
+        #expect(kept.compactMap { $0["command"] as? String } == ["echo sibling"])
+        let ours = rules.flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
+            .compactMap { $0["command"] as? String }.filter { $0.contains(marker) }
+        #expect(ours.count == 1)
+
+        let a = try JSONSerialization.data(withJSONObject: once, options: .sortedKeys)
+        let b = try JSONSerialization.data(withJSONObject: merge(once), options: .sortedKeys)
+        #expect(a == b, "a second install must change nothing")
+    }
+
+    @Test func aUserHookSharingAQwenRuleSurvives() throws {
+        try Self.expectSiblingSurvives(
+            event: "PreToolUse", ourCommand: "\"/usr/bin/node\" \"\(Self.claudeDir)/update.js\" pre",
+            marker: "/.agentbar/hooks/claude/"
+        ) { HookInstaller.qwenHooks($0, node: "/usr/bin/node", dir: Self.claudeDir) }
+    }
+
+    @Test func aUserHookSharingAGeminiRuleSurvives() throws {
+        let command = "\"/usr/bin/node\" \"/Users/x/.agentbar/hooks/gemini/gemini.js\""
+        try Self.expectSiblingSurvives(event: "BeforeTool", ourCommand: command,
+                                       marker: "/.agentbar/hooks/gemini/") {
+            HookInstaller.geminiHooks($0, command: command)
+        }
+    }
 }

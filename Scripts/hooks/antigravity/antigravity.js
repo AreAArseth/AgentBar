@@ -4,6 +4,7 @@
 // ~/.agentbar/state.d/. Observe-only: writes state, emits nothing, exits fast.
 // Payload fields differ between the desktop app and the CLI generation of the
 // contract (conversationId/workspacePaths vs session_id/cwd), so both are read.
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 
 const AGENT = "antigravity";
@@ -48,7 +49,7 @@ let _isApp;
 const isApp = () => {
   if (_isApp === undefined) {
     let cmd = "";
-    try { cmd = cp.execSync(`ps -o comm= -p ${process.ppid}`).toString(); } catch {}
+    try { cmd = cp.execSync(`ps -o comm= -p ${agentPid()}`).toString(); } catch {}
     _isApp = /language_server/.test(cmd);
   }
   return _isApp;
@@ -102,7 +103,7 @@ function run() {
       // be trusted (the app inherits it when launched from a terminal via `open`).
       entrypoint: isApp() ? "antigravity-app" : "cli",
       term_program: isApp() ? "" : (process.env.TERM_PROGRAM || ""),
-      pid: process.ppid, started: true,
+      pid: agentPid(), started: true,
       ts: Math.floor(Date.now() / 1000),
     });
   } catch {}

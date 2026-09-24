@@ -5,6 +5,7 @@
 // unlike Notification events, can never land late and overwrite a newer state.
 // Event-to-state mapping ported from AI Status Notifier (proven in daily use).
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -199,9 +200,9 @@ function run() {
     entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || prev.entrypoint || "",
     // Terminal app for CLI sessions (Apple_Terminal, iTerm.app, WarpTerminal, …).
     term_program: process.env.TERM_PROGRAM || prev.term_program || "",
-    // Hooks are spawned directly by the session's `claude` process, so ppid is that process;
-    // the app probes it with kill(pid, 0) to prune dead sessions.
-    pid: process.ppid,
+    // The session's `claude` process, past the `sh -c` it runs hooks through (see
+    // shared/agent-pid.js); the app probes it with kill(pid, 0) to prune dead sessions.
+    pid: agentPid(),
     started: true,
     // Set once and preserved from then on — elapsed time depends on it never moving.
     // First-write fallback covers sessions that predate the field (or the hook).

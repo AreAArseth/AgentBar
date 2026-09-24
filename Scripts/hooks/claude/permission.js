@@ -15,6 +15,7 @@
 // camelCase and carries RAW tool ids, so it is normalised on the way in and its
 // decision is spelled differently on the way out. Everything between is shared.
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -306,7 +307,7 @@ function run() {
           // rowId, like the file this is being written into and like every other
           // writer of this row: a raw id here means the field and the file name
           // disagree for any agent that carries a prefix.
-          sessionId: rowId(p.session_id), pid: process.ppid, started: true,
+          sessionId: rowId(p.session_id), pid: agentPid(), started: true,
           ts: Math.floor(Date.now() / 1000) });
       } catch {}
       process.exit(0);
@@ -351,7 +352,7 @@ function run() {
       writeAtomic(statePath, { ...prev, agent,
         state: isQuestion ? "question" : "permission",
         label: isQuestion ? "❓ " + oneLine(questions[0].question) : display,
-        sessionId: rowId(p.session_id), pid: process.ppid, started: true,
+        sessionId: rowId(p.session_id), pid: agentPid(), started: true,
         ts: Math.floor(Date.now() / 1000) });
     } catch {}
 
@@ -373,7 +374,7 @@ function run() {
       toolName: p.tool_name || "", display, toolInputPretty: pretty,
       ...(cwd ? { cwd } : {}),
       context: buildContext(p.tool_name, p.tool_input),
-      ruleSuggestion: suggestion, pid: process.ppid, hookPid: process.pid,
+      ruleSuggestion: suggestion, pid: agentPid(), hookPid: process.pid,
       ts: Math.floor(Date.now() / 1000),
     });
 

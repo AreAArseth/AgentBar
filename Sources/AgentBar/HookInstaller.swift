@@ -204,53 +204,85 @@ enum HookInstaller {
         try fm.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         guard var root = readConfig(at: settingsURL) else { return }
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
+        root["hooks"] = claudeHooks(root["hooks"] as? [String: Any] ?? [:], node: node,
+                                    dir: hooksDir.appendingPathComponent("claude").path)
 
-        let dir = hooksDir.appendingPathComponent("claude").path
-        let events: [(event: String, cmd: String, matcher: Bool, timeout: Int?)] = [
-            ("SessionStart",     "\"\(node)\" \"\(dir)/lifecycle.js\" start", false, nil),
-            ("SessionEnd",       "\"\(node)\" \"\(dir)/lifecycle.js\" end", false, nil),
-            ("UserPromptSubmit", "\"\(node)\" \"\(dir)/update.js\" prompt", false, nil),
-            ("PreToolUse",       "\"\(node)\" \"\(dir)/update.js\" pre", true, nil),
-            ("PostToolUse",      "\"\(node)\" \"\(dir)/update.js\" post", true, nil),
-            // Blocking approval hook: its own wait is 600s, so give Claude Code slack.
-            // (No Notification hook: late permission notifications used to overwrite
-            // newer state and strand sessions on "needs approval".)
-            ("PermissionRequest","\"\(node)\" \"\(dir)/permission.js\"", true, 630),
-            ("Stop",             "\"\(node)\" \"\(dir)/update.js\" stop", false, nil),
-            // "Compacting…" while the session summarises its context. There is no
-            // PostCompact here on purpose: the SessionStart (source "compact") that
-            // follows every compaction already ends it, and an event name an older
-            // Claude Code does not know is a settings file it may refuse.
-            ("PreCompact",       "\"\(node)\" \"\(dir)/update.js\" compact", false, nil),
-        ]
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: settingsURL) // never leave settings.json half-written
+        note("claude")
+    }
 
+    /// The events Claude Code fires, and the script and argument that answer each.
+    static let claudeEvents: [(event: String, script: String, arg: String?, matcher: Bool, timeout: Int?)] = [
+        ("SessionStart",     "lifecycle.js", "start",   false, nil),
+        ("SessionEnd",       "lifecycle.js", "end",     false, nil),
+        ("UserPromptSubmit", "update.js",    "prompt",  false, nil),
+        ("PreToolUse",       "update.js",    "pre",     true,  nil),
+        ("PostToolUse",      "update.js",    "post",    true,  nil),
+        // Blocking approval hook: its own wait is 600s, so give Claude Code slack.
+        // (No Notification hook: late permission notifications used to overwrite
+        // newer state and strand sessions on "needs approval".)
+        ("PermissionRequest", "permission.js", nil,     true,  630),
+        ("Stop",             "update.js",    "stop",    false, nil),
+        // "Compacting…" while the session summarises its context. There is no
+        // PostCompact here on purpose: the SessionStart (source "compact") that
+        // follows every compaction already ends it, and an event name an older
+        // Claude Code does not know is a settings file it may refuse.
+        ("PreCompact",       "update.js",    "compact", false, nil),
+    ]
+
+    /// Claude Code runs a hook's command through `/bin/sh -c`. Where that is dash
+    /// (Debian, Ubuntu) the shell forks node rather than becoming it, so the hook's
+    /// parent is a shell that exits with it — and `pid: process.ppid` is what every
+    /// reader prunes a row by. `exec` makes the shell become node on every `sh`.
+    static func claudeCommand(node: String, dir: String, script: String, arg: String?) -> String {
+        "exec \"\(node)\" \"\(dir)/\(script)\"" + (arg.map { " " + $0 } ?? "")
+    }
+
+    /// The user's `hooks` object with AgentBar's Claude entries replaced. Pure, so
+    /// "an older install is rewritten, never duplicated" is a test rather than a hope.
+    static func claudeHooks(_ existing: [String: Any], node: String, dir: String) -> [String: Any] {
         // Drop earlier AgentBar entries from EVERY event (path match), so events we
-        // no longer register (e.g. Notification) don't linger from old installs.
-        for (event, value) in hooks {
-            guard var rules = value as? [[String: Any]] else { continue }
-            rules.removeAll { rule in
-                ((rule["hooks"] as? [[String: Any]]) ?? []).contains { cmd in
-                    (cmd["command"] as? String)?.contains("/.agentbar/hooks/claude/") == true
-                }
-            }
-            if rules.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = rules }
-        }
+        // no longer register (e.g. Notification) don't linger from old installs,
+        // and a command whose shape changed (the `exec` prefix) replaces its old self.
+        var hooks = removingAgentBarHandlers(existing, marker: "/.agentbar/hooks/claude/")
 
-        for e in events {
+        for e in claudeEvents {
             var rules = hooks[e.event] as? [[String: Any]] ?? []
-            var hookEntry: [String: Any] = ["type": "command", "command": e.cmd]
+            var hookEntry: [String: Any] = [
+                "type": "command",
+                "command": claudeCommand(node: node, dir: dir, script: e.script, arg: e.arg),
+            ]
             if let t = e.timeout { hookEntry["timeout"] = t }
             var rule: [String: Any] = ["hooks": [hookEntry]]
             if e.matcher { rule["matcher"] = "*" }
             rules.append(rule)
             hooks[e.event] = rules
         }
-        root["hooks"] = hooks
+        return hooks
+    }
 
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try writeIfChanged(data, to: settingsURL) // never leave settings.json half-written
-        note("claude")
+    /// Claude, Qwen and Gemini all group handlers as `[{ …, hooks: [{command}] }]`.
+    /// Only AgentBar's own handlers (a command under `marker`) leave a rule: a rule
+    /// can hold several, and the user's siblings in it stay, with the rule and its
+    /// other keys, unless nothing of theirs is left.
+    static func removingAgentBarHandlers(_ existing: [String: Any], marker: String) -> [String: Any] {
+        var hooks = existing
+        let ours: ([String: Any]) -> Bool = { ($0["command"] as? String)?.contains(marker) == true }
+        for (event, value) in hooks {
+            guard let rules = value as? [[String: Any]] else { continue }
+            let kept: [[String: Any]] = rules.compactMap { rule in
+                guard let handlers = rule["hooks"] as? [[String: Any]], handlers.contains(where: ours)
+                else { return rule }
+                let theirs = handlers.filter { !ours($0) }
+                if theirs.isEmpty { return nil }
+                var rule = rule
+                rule["hooks"] = theirs
+                return rule
+            }
+            if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
+        }
+        return hooks
     }
 
     // MARK: - Codex (~/.codex/config.toml: the hooks block, and the notify bridge)
@@ -517,20 +549,17 @@ enum HookInstaller {
         let dir = hooksDir.appendingPathComponent("claude").path
 
         guard var root = readConfig(at: cfgURL) else { return }
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
-        let marker = "/.agentbar/hooks/claude/"
+        root["hooks"] = qwenHooks(root["hooks"] as? [String: Any] ?? [:], node: node, dir: dir)
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: cfgURL)
+        note("qwen")
+    }
 
+    /// The user's Qwen `hooks` with AgentBar's entries replaced. Pure, for the same
+    /// reason as `claudeHooks`.
+    static func qwenHooks(_ existing: [String: Any], node: String, dir: String) -> [String: Any] {
         // Drop earlier AgentBar entries from every event before re-adding.
-        for (event, value) in hooks {
-            guard var rules = value as? [[String: Any]] else { continue }
-            rules.removeAll { rule in
-                ((rule["hooks"] as? [[String: Any]]) ?? []).contains { cmd in
-                    (cmd["command"] as? String)?.contains(marker) == true
-                }
-            }
-            if rules.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = rules }
-        }
-
+        var hooks = removingAgentBarHandlers(existing, marker: "/.agentbar/hooks/claude/")
         let events: [(event: String, cmd: String, matcher: Bool)] = [
             ("SessionStart",     "\"\(node)\" \"\(dir)/lifecycle.js\" start", false),
             ("SessionEnd",       "\"\(node)\" \"\(dir)/lifecycle.js\" end", false),
@@ -553,10 +582,7 @@ enum HookInstaller {
             rules.append(rule)
             hooks[e.event] = rules
         }
-        root["hooks"] = hooks
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try writeIfChanged(data, to: cfgURL)
-        note("qwen")
+        return hooks
     }
 
     // MARK: - GitHub Copilot CLI (~/.copilot/hooks/agentbar.json)
@@ -652,26 +678,24 @@ enum HookInstaller {
         let command = "\"\(node)\" \"\(script)\""
 
         guard var root = readConfig(at: cfgURL) else { return }
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
-        let marker = "/.agentbar/hooks/gemini/"
+        root["hooks"] = geminiHooks(root["hooks"] as? [String: Any] ?? [:], command: command)
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: cfgURL)
+        note("gemini")
+    }
 
-        // Gemini groups hooks as [{ hooks: [{type:"command", command}] }].
-        func ours(_ group: [String: Any]) -> Bool {
-            ((group["hooks"] as? [[String: Any]]) ?? []).contains {
-                ($0["command"] as? String)?.contains(marker) == true
-            }
-        }
+    /// The user's Gemini `hooks` with AgentBar's entries replaced. Gemini groups
+    /// hooks as [{ hooks: [{type:"command", command}] }], the same shape as Claude's.
+    static func geminiHooks(_ existing: [String: Any], command: String) -> [String: Any] {
+        var hooks = removingAgentBarHandlers(existing, marker: "/.agentbar/hooks/gemini/")
         // timeout is in milliseconds (Gemini docs; default 60000) → 5s.
         // BeforeAgent gives "thinking" at turn start, so a no-tool turn still shows life.
         for event in ["SessionStart", "SessionEnd", "BeforeAgent", "BeforeTool",
                       "AfterTool", "AfterAgent"] {
-            var groups = (hooks[event] as? [[String: Any]] ?? []).filter { !ours($0) }
+            var groups = hooks[event] as? [[String: Any]] ?? []
             groups.append(["hooks": [["type": "command", "command": command, "timeout": 5000]]])
             hooks[event] = groups
         }
-        root["hooks"] = hooks
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try writeIfChanged(data, to: cfgURL)
-        note("gemini")
+        return hooks
     }
 }

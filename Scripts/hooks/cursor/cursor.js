@@ -3,6 +3,7 @@
 // stdin payload's hook_event_name) to a per-session state file in
 // ~/.agentbar/state.d/, the same "folder is the protocol" the app already watches.
 // Observe-only: writes state, emits nothing, exits fast — never affects the agent.
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 
 const AGENT = "cursor";
@@ -120,8 +121,8 @@ function run() {
       project: (cwd || prev.cwd) ? path.basename(cwd || prev.cwd) : (prev.project || ""),
       cwd: cwd || prev.cwd || "", sessionId: id,
       entrypoint: "cli", term_program: process.env.TERM_PROGRAM || "",
-      // Cursor execs the script directly, so ppid is the agent process (liveness handle).
-      pid: process.ppid, started: state !== "idle" ? true : (prev.started || false),
+      // Cursor execs the script directly, so this is ppid unless something wrapped it in `sh -c`.
+      pid: agentPid(), started: state !== "idle" ? true : (prev.started || false),
       started_at: prev.started_at || ts, // set once; elapsed depends on it never moving
       ...(typeof j.prompt === "string" && j.prompt.trim() ? { prompt: oneLine(j.prompt) } : {}),
       ts,

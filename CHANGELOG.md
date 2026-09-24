@@ -3,6 +3,27 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **Claude Code sessions show up on Debian and Ubuntu.** Claude Code runs each hook
+  command through `/bin/sh -c`, and there `/bin/sh` is dash. bash and zsh replace
+  themselves with a lone command, but dash forks it and waits. So the hook's parent
+  was a shell that exited with the hook, and that pid is what the row recorded as
+  its agent. Every reader checks that pid to prune dead sessions, so each row was
+  dropped as soon as it was written and the session never appeared. The fix works
+  from both ends. Both installers (the app and `agentbar install-hooks`) now write
+  the Claude commands as `exec "<node>" "<script>"`, so the shell becomes node. The
+  hook scripts also step over one `sh -c` wrapper when finding the agent, via
+  `/proc` on Linux, which covers a command line nobody rewrote. That applies to the
+  Claude, Qwen, Copilot, Gemini, Cursor and Antigravity scripts, and fixes
+  Antigravity's app-or-CLI check too, which looked at the same parent. The next
+  install replaces an older entry where it stands, so no event gets a second
+  AgentBar hook. Only AgentBar's own handler leaves a rule: a hook of yours that
+  shares the rule stays in it. The Qwen and Gemini installers used to drop that
+  whole rule too, and now keep your hook the same way.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added

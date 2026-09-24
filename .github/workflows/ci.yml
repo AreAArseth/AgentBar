@@ -28,6 +28,8 @@ jobs:
         run: ./Scripts/test/cli-test.sh
       - name: Run doctor test suite
         run: ./Scripts/test/doctor-test.sh
+      - name: Run shell pid test suite
+        run: ./Scripts/test/shell-pid-test.sh
       - name: Run cloud poller test suite
         run: node --test Scripts/cloud/test/*.test.js
 
@@ -49,6 +51,8 @@ jobs:
         run: ./Scripts/test/cli-test.sh
       - name: Run doctor test suite
         run: ./Scripts/test/doctor-test.sh
+      - name: Run shell pid test suite
+        run: ./Scripts/test/shell-pid-test.sh
       - name: Run cloud poller test suite
         run: node --test Scripts/cloud/test/*.test.js
 
