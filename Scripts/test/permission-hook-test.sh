@@ -563,6 +563,130 @@ printf '{"session_id":"seedsess","cwd":"/tmp/proj","source":"startup"}' \
   | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
 check "plain seed stays hidden"     'grep -q "\"started\":false" "$HOME/.agentbar/state.d/seedsess.json"'
 
+# 19d. Cursor runs the hooks in ~/.claude/settings.json as well as its own, with its
+# own payload (cursor_version, conversation_id, a session_id that may or may not
+# match it, or none). cursor.js owns that session; the Claude scripts writing it
+# too tagged every Cursor session "claude" — in cursor.js's own file when the ids
+# agreed, which then flip-flopped with whichever hook fired last.
+CURSOR_JS="Scripts/hooks/cursor/cursor.js"
+cur() { printf '%s' "$1" | AGENTBAR_FORCE_APP=1 "$NODE" "$CURSOR_JS"; }
+fresh_home
+CROW="$HOME/.agentbar/state.d/conv-1.json"
+CUR_BASE='"conversation_id":"conv-1","generation_id":"gen-1","cursor_version":"3.0.0","workspace_roots":["/tmp/proj"]'
+cur "{$CUR_BASE,\"hook_event_name\":\"sessionStart\",\"session_id\":\"conv-1\"}"
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionStart\",\"session_id\":\"conv-1\"}" \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+cur "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\"}"
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js pre
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"beforeSubmitPrompt\",\"session_id\":\"conv-1\",\"prompt\":\"hi\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js prompt
+check "cursor: row stays cursor"    'grep -q "\"agent\":\"cursor\"" "$CROW"'
+check "cursor: row keeps its state" 'grep -q "\"state\":\"tool\"" "$CROW"'
+check "cursor: one row, no twin"    '[ "$(ls "$HOME/.agentbar/state.d" | wc -l | tr -d " ")" = 1 ]'
+# A session_id that is not the conversation_id, or none at all: no second row,
+# and nothing piling up in unknown.json.
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"postToolUse\",\"session_id\":\"conv-1:7\",\"tool_name\":\"Read\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js post
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"tool_name\":\"Read\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js pre
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionStart\"}" \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "cursor: no row under its session_id" '[ ! -e "$HOME/.agentbar/state.d/conv-17.json" ]'
+check "cursor: no unknown.json"     '[ ! -e "$HOME/.agentbar/state.d/unknown.json" ]'
+# Its SessionEnd must not delete the row cursor.js is still writing.
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionEnd\",\"session_id\":\"conv-1\"}" \
+  | "$NODE" Scripts/hooks/claude/lifecycle.js end
+check "cursor: claude end spares row" '[ -e "$CROW" ]'
+cur "{$CUR_BASE,\"hook_event_name\":\"sessionEnd\"}"
+check "cursor: its own end removes it" '[ ! -e "$CROW" ]'
+# The permission hook answers nothing for a Cursor session, and never waits.
+start=$(date +%s)
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\",\"tool_input\":{\"command\":\"git push\"}}" \
+  | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" >"$HOME/out.json"
+end=$(date +%s)
+check "cursor: permission exits at once" '[ $((end-start)) -le 3 ] && [ ! -s "$HOME/out.json" ]'
+check "cursor: permission posts nothing" '[ -z "$(ls "$HOME/.agentbar/requests.d" 2>/dev/null)" ]'
+# Claude Code started in Cursor's integrated terminal inherits Cursor's env; only
+# the payload says who is calling, so this is still a claude row.
+fresh_home
+printf '{"session_id":"interm","cwd":"/tmp/proj","prompt":"go"}' \
+  | CURSOR_VERSION=3.0.0 CURSOR_PROJECT_DIR=/tmp/proj "$NODE" Scripts/hooks/claude/update.js prompt
+check "claude in cursor's terminal stays claude" \
+  'grep -q "\"agent\":\"claude\"" "$HOME/.agentbar/state.d/interm.json"'
+
+# 19e. VS Code's Copilot Chat runs ~/.claude/settings.json too (chat.useClaudeHooks),
+# with a payload of its own: an ISO timestamp Claude Code never sends, and a
+# transcript in the extension's own storage. Every such session used to come out as
+# a Claude session running a GPT model. Shapes as VS Code 1.137 sent them.
+VSC_T="/tmp/ws/Code/User/workspaceStorage/abc123/GitHub.copilot-chat/transcripts/vsc-1.jsonl"
+VSC_BASE="\"session_id\":\"vsc-1\",\"timestamp\":\"2026-09-24T09:55:42.071Z\",\"transcript_path\":\"$VSC_T\",\"cwd\":\"/tmp/proj\""
+vsc() { printf '%s' "{$VSC_BASE,$2}" | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+  "$NODE" "Scripts/hooks/claude/$1" "${@:3}"; }
+fresh_home
+VROW="$HOME/.agentbar/state.d/vsc-1.json"
+vsc lifecycle.js '"hook_event_name":"SessionStart","source":"new","model":"gpt-6-astra"' start
+check "vscode: start seeds a copilot row"  'grep -q "\"agent\":\"copilot\"" "$VROW"'
+vsc update.js '"hook_event_name":"UserPromptSubmit","prompt":"read the readme"' prompt
+vsc update.js '"hook_event_name":"PreToolUse","tool_name":"read_file","tool_input":{},"tool_use_id":"call_1__vscode-1"' pre
+check "vscode: a tool keeps it copilot"    'grep -q "\"agent\":\"copilot\"" "$VROW" && grep -q "\"label\":\"Reading\"" "$VROW"'
+vsc update.js '"hook_event_name":"PostToolUse","tool_name":"read_file","tool_input":{},"tool_response":""' post
+vsc update.js '"hook_event_name":"Stop","stop_hook_active":false' stop
+check "vscode: done, still copilot"        'grep -q "\"state\":\"done\"" "$VROW" && grep -q "\"agent\":\"copilot\"" "$VROW"'
+check "vscode: its model rides along"      'grep -q "\"model\":\"gpt-6-astra\"" "$VROW"'
+check "vscode: never a claude row"         '! grep -rq "\"agent\":\"claude\"" "$HOME/.agentbar/state.d"'
+# Copilot's own file fires in VS Code too now, on the same session: the second
+# writer lands on the same file under the same name — one row, not two.
+printf '%s' "{$VSC_BASE,\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"read_file\",\"tool_input\":{}}" \
+  | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js pre
+check "vscode: both files, one row"        '[ "$(ls "$HOME/.agentbar/state.d" | wc -l | tr -d " ")" = 1 ] && grep -q "\"agent\":\"copilot\"" "$VROW"'
+# Its approval surface is unmeasured: no request, no wait — from either install.
+start=$(date +%s)
+vsc permission.js '"hook_event_name":"PreToolUse","tool_name":"run_in_terminal","tool_input":{"command":"git push"}' \
+  >"$HOME/out.json"
+printf '%s' "{$VSC_BASE,\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"run_in_terminal\",\"tool_input\":{\"command\":\"git push\"}}" \
+  | AGENTBAR_FORCE_APP=1 AGENTBAR_AGENT=copilot AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT \
+    "$NODE" "$HOOK" >>"$HOME/out.json"
+end=$(date +%s)
+check "vscode: permission exits at once"   '[ $((end-start)) -le 3 ] && [ ! -s "$HOME/out.json" ]'
+check "vscode: permission posts nothing"   '[ -z "$(ls "$HOME/.agentbar/requests.d" 2>/dev/null)" ]'
+# A host nobody has named yet that sends a timestamp: Claude's install writes nothing
+# for it, and its SessionEnd deletes nothing.
+fresh_home
+OTHER='"session_id":"oth-1","timestamp":"2026-09-24T10:00:00Z","cwd":"/tmp/proj"'
+printf '%s' "{$OTHER,\"hook_event_name\":\"SessionStart\"}" | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+printf '%s' "{$OTHER,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hi\"}" | "$NODE" Scripts/hooks/claude/update.js prompt
+check "other host: no row"                 '[ -z "$(ls "$HOME/.agentbar/state.d" 2>/dev/null)" ]'
+mkdir -p "$HOME/.agentbar/state.d"
+printf '{"agent":"claude","state":"done","sessionId":"oth-1"}' > "$HOME/.agentbar/state.d/oth-1.json"
+printf '%s' "{$OTHER,\"hook_event_name\":\"SessionEnd\"}" | "$NODE" Scripts/hooks/claude/lifecycle.js end
+check "other host: end deletes nothing"    '[ -e "$HOME/.agentbar/state.d/oth-1.json" ]'
+start=$(date +%s)
+printf '%s' "{$OTHER,\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}" \
+  | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" >"$HOME/out.json"
+end=$(date +%s)
+check "other host: permission falls through" '[ $((end-start)) -le 3 ] && [ ! -s "$HOME/out.json" ] && [ -z "$(ls "$HOME/.agentbar/requests.d" 2>/dev/null)" ]'
+# The agents registered on these scripts by name send a timestamp too (Copilot CLI,
+# Qwen): the guard is for Claude's own install and must not swallow theirs.
+fresh_home
+printf '%s' "{$OTHER,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hi\"}" \
+  | AGENTBAR_AGENT=copilot "$NODE" Scripts/hooks/claude/update.js prompt
+check "copilot cli keeps its row"          'grep -q "\"agent\":\"copilot\"" "$HOME/.agentbar/state.d/oth-1.json"'
+fresh_home
+printf '%s' "{$OTHER,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hi\"}" \
+  | AGENTBAR_AGENT=qwen "$NODE" Scripts/hooks/claude/update.js prompt
+check "qwen keeps its row"                 'grep -q "\"agent\":\"qwen\"" "$HOME/.agentbar/state.d/oth-1.json"'
+# Claude Code in VS Code's integrated terminal: VS Code's env, Claude's payload
+# (the 2.1.x shape: permission_mode, prompt_id, no timestamp). Still claude.
+fresh_home
+CC='"session_id":"cc-1","transcript_path":"/tmp/claude/projects/-tmp-proj/cc-1.jsonl","cwd":"/tmp/proj","permission_mode":"default"'
+printf '%s' "{$CC,\"hook_event_name\":\"SessionStart\",\"source\":\"startup\",\"model\":\"claude-opus-5\"}" \
+  | AGENTBAR_FORCE_APP=1 TERM_PROGRAM=vscode VSCODE_PID=4242 "$NODE" Scripts/hooks/claude/lifecycle.js start
+printf '%s' "{$CC,\"hook_event_name\":\"PreToolUse\",\"prompt_id\":\"p-1\",\"effort\":\"high\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"},\"tool_use_id\":\"t-1\"}" \
+  | TERM_PROGRAM=vscode VSCODE_PID=4242 "$NODE" Scripts/hooks/claude/update.js pre
+check "claude in vscode's terminal stays claude" \
+  'grep -q "\"agent\":\"claude\"" "$HOME/.agentbar/state.d/cc-1.json" && grep -q "\"state\":\"tool\"" "$HOME/.agentbar/state.d/cc-1.json"'
+
 # 20. the OpenCode plugin is loadable and maps the bus to protocol states
 fresh_home
 check "opencode: plugin parses"     '"$NODE" --input-type=module --check < Scripts/hooks/opencode/agentbar.js'

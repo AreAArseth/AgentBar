@@ -41,6 +41,23 @@ const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 6
 // nothing else changes shape.
 const idPrefix = String(process.env.AGENTBAR_ID_PREFIX || "").replace(/[^A-Za-z0-9_.-]/g, "");
 const rowId = (s) => (idPrefix ? safeId(idPrefix + safeId(s)) : safeId(s));
+// Who is really calling, read off the payload; "" means the row is not ours to write.
+// Claude Code is not the only program that runs ~/.claude/settings.json: Cursor and
+// VS Code's Copilot Chat run it too, and both hand these scripts their own sessions.
+// The env is no test — a `claude` started in either one's terminal inherits it and
+// must stay claude. Claude Code builds every event on {session_id, transcript_path,
+// cwd, permission_mode} and never sends `timestamp`; every other host seen so far does.
+// Keep in step with the copy in lifecycle.js.
+const copilotChat = (p) => typeof p.transcript_path === "string" &&
+  /[\\/]GitHub\.copilot-chat[\\/]/i.test(p.transcript_path);
+const hostAgent = (p) => {
+  if (!p || typeof p !== "object") return AGENT;
+  if (p.cursor_version !== undefined) return "";  // cursor.js already writes this session
+  if (AGENT !== "claude") return AGENT;           // the installer named the agent
+  if (copilotChat(p)) return "copilot";
+  if (p.timestamp !== undefined) return "";       // a host we cannot name
+  return AGENT;
+};
 // A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
 // JSONSerialization reject the whole file, and an unreadable state file hides the
 // session from every frontend until the next clean write. It cannot be caught after
@@ -148,6 +165,11 @@ function run() {
   if (started) return; started = true;
   let p = {};
   try { p = JSON.parse(raw || "{}"); } catch {}
+  // A Cursor session written here was re-tagged "claude" — in cursor.js's own file
+  // when the ids agreed, in a twin row or unknown.json when they did not; a VS Code
+  // one came out as a Claude session running a GPT model.
+  const agent = hostAgent(p);
+  if (!agent) return process.exit(0);
 
   // The session's own file is both the unit of state and the liveness marker; writing it on
   // any event also picks up sessions that predate the hook install (no SessionStart fired).
@@ -188,7 +210,7 @@ function run() {
   }
 
   const out = {
-    agent: AGENT,
+    agent,
     state, label,
     project, cwd,
     // The same value the file is named, prefix and sanitising included. The file
