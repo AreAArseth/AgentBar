@@ -32,6 +32,8 @@ swift test                                # Swift unit tests (needs Swift 6)
 ./Scripts/test/bridge-hooks-test.sh       # cursor/gemini/antigravity/codex bridge tests
 ./Scripts/test/opencode-plugin-test.sh    # OpenCode plugin driven through its event bus
 ./Scripts/test/cli-test.sh                # cross-platform CLI tests
+./Scripts/test/doctor-test.sh             # agentbar doctor
+./Scripts/test/shell-pid-test.sh          # hooks run through sh -c (dash) name the agent
 node --test Scripts/cloud/test/*.test.js  # cloud poller tests
 AGENTBAR_LIVE_TESTS=1 ./Scripts/test/antigravity-watcher-test.sh # live-app test: opt-in, because while it
                                           # runs its sessions are real ones on your island
