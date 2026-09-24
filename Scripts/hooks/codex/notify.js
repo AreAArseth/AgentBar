@@ -28,18 +28,17 @@ const type = p.type || "";
 if (!type.includes("complete")) process.exit(0);
 
 // Have the real hooks taken over? Read Codex's own config rather than guessing from
-// the row: the row after a finished turn looks the same whoever wrote it. Both
-// conditions are required — a wired-but-untrusted hook never runs, and standing down
-// for one would leave the session invisible.
+// the row: the row after a finished turn looks the same whoever wrote it. What is
+// asked is whether AgentBar's OWN SessionStart hook is trusted and enabled — the key
+// its handler occupies, "<source path>:session_start:<group>:<handler>", the same one
+// doctor checks. A user's own trusted SessionStart hook sits ahead of ours at another
+// key; counting it would stand this down while ours never runs, and the session
+// would be invisible.
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const configPath = path.join(codexHome, "config.toml");
 try {
   const toml = fs.readFileSync(configPath, "utf8");
-  const wired = toml.includes("# >>> agentbar >>>") && toml.includes("/.agentbar/hooks/codex/hook.js");
-  // Codex writes this entry when the human accepts the hook; the key is
-  // "<source path>:<event>:<group>:<index>".
-  const trusted = toml.includes(`hooks.state."${configPath}:session_start:`);
-  if (wired && trusted) process.exit(0);
+  if (require("./toml.js").codexHookTrusted(toml, configPath, "SessionStart")) process.exit(0);
 } catch {
   // No config, unreadable config: carry on writing. Falling silent on an unreadable
   // file would hide every Codex session for a reason nobody could see.

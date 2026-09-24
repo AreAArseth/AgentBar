@@ -36,7 +36,11 @@ All notable changes to AgentBar are documented here. This project follows
   block they did not write to just below it, untouched. You will need to accept
   the hooks in Codex once more after updating; from then on the answer stays.
   `agentbar doctor` also looks for trust on all seven hooks rather than the first
-  one, and names any that are missing or switched off.
+  one, at the entry AgentBar's own hook occupies, and names any that are missing or
+  switched off. The older `notify` bridge now stays on until AgentBar's own
+  SessionStart hook is trusted: a trusted SessionStart hook of your own used to make
+  it stand down while AgentBar's still did not run, and the Codex session never
+  appeared.
 
 ## 1.30.0 - 2026-09-24
 

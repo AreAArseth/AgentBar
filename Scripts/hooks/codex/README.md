@@ -112,7 +112,12 @@ trusted_hash = "sha256:…"
 
 The key is `<source path>:<event>:<group>:<index>` and the hash covers the handler,
 so changing the command — a node upgrade, an AgentBar update — invalidates it and
-Codex asks again.
+Codex asks again. Group and index are positions in the file: with a user's own
+`[[hooks.SessionStart]]` above AgentBar's block, AgentBar's hook is
+`session_start:1:0`, and the user's trust at `:0:0` says nothing about it (checked
+against `hooks/list`, codex-cli 0.156.1). `toml.js` resolves AgentBar's own key; the
+`codex.hooks` diagnostic and `notify.js` both ask it, so neither mistakes someone
+else's accepted hook for AgentBar's.
 
 **AgentBar never writes that entry.** It could: `hooks/list` over the app server
 returns `currentHash` and `trustStatus` for every hook, which is all it would take.

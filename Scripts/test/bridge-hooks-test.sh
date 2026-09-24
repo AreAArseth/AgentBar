@@ -280,12 +280,33 @@ printf 'model = "o3"\n%s\ncommand = "/x/.agentbar/hooks/codex/hook.js"\n' "$BLOC
 "$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
 check "codex: writes while untrusted"   '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
 
+AB_SESSION_START='[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "\\"/n\\" \\"/x/.agentbar/hooks/codex/hook.js\\" lifecycle.js start"\n'
 fresh_home
 mkdir -p "$HOME/.codex"
 CFG="$HOME/.codex/config.toml"
-printf 'model = "o3"\n%s\ncommand = "/x/.agentbar/hooks/codex/hook.js"\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:x"\n' "$BLOCK" "$CFG" > "$CFG"
+printf "model = \"o3\"\n%s\n$AB_SESSION_START\n[hooks.state.\"%s:session_start:0:0\"]\ntrusted_hash = \"sha256:x\"\n" "$BLOCK" "$CFG" > "$CFG"
 "$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
 check "codex: stands down when trusted" '[ ! -e "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+# Switched off is not taken over: Codex skips a disabled hook.
+printf 'enabled = false\n' >> "$CFG"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: writes when ours is off"  '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+
+# The user's own trusted SessionStart hook comes first, so AgentBar's is group 1 and
+# still untrusted. Trust for the user's key is not trust for ours: before, any
+# session_start key made this stand down and the session went invisible.
+fresh_home
+mkdir -p "$HOME/.codex"
+CFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\n\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/usr/local/bin/mine"\n\n%s\n' "$BLOCK" > "$CFG"
+printf "$AB_SESSION_START\n[hooks.state.\"%s:session_start:0:0\"]\ntrusted_hash = \"sha256:mine\"\n" "$CFG" >> "$CFG"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: the user's trust isn't ours" '[ -f "$HOME/.agentbar/state.d/codex-sd1.json" ]'
+rm -f "$HOME/.agentbar/state.d/codex-sd1.json"
+printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:ours"\n' "$CFG" >> "$CFG"
+"$NODE" Scripts/hooks/codex/notify.js "$CODEX_DONE"
+check "codex: stands down for our key"  '[ ! -e "$HOME/.agentbar/state.d/codex-sd1.json" ]'
 
 # An unreadable config must not silence it: a Codex session disappearing for a
 # reason nobody can see is worse than a duplicate row.
