@@ -1002,6 +1002,17 @@ extension SettingsWindow {
         return (try? data.write(to: url)) != nil
     }
 
+    /// Where a page's sidebar entry sits in the same root `renderPageForVerification`
+    /// draws, bottom-left origin, points — so the demo generator can put a pointer
+    /// on it. Nil before the window has been built.
+    func sidebarFrame(of page: Page) -> NSRect? {
+        guard let root = window?.contentView?.superview ?? window?.contentView,
+              let item = sidebarItems.first(where: { $0.page == page }) else { return nil }
+        var r = item.convert(item.bounds, to: root)
+        if root.isFlipped { r.origin.y = root.bounds.height - r.maxY }
+        return r
+    }
+
     func renderForVerification(to url: URL) -> Bool {
         if window == nil { build() }
         reload()

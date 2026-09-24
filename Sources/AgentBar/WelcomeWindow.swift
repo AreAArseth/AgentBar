@@ -479,3 +479,41 @@ final class PresentationPreview: NSView {
         painted.draw(in: NSRect(origin: origin, size: img.size))
     }
 }
+
+extension WelcomeWindow {
+    /// The window as it looks in `mode`, drawn to an image without opening it and
+    /// **without saving the choice** — the radios, preview and captions are set
+    /// for the picture only, and `Presentation.current` is never written. What the
+    /// demo generator (`Scripts/demo/feature-gifs.swift`) draws the appearance
+    /// scene from; `radioFrames` says where each choice sits, so a pointer can land
+    /// on it. Frames are in the image's own coordinates, bottom-left origin, points.
+    /// `wired` stands in for what the installer reports: a process that never ran
+    /// the install pass would otherwise draw "Setting up hooks…".
+    func renderForVerification(mode: Presentation, mark: NSImage?, word: String,
+                               wired: [String] = [])
+        -> (image: NSBitmapImageRep, radioFrames: [NSRect])? {
+        if window == nil { build() }
+        reload()
+        if !wired.isEmpty {
+            wiredLabel.stringValue = "Hooks wired up for: "
+                + wired.map { Agent.byID($0).name }.joined(separator: ", ")
+                + ". New sessions show up from now on; ones already open started before the hooks."
+        }
+        for (i, b) in radios.enumerated() { b.state = Presentation.allCases[i] == mode ? .on : .off }
+        preview.mode = mode
+        if let mark { preview.set(image: mark, word: word) }
+        modeCaption.stringValue = mode.caption
+        todayRow.isHidden = !mode.showsIsland
+        reloadDisplayRow(mode: mode)
+        guard let root = window?.contentView?.superview ?? window?.contentView else { return nil }
+        root.layoutSubtreeIfNeeded()
+        guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return nil }
+        root.cacheDisplay(in: root.bounds, to: rep)
+        let frames = radios.map { b -> NSRect in
+            var r = b.convert(b.bounds, to: root)
+            if root.isFlipped { r.origin.y = root.bounds.height - r.maxY }
+            return r
+        }
+        return (rep, frames)
+    }
+}

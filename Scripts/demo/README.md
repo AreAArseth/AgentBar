@@ -7,7 +7,7 @@ recording permission.
 
 | Output | Generator | How it draws |
 |---|---|---|
-| `deny-with-note.gif`, `rules-try-it.gif` | `feature-gifs.swift` via `make-gifs.sh` | **the app's own views**, compiled in |
+| `agentbar-tour.gif`, `deny-with-note.gif`, `rules-try-it.gif` | `feature-gifs.swift` via `make-gifs.sh` | **the app's own views**, compiled in |
 | `demo-claude-codex.gif` | `demo-gif.swift` | hand-drawn stage, mascot frames from the sprite sources |
 | `demo-island.gif` | `demo-island-gif.swift` | hand-drawn stage and island |
 | `social-preview.png` | `social-preview.swift` | the banner, from the 1024 icon master |
@@ -34,7 +34,7 @@ panel is 920 px wide on a 1200 px frame, the same scale the other demos use.
 
 ### Adding a GIF
 
-1. Add an `enum` beside `DenyWithNote` and `RulesTryIt` with a
+1. Add an `enum` beside `Tour`, `DenyWithNote` and `RulesTryIt` with a
    `static func write(to url: URL)`.
 2. Build its fixtures the way those two do: `Stage.tmp(name, json)` writes a state or
    request file, and `Session(fileURL:)` / `ApprovalRequest(fileURL:)` read it back.
@@ -52,10 +52,24 @@ Timing: 0.08–0.085 s a frame (about 12 fps) keeps a 15-second story under ~600
 Hold the frame that carries the point — the verdict, the answer — for 2 seconds or
 more; a viewer scrolling past needs it to still be there.
 
-A view that reads real state beyond its arguments will show it. The two known ones:
-the approval card's decision history (keyed by `cwd`, see step 2) and the rule
-sheet's *In* menu, which lists directories from your history but only draws the one
-it was given.
+A view that reads real state beyond its arguments will show it. The known ones:
+the approval card's decision history (keyed by `cwd`, see step 2), the rule sheet's
+*In* menu, which lists directories from your history but only draws the one it was
+given, and the Rules page, which lists your real `~/.agentbar/rules.json` — the tour
+leaves it out for that reason.
+
+The generator is an unbundled process, which has two consequences worth knowing:
+its `UserDefaults` are **its own domain**, not AgentBar's, so the tour can switch
+settings on for the picture without touching yours (and a value it wrote stays for
+the next run — clear what you set); and anything that needs a bundle, such as the
+notification center, raises. Keep the notification switches off in a scene, or the
+Notifications page asks for its status and the run aborts.
+
+Windows come from `renderForVerification`-style hooks in the app:
+`SettingsWindow.renderPageForVerification(_:to:)` and `sidebarFrame(of:)`,
+`WelcomeWindow.renderForVerification(mode:mark:word:wired:)` (draws a mode without
+saving it), and `RuleSheet.renderForVerification`. A new window gets one of those
+before it gets a scene.
 
 ## The hand-drawn ones
 

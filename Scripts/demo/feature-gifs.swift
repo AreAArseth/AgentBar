@@ -8,6 +8,9 @@
 //                        terminal changes course.
 //   rules-try-it.gif   — a rule you wrote, and the field that answers "would it
 //                        have taken *that*?" for three real commands.
+//   agentbar-tour.gif  — the whole app in one loop: Allow from the island with
+//                        three agents running, the menu bar / island / both
+//                        choice, and a walk through Settings.
 //
 // Run: Scripts/demo/make-gifs.sh [out-dir]. How it works and how to add a GIF:
 // Scripts/demo/README.md.
@@ -22,6 +25,7 @@ enum FeatureGIFs {
         NSApp.setActivationPolicy(.prohibited)
         DenyWithNote.write(to: URL(fileURLWithPath: out).appendingPathComponent("deny-with-note.gif"))
         RulesTryIt.write(to: URL(fileURLWithPath: out).appendingPathComponent("rules-try-it.gif"))
+        Tour.write(to: URL(fileURLWithPath: out).appendingPathComponent("agentbar-tour.gif"))
     }
 }
 
@@ -443,5 +447,241 @@ enum RulesTryIt {
             })
         }
         Stage.writeGIF(frames, delay: 0.08, to: url)
+    }
+}
+
+// MARK: - GIF 3: the tour
+
+enum Tour {
+    static let W: CGFloat = 1200, H: CGFloat = 1000
+
+    static func write(to url: URL) {
+        NSApp.appearance = NSAppearance(named: .aqua)
+        // This process has no bundle, so its icon is a folder and its defaults are
+        // its own domain — not AgentBar's. Both are set for the picture: the real
+        // icon, and the switches a person who uses the app would have on.
+        if let icon = NSImage(contentsOfFile: "Resources/AppIcon.icns") { NSApp.applicationIconImage = icon }
+        // Not the notification switches: with one on, the page asks the
+        // notification center for its status, and that needs a real bundle.
+        for key in ["notifyApprovals", "notifyFailures", "notifyQuiet"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        for key in ["soundsEnabled", "globalApprovalShortcut", "launcherShortcut"] {
+            UserDefaults.standard.set(true, forKey: key)
+        }
+        let now = Int(Date().timeIntervalSince1970)
+        func session(_ id: String, _ o: [String: Any]) -> Session {
+            var o = o
+            o["sessionId"] = id; o["pid"] = 1; o["started"] = true; o["ts"] = now
+            o["cwd"] = "/tmp/agentbar-demo-\(id)"
+            return Session(fileURL: Stage.tmp(id, o))!
+        }
+        let claude = session("tour-claude", ["agent": "claude", "state": "permission",
+            "label": "Bash: git push origin main", "project": "webshop", "started_at": now - 1680,
+            "prompt": "ship the checkout fix", "model": "claude-opus-5", "term_program": "iTerm.app"])
+        let codex = session("tour-codex", ["agent": "codex", "state": "tool", "label": "Running command",
+            "project": "api", "started_at": now - 540, "prompt": "speed up the orders query"])
+        let copilot = session("tour-copilot", ["agent": "copilot", "state": "done", "label": "",
+            "project": "docs", "started_at": now - 3000, "recap": "Rewrote the install guide for Linux"])
+        let request = ApprovalRequest(fileURL: Stage.tmp("tour-claude-p1", [
+            "sessionId": "tour-claude", "agent": "claude", "toolName": "Bash",
+            "display": "Bash: git push origin main",
+            "toolInputPretty": "{\"command\": \"git push origin main\"}",
+            "context": ["kind": "bash", "command": "git push origin main"],
+            "pid": 1, "hookPid": 1, "ts": now, "cwd": "/tmp/agentbar-demo-tour-claude"]))!
+
+        let sprite = IconRenderer.shared.sprite(for: Agent.byID("claude"))
+        func mark(_ id: String) -> NSImage { IconRenderer.shared.sprite(for: Agent.byID(id)).restingColor }
+        let rowW: CGFloat = 460 - IslandContentView.hPad * 2
+        func row(_ s: Session, _ style: IslandRowView.Style) -> NSView {
+            let r = IslandRowView(session: s, mark: mark(s.agentID), style: style, onClick: { _ in })
+            r.translatesAutoresizingMaskIntoConstraints = false
+            r.widthAnchor.constraint(equalToConstant: rowW).isActive = true
+            return r
+        }
+        let card = IslandApprovalView(request: request, deferTitle: "Answer in terminal",
+                                      width: rowW - 12, onChoose: { _ in })
+        let wrap = NSStackView(views: [card])
+        wrap.orientation = .horizontal
+        wrap.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+        let content = IslandContentView(frame: NSRect(x: 0, y: 0, width: 460, height: 100))
+        content.topInset = 10
+        content.setRows([row(claude, .hero), wrap, row(codex, .compact), row(copilot, .compact)])
+        content.setFrameSize(NSSize(width: 460, height: content.contentHeight + 6))
+        let panelImg = Stage.snapshot(content)
+        let allow = Stage.button("Allow", in: content)!
+
+        let topY = H - Stage.barH
+        let panelRect = NSRect(x: (W - panelImg.size.width) / 2, y: topY - panelImg.size.height,
+                               width: panelImg.size.width, height: panelImg.size.height)
+        let allowPt = NSPoint(x: panelRect.minX + allow.midX * 2, y: panelRect.minY + allow.midY * 2 + 10)
+        let pillW: CGFloat = 290, pillH: CGFloat = 60
+        let pillRect = NSRect(x: (W - pillW) / 2, y: topY - pillH, width: pillW, height: pillH)
+        let shadow = NSShadow(); shadow.shadowBlurRadius = 22
+        shadow.shadowOffset = NSSize(width: 0, height: -8)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+
+        func pill(_ label: String, color: NSColor, mark: NSImage?, count: Int) {
+            NSGraphicsContext.saveGraphicsState(); shadow.set()
+            NSColor.black.setFill(); Stage.flushTop(pillRect, 26).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            let t = Stage.text(label, 23, color, weight: .medium, mono: true)
+            let badge = Stage.text("\(count)", 19, Stage.rgb(0xFFFFFF, 0.65), weight: .semibold, mono: true)
+            let mh: CGFloat = 34, mw = mark.map { mh * $0.size.width / max(1, $0.size.height) } ?? 0
+            let bw = count > 0 ? badge.size().width + 18 : 0
+            let total = (mark == nil ? 0 : mw + 12) + t.size().width + (count > 0 ? 12 + bw : 0)
+            var x = pillRect.midX - total / 2
+            if let mark { mark.draw(in: NSRect(x: x, y: pillRect.midY - mh / 2, width: mw, height: mh)); x += mw + 12 }
+            t.draw(at: NSPoint(x: x, y: pillRect.midY - t.size().height / 2)); x += t.size().width + 12
+            if count > 0 {
+                Stage.rgb(0xFFFFFF, 0.12).setFill()
+                Stage.rounded(NSRect(x: x, y: pillRect.midY - 15, width: bw, height: 30), 8).fill()
+                badge.draw(at: NSPoint(x: x + 9, y: pillRect.midY - badge.size().height / 2))
+            }
+        }
+        func caption(_ s: String) {
+            let t = Stage.text(s, 30, .white, weight: .semibold)
+            let r = NSRect(x: (W - t.size().width) / 2 - 20, y: 34, width: t.size().width + 40, height: 58)
+            Stage.rgb(0x000000, 0.38).setFill(); Stage.rounded(r, 16).fill()
+            t.draw(at: NSPoint(x: r.minX + 20, y: r.midY - t.size().height / 2))
+        }
+        /// A window image (2x rep) on the desktop, scaled to fit, with a shadow.
+        func window(_ rep: NSBitmapImageRep, top: CGFloat = 70) -> (NSRect, CGFloat) {
+            let px = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+            let scale = min(1, 1080 / px.width, (H - 250) / px.height)
+            let size = NSSize(width: px.width * scale, height: px.height * scale)
+            let r = NSRect(x: (W - size.width) / 2, y: H - top - size.height, width: size.width, height: size.height)
+            NSGraphicsContext.saveGraphicsState()
+            let sh = NSShadow(); sh.shadowBlurRadius = 36; sh.shadowOffset = NSSize(width: 0, height: -12)
+            sh.shadowColor = NSColor.black.withAlphaComponent(0.32); sh.set()
+            NSColor.windowBackgroundColor.setFill(); Stage.rounded(r, 22).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSGraphicsContext.saveGraphicsState()
+            Stage.rounded(r, 22).addClip()
+            rep.draw(in: r)
+            NSGraphicsContext.restoreGraphicsState()
+            return (r, scale * 2)          // points in the window → pixels on the canvas
+        }
+        func point(_ f: NSRect, in r: NSRect, _ k: CGFloat) -> NSPoint {
+            NSPoint(x: r.minX + f.midX * k, y: r.minY + f.midY * k)
+        }
+
+        // Scene 2's windows, one per mode.
+        let modes: [Presentation] = [.island, .menuBar, .both]
+        let frame0 = sprite.colorFrames.first ?? sprite.restingColor
+        var welcome: [Presentation: (NSBitmapImageRep, [NSRect])] = [:]
+        for m in modes {
+            if let r = WelcomeWindow.shared.renderForVerification(mode: m, mark: frame0, word: "Thinking",
+                                                                wired: ["claude", "codex", "copilot"]) {
+                welcome[m] = (r.image, r.radioFrames)
+            }
+        }
+        // Scene 3's pages.
+        let pages: [SettingsWindow.Page] = [.notifications, .general, .shortcuts]
+        var settings: [SettingsWindow.Page: NSBitmapImageRep] = [:]
+        var sidebar: [SettingsWindow.Page: NSRect] = [:]
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("agentbar-gifs")
+        for p in pages {
+            let file = dir.appendingPathComponent("settings-\(p.rawValue).png")
+            _ = SettingsWindow.shared.renderPageForVerification(p, to: file)
+            if let d = try? Data(contentsOf: file), let rep = NSBitmapImageRep(data: d) { settings[p] = rep }
+            sidebar[p] = SettingsWindow.shared.sidebarFrame(of: p)
+        }
+
+        func scene(_ f: Int) -> CGImage {
+            Stage.frame(W, H) {
+                Stage.wallpaper(W, H)
+                let mk = sprite.colorFrames.isEmpty ? sprite.restingColor
+                                                    : sprite.colorFrames[f % sprite.colorFrames.count]
+                var cur: NSPoint?
+                var pressed = false
+                if f < 96 {
+                    Stage.menuBar(W, H, app: "iTerm2", notch: true)
+                    caption("Allow or deny from the notch · Claude, Codex, Copilot and more")
+                    func open(_ t: CGFloat) {
+                        let w = pillW + (panelRect.width - pillW) * t
+                        let h = pillH + (panelRect.height - pillH) * t
+                        let r = NSRect(x: (W - w) / 2, y: topY - h, width: w, height: h)
+                        NSGraphicsContext.saveGraphicsState(); shadow.set()
+                        NSColor.black.setFill(); Stage.flushTop(r, 26).fill()
+                        NSGraphicsContext.restoreGraphicsState()
+                        if t > 0.5 {
+                            NSGraphicsContext.saveGraphicsState(); Stage.flushTop(r, 26).addClip()
+                            panelImg.draw(in: panelRect, from: .zero, operation: .sourceOver, fraction: (t - 0.5) / 0.5)
+                            NSGraphicsContext.restoreGraphicsState()
+                        }
+                    }
+                    let start = NSPoint(x: W - 180, y: 300), notchPt = NSPoint(x: W / 2 + 30, y: topY - 20)
+                    switch f {
+                    case 0..<20:
+                        pill("approve?", color: .white, mark: mk, count: 3)
+                        cur = Stage.lerp(start, notchPt, Stage.smooth(CGFloat(f - 4) / 14))
+                    case 20..<28: open(Stage.smooth(CGFloat(f - 20) / 8)); cur = notchPt
+                    case 28..<52:
+                        open(1)
+                        cur = Stage.lerp(notchPt, allowPt, Stage.smooth(CGFloat(f - 30) / 14))
+                        pressed = f >= 48
+                    case 52..<58: open(Stage.smooth(1 - CGFloat(f - 52) / 6)); cur = allowPt
+                    case 58..<76:
+                        pill("✓ Allowed", color: Stage.rgb(0x59D973), mark: nil, count: 0)
+                        cur = Stage.lerp(allowPt, start, Stage.smooth(CGFloat(f - 58) / 16))
+                    default: pill("Pushing…", color: .white, mark: mk, count: 3)
+                    }
+                } else if f < 176 {
+                    Stage.menuBar(W, H, app: "AgentBar", notch: true)
+                    caption("Menu bar, Dynamic Island, or both")
+                    let order: [(Int, Presentation)] = [(96, .island), (118, .menuBar), (146, .both)]
+                    let mode = order.last(where: { f >= $0.0 })!.1
+                    if let (rep, radios) = welcome[mode] {
+                        let (r, k) = window(rep)
+                        let target: Presentation = f < 118 ? .menuBar : .both
+                        let idx = Presentation.allCases.firstIndex(of: target)!
+                        let aim = radios.indices.contains(idx) ? point(radios[idx], in: r, k) : NSPoint(x: W / 2, y: H / 2)
+                        let from = f < 118 ? NSPoint(x: W - 200, y: 260) : point(radios[Presentation.allCases.firstIndex(of: .menuBar)!], in: r, k)
+                        let t0 = f < 118 ? 100 : 124
+                        cur = f >= 146 ? aim : Stage.lerp(from, aim, Stage.smooth(CGFloat(f - t0) / 14))
+                        pressed = (f >= 116 && f < 119) || (f >= 144 && f < 147)
+                        cur = cur.map { NSPoint(x: $0.x - 20, y: $0.y + 10) }
+                    }
+                } else {
+                    Stage.menuBar(W, H, app: "AgentBar", notch: true)
+                    caption("Notifications, sounds, global shortcuts: all in Settings")
+                    let order: [(Int, SettingsWindow.Page)] = [(176, .notifications), (204, .general),
+                                                                (234, .shortcuts)]
+                    let page = order.last(where: { f >= $0.0 })!.1
+                    if let rep = settings[page] {
+                        let (r, k) = window(rep, top: 90)
+                        if let next = order.first(where: { $0.0 > f }), let side = sidebar[next.1] {
+                            let aim = NSPoint(x: r.minX + side.minX * k + 70, y: r.minY + side.midY * k)
+                            let prev = sidebar[page].map { NSPoint(x: r.minX + $0.minX * k + 70, y: r.minY + $0.midY * k) }
+                                ?? NSPoint(x: W - 200, y: 260)
+                            let t = Stage.smooth(CGFloat(f - (next.0 - 16)) / 12)
+                            cur = f < next.0 - 16 ? prev : Stage.lerp(prev, aim, t)
+                            pressed = f >= next.0 - 3
+                        } else if let side = sidebar[page] {
+                            cur = NSPoint(x: r.minX + side.minX * k + 70, y: r.minY + side.midY * k)
+                        }
+                    }
+                }
+                if let cur { Stage.cursor(at: cur, pressed: pressed) }
+            }
+        }
+
+        var frames: [CGImage] = []
+        let total = 280
+        for f in 0..<total { frames.append(scene(f)) }
+        // Soften the two cuts between scenes: four frames of cross-fade each.
+        func blend(_ a: CGImage, _ b: CGImage, _ t: CGFloat) -> CGImage {
+            Stage.frame(W, H) {
+                NSImage(cgImage: a, size: NSSize(width: W, height: H)).draw(in: NSRect(x: 0, y: 0, width: W, height: H))
+                NSImage(cgImage: b, size: NSSize(width: W, height: H))
+                    .draw(in: NSRect(x: 0, y: 0, width: W, height: H), from: .zero, operation: .sourceOver, fraction: t)
+            }
+        }
+        for cut in [96, 176] {
+            let a = frames[cut - 1], b = frames[cut]
+            for i in 0..<4 { frames[cut - 4 + i] = blend(a, b, CGFloat(i + 1) / 5) }
+        }
+        Stage.writeGIF(frames, delay: 0.085, to: url)
     }
 }
