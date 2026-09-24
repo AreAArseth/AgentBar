@@ -145,6 +145,9 @@ done
 check "codex hooks accepted passes"     '[ "$(status_of codex.hooks)" = ok ]'
 printf 'enabled = false\n' >> "$DCFG"
 check "a disabled codex hook warns"     '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
+# The same file with CRLF endings and a blank line before the switch.
+grep -v '^enabled = false$' "$DCFG" | sed 's/$/\r/' > "$DCFG.tmp" && printf '\r\nenabled = false\r\n' >> "$DCFG.tmp" && mv "$DCFG.tmp" "$DCFG"
+check "a disabled hook warns under CRLF" '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except PermissionRequest"'
 
 # --- the rules file, reported the way the app reports it -------------------------
 # A rules file that will not parse is the one failure that is invisible by design:

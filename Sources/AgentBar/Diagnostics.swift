@@ -431,7 +431,7 @@ enum Diagnostics {
     static func codexUntrustedEvents(config: String, path: String) -> [String] {
         var trusted = Set<String>()
         let prefix = "\(path):"
-        let pattern = #"(?m)^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^\[\s][^\n]*\n?|[ \t]*\n)*)"#
+        let pattern = #"(?m)^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^\[\s][^\n]*\n?|[ \t]*\r?\n)*)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let ns = config as NSString
         for m in regex.matches(in: config, range: NSRange(location: 0, length: ns.length)) {

@@ -1538,7 +1538,7 @@ function codexForeignTables(inner) {
 // matches is Codex's own arithmetic, and Codex asks again when it does not.
 function codexUntrustedEvents(toml, cfgPath) {
   const trusted = new Set();
-  const re = /^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^[\s][^\n]*\n?|[ \t]*\n)*)/gm;
+  const re = /^[ \t]*\[hooks\.state\."([^"]+)"\][^\n]*\n((?:[ \t]*[^[\s][^\n]*\n?|[ \t]*\r?\n)*)/gm;
   for (const m of toml.matchAll(re)) {
     const [, key, body] = m;
     if (!key.startsWith(cfgPath + ":")) continue;

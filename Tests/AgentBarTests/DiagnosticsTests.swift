@@ -160,6 +160,10 @@ import Testing
         #expect(Diagnostics.codexUntrustedEvents(
             config: trustState(cfg, Self.labels, extra: "enabled = false\n"), path: cfg) == ["Stop"])
         #expect(Diagnostics.codexUntrustedEvents(config: trustState(cfg, Self.labels), path: cfg).isEmpty)
+        // CRLF, with a blank line before the switch: still switched off.
+        let crlf = trustState(cfg, Self.labels, extra: "\nenabled = false\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        #expect(Diagnostics.codexUntrustedEvents(config: crlf, path: cfg) == ["Stop"])
         // Another file's trust says nothing about this one.
         #expect(Diagnostics.codexUntrustedEvents(config: trustState("/other.toml", Self.labels),
                                                  path: cfg).count == 7)
