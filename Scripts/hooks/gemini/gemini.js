@@ -2,8 +2,8 @@
 // AgentBar bridge for Gemini CLI hooks. Maps Gemini's hook events (read from the
 // stdin payload's hook_event_name) to a per-session state file in
 // ~/.agentbar/state.d/. Observe-only: writes state, emits nothing, exits fast.
-const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 const agentPid = require("../shared/agent-pid");
+const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 
 const AGENT = "gemini";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";

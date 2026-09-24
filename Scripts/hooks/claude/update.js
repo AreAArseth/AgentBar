@@ -5,10 +5,10 @@
 // unlike Notification events, can never land late and overwrite a newer state.
 // Event-to-state mapping ported from AI Status Notifier (proven in daily use).
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const agentPid = require("../shared/agent-pid");
 
 // Claude by default; agents with Claude-compatible hooks (Qwen Code) register
 // this same script with AGENTBAR_AGENT set to their id.

@@ -4,8 +4,8 @@
 // ~/.agentbar/state.d/. Observe-only: writes state, emits nothing, exits fast.
 // Payload fields differ between the desktop app and the CLI generation of the
 // contract (conversationId/workspacePaths vs session_id/cwd), so both are read.
-const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 const agentPid = require("../shared/agent-pid");
+const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
 
 const AGENT = "antigravity";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";

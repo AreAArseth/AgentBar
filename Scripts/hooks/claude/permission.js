@@ -15,11 +15,11 @@
 // camelCase and carries RAW tool ids, so it is normalised on the way in and its
 // decision is spelled differently on the way out. Everything between is shared.
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
-const agentPid = require("../shared/agent-pid");
 
 const base = path.join(os.homedir(), ".agentbar");
 const stateDir = path.join(base, "state.d");

@@ -4,11 +4,11 @@
 // Also serves agents with Claude-compatible hooks (Qwen Code): the installer
 // registers the same script with AGENTBAR_AGENT set to the agent's id.
 
+const agentPid = require("../shared/agent-pid");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
-const agentPid = require("../shared/agent-pid");
 
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
