@@ -135,6 +135,7 @@ mkdir -p "$HOME/.codex"
 check "no block, no trust row"          '[ "$(status_of codex.hooks)" = absent ]'
 "$CLI" install-hooks >/dev/null 2>&1
 check "codex hooks await acceptance"    '[ "$(status_of codex.hooks)" = warn ]'
+check "the notify bridge covers for them" '"$CLI" doctor | grep -q "still appear, from the older notify bridge"'
 DCFG="$HOME/.codex/config.toml"
 printf '\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" >> "$DCFG"
 # Trust is given hook by hook: one accepted is not all accepted.
@@ -187,6 +188,14 @@ for e in session_start session_end user_prompt_submit pre_tool_use post_tool_use
   printf '\n[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:deadbeef"\n' "$DCFG" "$e" >> "$DCFG"
 done
 check "a comment is not our handler"   '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "Accepted except SessionStart\."'
+# AgentBar stands aside for the user's own notify, and its own line is commented out:
+# no bridge covers for the unaccepted hooks, and the warning must not promise one.
+fresh_home
+mkdir -p "$HOME/.codex"
+DCFG="$HOME/.codex/config.toml"
+printf 'model = "o3"\nnotify = ["/usr/bin/say", "done"]\n\n[t]\nk = "v"\n# notify = ["/n", "%s/.agentbar/hooks/codex/notify.js"]\n' "$HOME" > "$DCFG"
+"$CLI" install-hooks >/dev/null 2>&1
+check "no bridge is promised"          '[ "$(status_of codex.hooks)" = warn ] && "$CLI" doctor | grep -q "do not appear here at all" && ! "$CLI" doctor | grep -q "still appear"'
 # An inline entry is read as a table: a comment after it is not trust.
 fresh_home
 mkdir -p "$HOME/.codex"

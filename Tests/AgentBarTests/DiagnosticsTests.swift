@@ -123,6 +123,23 @@ import Testing
         #expect(row?.fix != nil)
     }
 
+    /// "Sessions still appear, from the older notify bridge" is only true when that
+    /// bridge is wired. AgentBar stands aside for a user's own notify, and its own
+    /// line may be commented out by hand; then nothing reports a Codex session.
+    @Test(arguments: [
+        ("notify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", true),
+        ("notify = [\"/usr/bin/say\", \"done\"]\n\n[t]\n# notify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", false),
+        ("model = \"o3\"\n\n[t]\nnotify = [\"/n\", \"/u/.agentbar/hooks/codex/notify.js\"]\n", false),
+        ("model = \"o3\"\n", false),
+    ])
+    func theUnacceptedWarningSaysWhetherTheNotifyBridgeIsThere(_ config: String, _ wired: Bool) throws {
+        #expect(Diagnostics.codexNotifyWired(config: config) == wired)
+        try write(".codex/config.toml", block(config))
+        let detail = check("codex.hooks")?.detail ?? ""
+        #expect(detail.contains("still appear") == wired)
+        #expect(detail.contains("do not appear here at all") == !wired)
+    }
+
     private func trustState(_ cfg: String, _ labels: [String], group: Int = 0, extra: String = "") -> String {
         "[hooks.state]\n\n" + labels.map {
             "[hooks.state.\"\(cfg):\($0):\(group):0\"]\ntrusted_hash = \"sha256:x\"\n\($0 == "stop" ? extra : "")\n"

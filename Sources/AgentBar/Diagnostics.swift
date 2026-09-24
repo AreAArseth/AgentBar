@@ -412,10 +412,31 @@ enum Diagnostics {
         return [Check(id: "codex.hooks", title: "Codex has accepted its hooks",
                       status: missing.isEmpty ? .ok : .warn,
                       detail: missing.isEmpty ? nil
-                        : all ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                        : all ? codexUnacceptedDetail(notifyWired: codexNotifyWired(config: text))
                         : "Accepted except \(missing.joined(separator: ", ")). Codex runs only the hooks it was told to trust, and skips the rest in silence.",
                       fix: missing.isEmpty ? nil
                         : "Start a Codex session and accept the hooks it asks about.")]
+    }
+
+    /// What "not yet accepted" costs depends on whether the older notify bridge is
+    /// there to cover for the hooks. It often is not: AgentBar stands aside for a
+    /// `notify` of the user's, and its own line may have been commented out by hand.
+    static func codexUnacceptedDetail(notifyWired: Bool) -> String {
+        notifyWired
+            ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+            : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing. AgentBar's older notify bridge is not wired in this config either (another program owns `notify`, or AgentBar's line is commented out), so Codex sessions do not appear here at all until the hooks are accepted."
+    }
+
+    /// Whether AgentBar's own notify line is live: a top-level `notify` array naming
+    /// its hooks path, in a file that reads to the end. A stray copy under a table is
+    /// not live, and neither is a commented-out one.
+    static func codexNotifyWired(config: String) -> Bool {
+        let outline = TOMLOutline(config)
+        guard outline.isComplete else { return false }
+        return outline.statements.contains { s in
+            s.isTopLevel && (outline.stringArray(assignedTo: "notify", by: s, in: config)?.values
+                .contains { $0.contains("/.agentbar/hooks/codex/") } ?? false)
+        }
     }
 
     /// AgentBar's events whose own hook has no trusted, enabled entry in Codex's

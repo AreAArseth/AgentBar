@@ -1351,7 +1351,11 @@ function doctor(json) {
         add("codex.hooks", "Codex has accepted its hooks", trusted ? "ok" : "warn",
             trusted ? null
               : missing.length === CODEX_EVENTS.length
-                ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                // Whether the older notify bridge covers for the hooks: AgentBar stands
+                // aside for a user's notify, and its own line may be commented out.
+                ? (codexNotifyWired(toml)
+                  ? "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing — Codex sessions still appear, from the older notify bridge, but they cannot be approved from here."
+                  : "Written, but not yet accepted. Codex asks once before it runs a hook, and until it is answered these do nothing. AgentBar's older notify bridge is not wired in this config either (another program owns `notify`, or AgentBar's line is commented out), so Codex sessions do not appear here at all until the hooks are accepted.")
                 : `Accepted except ${missing.join(", ")}. Codex runs only the hooks it was told to trust, and skips the rest in silence.`,
             trusted ? null : "Start a Codex session and accept the hooks it asks about.");
       }
@@ -1434,6 +1438,7 @@ const tomlBasicString = (...a) => codexToml().tomlBasicString(...a);
 const tomlClaims = (...a) => codexToml().tomlClaims(...a);
 const codexHookKeys = (...a) => codexToml().codexHookKeys(...a);
 const codexHookStates = (...a) => codexToml().codexHookStates(...a);
+const codexNotifyWired = (...a) => codexToml().codexNotifyWired(...a);
 
 const CODEX_BEGIN = "# >>> agentbar >>> written by AgentBar; edit outside these two lines";
 const CODEX_END = "# <<< agentbar <<<";

@@ -335,7 +335,20 @@ function codexHookTrusted(t, cfgPath, event) {
   return Boolean(st && st.trusted && !st.disabled);
 }
 
+// Whether AgentBar's own notify line is live: a top-level notify array naming its
+// hooks path, in a file that reads to the end. A stray copy under a table is not
+// live, and neither is a commented-out one; mirrors Diagnostics.codexNotifyWired.
+function codexNotifyWired(t) {
+  const outline = tomlOutline(t);
+  if (!outline.complete) return false;
+  return outline.statements.some((s) => {
+    if (!s.top) return false;
+    const a = tomlStringArray(t, s, "notify");
+    return Boolean(a && a.values.some((v) => v.includes("/.agentbar/hooks/codex/")));
+  });
+}
+
 module.exports = {
   tomlOutline, tomlStringArray, tomlBasicString, tomlClaims,
-  codexHookKeys, codexHookStates, codexHookTrusted,
+  codexHookKeys, codexHookStates, codexHookTrusted, codexNotifyWired,
 };
