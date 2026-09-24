@@ -563,6 +563,58 @@ printf '{"session_id":"seedsess","cwd":"/tmp/proj","source":"startup"}' \
   | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
 check "plain seed stays hidden"     'grep -q "\"started\":false" "$HOME/.agentbar/state.d/seedsess.json"'
 
+# 19d. Cursor runs the hooks in ~/.claude/settings.json as well as its own, with its
+# own payload (cursor_version, conversation_id, a session_id that may or may not
+# match it, or none). cursor.js owns that session; the Claude scripts writing it
+# too tagged every Cursor session "claude" — in cursor.js's own file when the ids
+# agreed, which then flip-flopped with whichever hook fired last.
+CURSOR_JS="Scripts/hooks/cursor/cursor.js"
+cur() { printf '%s' "$1" | AGENTBAR_FORCE_APP=1 "$NODE" "$CURSOR_JS"; }
+fresh_home
+CROW="$HOME/.agentbar/state.d/conv-1.json"
+CUR_BASE='"conversation_id":"conv-1","generation_id":"gen-1","cursor_version":"3.0.0","workspace_roots":["/tmp/proj"]'
+cur "{$CUR_BASE,\"hook_event_name\":\"sessionStart\",\"session_id\":\"conv-1\"}"
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionStart\",\"session_id\":\"conv-1\"}" \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+cur "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\"}"
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js pre
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"beforeSubmitPrompt\",\"session_id\":\"conv-1\",\"prompt\":\"hi\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js prompt
+check "cursor: row stays cursor"    'grep -q "\"agent\":\"cursor\"" "$CROW"'
+check "cursor: row keeps its state" 'grep -q "\"state\":\"tool\"" "$CROW"'
+check "cursor: one row, no twin"    '[ "$(ls "$HOME/.agentbar/state.d" | wc -l | tr -d " ")" = 1 ]'
+# A session_id that is not the conversation_id, or none at all: no second row,
+# and nothing piling up in unknown.json.
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"postToolUse\",\"session_id\":\"conv-1:7\",\"tool_name\":\"Read\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js post
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"tool_name\":\"Read\"}" \
+  | "$NODE" Scripts/hooks/claude/update.js pre
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionStart\"}" \
+  | AGENTBAR_FORCE_APP=1 "$NODE" Scripts/hooks/claude/lifecycle.js start
+check "cursor: no row under its session_id" '[ ! -e "$HOME/.agentbar/state.d/conv-17.json" ]'
+check "cursor: no unknown.json"     '[ ! -e "$HOME/.agentbar/state.d/unknown.json" ]'
+# Its SessionEnd must not delete the row cursor.js is still writing.
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"sessionEnd\",\"session_id\":\"conv-1\"}" \
+  | "$NODE" Scripts/hooks/claude/lifecycle.js end
+check "cursor: claude end spares row" '[ -e "$CROW" ]'
+cur "{$CUR_BASE,\"hook_event_name\":\"sessionEnd\"}"
+check "cursor: its own end removes it" '[ ! -e "$CROW" ]'
+# The permission hook answers nothing for a Cursor session, and never waits.
+start=$(date +%s)
+printf '%s' "{$CUR_BASE,\"hook_event_name\":\"preToolUse\",\"session_id\":\"conv-1\",\"tool_name\":\"Shell\",\"tool_input\":{\"command\":\"git push\"}}" \
+  | AGENTBAR_FORCE_APP=1 AGENTBAR_APPROVAL_TIMEOUT=$ANSWER_TIMEOUT "$NODE" "$HOOK" >"$HOME/out.json"
+end=$(date +%s)
+check "cursor: permission exits at once" '[ $((end-start)) -le 3 ] && [ ! -s "$HOME/out.json" ]'
+check "cursor: permission posts nothing" '[ -z "$(ls "$HOME/.agentbar/requests.d" 2>/dev/null)" ]'
+# Claude Code started in Cursor's integrated terminal inherits Cursor's env; only
+# the payload says who is calling, so this is still a claude row.
+fresh_home
+printf '{"session_id":"interm","cwd":"/tmp/proj","prompt":"go"}' \
+  | CURSOR_VERSION=3.0.0 CURSOR_PROJECT_DIR=/tmp/proj "$NODE" Scripts/hooks/claude/update.js prompt
+check "claude in cursor's terminal stays claude" \
+  'grep -q "\"agent\":\"claude\"" "$HOME/.agentbar/state.d/interm.json"'
+
 # 20. the OpenCode plugin is loadable and maps the bus to protocol states
 fresh_home
 check "opencode: plugin parses"     '"$NODE" --input-type=module --check < Scripts/hooks/opencode/agentbar.js'
