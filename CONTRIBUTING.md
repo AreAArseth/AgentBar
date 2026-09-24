@@ -147,6 +147,12 @@ needed. See `docs/specs/` for the design documents.
 - Update `CHANGELOG.md` for user-visible changes.
 - CI must be green (build + hook tests).
 
+## Demo GIFs
+
+`Scripts/demo/make-gifs.sh` regenerates the feature GIFs in `docs/assets/` from the
+app's own views; see [`Scripts/demo/README.md`](Scripts/demo/README.md) for how it works
+and how to add one.
+
 ## Releases
 
 A release asset has to satisfy two things that no longer fit on one machine. It
