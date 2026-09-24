@@ -587,8 +587,24 @@ enum HookInstaller {
         guard FileManager.default.fileExists(atPath: copilotDir.path) else { return } // not a Copilot user
         let hooksFileDir = copilotDir.appendingPathComponent("hooks", isDirectory: true)
         try FileManager.default.createDirectory(at: hooksFileDir, withIntermediateDirectories: true)
-        let dir = hooksDir.appendingPathComponent("claude").path
+        let root: [String: Any] = ["version": 1,
+                                   "hooks": copilotHooks(node: node, dir: hooksDir.appendingPathComponent("claude").path)]
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try writeIfChanged(data, to: hooksFileDir.appendingPathComponent("agentbar.json"))
+        note("copilot")
+    }
 
+    /// The `hooks` object of `~/.copilot/hooks/agentbar.json`. Pure, so its shape is
+    /// a test rather than a hope.
+    ///
+    /// VS Code's Copilot Chat reads this directory too, but its parser keeps only
+    /// entries with a `command`, `bash`, `osx`, `linux`, `windows` or `powershell`
+    /// line, so `exec` alone made every VS Code session invisible. Each status entry
+    /// also carries the same command as an `osx`/`linux` line, which VS Code runs and
+    /// Copilot CLI ignores — it still runs `exec`, once (checked on 1.0.88). Not
+    /// `bash`, which is the CLI's own key and the shell wrapper `exec` exists to
+    /// avoid. `permissionRequest` stays `exec`-only, so VS Code never runs it.
+    static func copilotHooks(node: String, dir: String) -> [String: Any] {
         let events: [(event: String, script: String, arg: String?)] = [
             ("SessionStart",       "lifecycle.js", "start"),
             ("SessionEnd",         "lifecycle.js", "end"),
@@ -606,7 +622,9 @@ enum HookInstaller {
         for e in events {
             var args = ["\(dir)/\(e.script)"]
             if let arg = e.arg { args.append(arg) }
+            let line = "\"\(node)\" \"\(dir)/\(e.script)\"" + (e.arg.map { " " + $0 } ?? "")
             hooks[e.event] = [["type": "command", "exec": node, "args": args,
+                               "osx": line, "linux": line,
                                "timeoutSec": 5, "env": ["AGENTBAR_AGENT": "copilot"]]]
         }
         // The blocking one. Its timeout must sit ABOVE the hook's own wait (600s,
@@ -619,10 +637,7 @@ enum HookInstaller {
                                        "args": ["\(dir)/permission.js"],
                                        "timeoutSec": 630,
                                        "env": ["AGENTBAR_AGENT": "copilot"]]]
-        let root: [String: Any] = ["version": 1, "hooks": hooks]
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try writeIfChanged(data, to: hooksFileDir.appendingPathComponent("agentbar.json"))
-        note("copilot")
+        return hooks
     }
 
     // MARK: - OpenCode (~/.config/opencode/plugins/agentbar.js)

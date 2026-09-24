@@ -286,6 +286,17 @@ process.stdout.write([h.timeoutSec, h.exec ? "exec" : "shell", path.basename(h.a
 check "copilot approval outlasts hook" '[ "$(echo "$APPROVAL_HOOK" | cut -d" " -f1)" -gt 600 ]'
 check "copilot approval runs node directly" '[ "$APPROVAL_HOOK" = "630 exec permission.js" ]'
 check "copilot leaves other hook files" 'grep -q "\"bash\":\"true\"" "$HOME/.copilot/hooks/mine.json"'
+# VS Code reads this file too, and drops an entry with no command line: every status
+# entry carries its exec+args again as osx/linux lines, while the approval hook
+# stays exec-only so VS Code never runs it.
+VSCODE_LINES="$("$NODE" -e '
+const fs=require("fs"),os=require("os"),path=require("path");
+const h=JSON.parse(fs.readFileSync(path.join(os.homedir(),".copilot/hooks/agentbar.json"),"utf8")).hooks;
+const bad=Object.entries(h).filter(([ev,[e]])=>ev!=="permissionRequest" &&
+  !(e.osx===`"${e.exec}" "${e.args[0]}" ${e.args[1]}` && e.linux===e.osx));
+const p=h.permissionRequest[0];
+process.stdout.write(bad.map(([ev])=>ev).join(",")+"|"+(p.osx||p.linux||p.command||""));')"
+check "copilot lines vscode can run"   '[ "$VSCODE_LINES" = "|" ]'
 # The node path written into every config must name the SAME interpreter this CLI
 # runs on, and must prefer a stable alias over the version-pinned path execPath
 # resolves to — a hook config outlives the next node upgrade, and a hook whose

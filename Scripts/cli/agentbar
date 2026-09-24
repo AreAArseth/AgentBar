@@ -1738,8 +1738,14 @@ function installHooks() {
       ["ErrorOccurred", "update.js", "fail"],
     ];
     const hooks = {};
+    // VS Code's Copilot Chat reads this file too but drops an entry with no command
+    // line, so each status entry also carries the same command as osx/linux lines:
+    // VS Code runs those, Copilot CLI ignores them and still runs exec, once
+    // (checked on 1.0.88). permissionRequest stays exec-only, out of VS Code's reach.
     for (const [ev, script, arg] of copilotEvents) {
+      const line = `"${node}" "${dir}/${script}" ${arg}`;
       hooks[ev] = [{ type: "command", exec: node, args: [`${dir}/${script}`, arg],
+                     osx: line, linux: line,
                      timeoutSec: 5, env: { AGENTBAR_AGENT: "copilot" } }];
     }
     // The blocking one. Its timeout sits ABOVE the hook's own wait (600s) so the

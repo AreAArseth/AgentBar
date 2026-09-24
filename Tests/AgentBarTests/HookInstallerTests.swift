@@ -139,6 +139,40 @@ import Testing
                                         script: Self.script, isExecutable: { _ in false }) == .unchanged)
     }
 
+    // MARK: - Copilot: one file, two readers
+
+    /// VS Code's Copilot Chat drops an entry that has no command line, and before this
+    /// every entry was `exec` + `args` — so VS Code sessions never appeared at all.
+    /// Each status entry now carries the same command twice: `exec` for Copilot CLI,
+    /// `osx`/`linux` for VS Code, with the agent named by `env` for both.
+    @Test func copilotStatusEntriesAlsoCarryTheLineVSCodeRuns() throws {
+        let hooks = HookInstaller.copilotHooks(node: "/opt/homebrew/bin/node", dir: "/h/claude")
+        let pre = try #require((hooks["PreToolUse"] as? [[String: Any]])?.first)
+        #expect(pre["exec"] as? String == "/opt/homebrew/bin/node")
+        #expect(pre["args"] as? [String] == ["/h/claude/update.js", "pre"])
+        #expect(pre["osx"] as? String == "\"/opt/homebrew/bin/node\" \"/h/claude/update.js\" pre")
+        #expect(pre["linux"] as? String == pre["osx"] as? String)
+        #expect((pre["env"] as? [String: String])?["AGENTBAR_AGENT"] == "copilot")
+        for (event, value) in hooks where event != "permissionRequest" {
+            let entry = try #require((value as? [[String: Any]])?.first)
+            #expect(entry["osx"] is String, "\(event) would stay invisible in VS Code")
+            // A `bash` line is the shell wrapper `exec` exists to avoid (and what
+            // Diagnostics' copilot.exec check fails on).
+            #expect(entry["bash"] == nil)
+            #expect(entry["command"] == nil)
+        }
+    }
+
+    /// The approval hook stays out of VS Code's reach: what VS Code does with an
+    /// answer has never been measured, so it must not be handed one.
+    @Test func copilotApprovalIsNotOfferedToVSCode() throws {
+        let hooks = HookInstaller.copilotHooks(node: "/n", dir: "/h/claude")
+        let perm = try #require((hooks["permissionRequest"] as? [[String: Any]])?.first)
+        #expect(perm["exec"] as? String == "/n")
+        #expect(perm["timeoutSec"] as? Int == 630)
+        for key in ["osx", "linux", "command", "bash"] { #expect(perm[key] == nil) }
+    }
+
     // MARK: - firstQuoted
 
     @Test(arguments: [

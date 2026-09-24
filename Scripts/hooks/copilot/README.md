@@ -98,16 +98,46 @@ Keystroke approval stays as the fallback (`Agents.swift`, `approveKeys: [16, 36]
 a session started before the hook was installed, or one running inside VS Code,
 produces no request file, and the menu falls back to keystrokes for those.
 
-## Versions and the VS Code overlap
+## Versions
 
 Minimum useful: **1.0.67** (hook timeouts fail open). Hard floor **1.0.22**, below
 which `SessionStart`/`SessionEnd` fire per prompt rather than per session and the
 lifecycle logic is simply wrong.
 
-VS Code's own agent hooks (Preview) also read `~/.copilot/hooks`, convert camelCase
-to PascalCase, and support neither `SessionEnd` nor `matcher`. So our file may fire
-inside VS Code too, leaving rows with no end event — pid liveness pruning is what
-clears those.
+## Copilot in VS Code
+
+VS Code's Copilot Chat (1.137, Copilot Chat 0.65) reads hook files from
+`~/.copilot/hooks` by default, and from `~/.claude/settings.json` only when
+`chat.useClaudeHooks` is on. Both used to go wrong, in opposite directions:
+
+- **Default: nothing at all.** VS Code's hook parser keeps an entry only if it has a
+  `command`, `bash`, `osx`, `linux`, `windows` or `powershell` line, and drops the
+  rest without a word. Every entry here was `exec` + `args`, so a VS Code session
+  never produced a row. Each status entry now carries the same command a second
+  time as `osx`/`linux` lines. VS Code runs those, with `env` naming the agent.
+  Copilot CLI ignores them and still runs `exec`, once, with the CLI itself as the
+  hook's parent. That was checked on a real 1.0.88 session with both shapes side by
+  side. `permissionRequest` stays `exec`-only, so VS Code never runs the approval
+  hook: what it would do with an answer has not been measured.
+- **With `chat.useClaudeHooks`: a Claude session running GPT.** VS Code runs Claude's
+  entries with no `AGENTBAR_AGENT`, so every row said `claude`. The `claude/`
+  scripts now read the host off the payload rather than the env (a `claude` started
+  in VS Code's terminal inherits VS Code's env and must stay claude). Claude Code
+  builds every event on `{session_id, transcript_path, cwd, permission_mode}` and
+  never sends `timestamp`. VS Code sends an ISO `timestamp`, and its
+  `transcript_path` lives under `…/GitHub.copilot-chat/transcripts/`. That path
+  files the row as `copilot`. Any other `timestamp` reaching Claude's install is a
+  host nobody has named yet, and the scripts write nothing for it.
+
+With both files active, VS Code runs the two hooks one after the other on the same
+`session_id`, so they land on one file under one name — one row. VS Code sends no
+`SessionEnd`, so its rows end the way any row with no end event does: when the
+extension host behind their `pid` exits.
+
+Payload keys, from VS Code 1.137: `UserPromptSubmit` sends `cwd`, `hook_event_name`,
+`prompt`, `session_id`, `timestamp` and `transcript_path`; `PreToolUse` adds
+`tool_name` (VS Code's own ids, e.g. `read_file`), `tool_input` and `tool_use_id`;
+`SessionStart` carries the Copilot model as `model`.
 
 Docs: https://docs.github.com/en/copilot/reference/hooks-reference ·
 https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks
