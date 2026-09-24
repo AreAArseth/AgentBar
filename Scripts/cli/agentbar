@@ -104,7 +104,13 @@ function sessions() {
 // sidecar holds the previous tick so one-shot commands can diff too.
 const FINISHED = { done: 1, error: 1 };   // deliberately not "idle" — see HistoryStore.swift
 
-function recordHistory(ss) {
+// A row the ssh mirror wrote is another machine's session (Session.isMirror in
+// the app): its turns and its disappearance after a lost connection are not
+// endings this machine saw, so the record leaves them out, as the app does.
+const isMirror = (s) => s.entrypoint === "cloud" && s.source === "ssh";
+
+function recordHistory(all) {
+  const ss = all.filter((s) => !isMirror(s));
   try {
     const live = {};
     for (const s of ss) if (s.started !== false) live[s.id] = s;

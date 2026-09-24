@@ -121,3 +121,34 @@ test("ssh: rows per host are capped", () => {
   assert.equal(rows.length, 50);
   assert.match(warnings[0], /more than 50/);
 });
+
+// MARK: - Where a row runs, said structurally
+
+const { markStale, writeRow, readRow } = require("../lib/state");
+
+test("ssh: a mirrored row names its adapter and its machine; a vendor's row only its adapter", () => {
+  const { rows } = ssh.normalize([{ host: "me@host-a.example", name: "host-a",
+    out: out({ agent: "claude", state: "tool", sessionId: "s1", pid: 1, started: true, ts: NOW }) }], DEFAULTS.ssh, NOW);
+  const mirrored = toProtocolRow(rows[0], ssh, NOW, 1);
+  assert.equal(mirrored.source, "ssh");
+  assert.equal(mirrored.host, "host-a");
+  const vendor = toProtocolRow({ id: "r1", state: "thinking", label: "", project: "api", url: "https://remote-host.example/r1" },
+                               { agentId: "devin", prefix: "cloud-devin-", vendor: "devin" }, NOW, 1);
+  assert.equal(vendor.source, "devin");
+  assert.equal(vendor.host, undefined, "a vendor's run has no machine of the user's to name");
+});
+
+test("ssh: a host inside its grace keeps its rows, marked stale, until it answers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentbar-stale-"));
+  const row = { agent: "claude", state: "thinking", sessionId: "ssh-host-a-s1", entrypoint: "cloud", source: "ssh",
+                host: "host-a", pid: 1, started: true, ts: NOW };
+  writeRow(dir, row);
+  writeRow(dir, { ...row, sessionId: "cloud-devin-x", source: "devin" });
+  markStale(dir, ["ssh-host-a-s1"]);
+  assert.equal(readRow(dir, "ssh-host-a-s1").stale, true);
+  assert.equal(readRow(dir, "ssh-host-a-s1").state, "thinking", "what it said last, unchanged");
+  assert.equal(readRow(dir, "cloud-devin-x").stale, undefined, "only the graced ids");
+  writeRow(dir, row); // the host answers: a fresh row carries no mark
+  assert.equal(readRow(dir, "ssh-host-a-s1").stale, undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

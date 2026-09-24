@@ -31,6 +31,38 @@ struct Session {
     let recap: String        // what the agent last said at turn end ("" ok)
     let activity: [String]   // the turn's recent tool steps, oldest → newest ([] ok)
     let url: String          // where the session lives when it isn't local ("" ok)
+    /// Which cloud-poller adapter wrote the row ("devin", "cursor", "codex", "ssh"),
+    /// "" for rows the hooks wrote on this Mac.
+    let source: String
+    /// The configured name of the machine a mirrored row runs on ("" ok).
+    let host: String
+    /// The poller could not reach the machine on its last poll: this is what it
+    /// said last, not what is true now.
+    let stale: Bool
+
+    /// Runs somewhere no terminal, tab, keystroke, hook or path on this Mac can
+    /// reach — a vendor's cloud, or one of the user's own machines mirrored over
+    /// ssh. Every action a row offers checks this first.
+    var isOffMachine: Bool { entrypoint == "cloud" }
+
+    /// Mirrored from one of the user's own machines, not a vendor's cloud. Known
+    /// by the adapter that wrote the row, never by reading its words.
+    var isMirror: Bool { isOffMachine && source == "ssh" }
+
+    /// Where an off-machine row runs, as a row may say it: the machine's name for
+    /// a mirror ("Remote" when it has none), "Cloud" only for a vendor's cloud —
+    /// the word implies the data left the user's machines, and for a mirror it
+    /// did not. Nil for a local session.
+    var placeName: String? {
+        guard isOffMachine else { return nil }
+        guard isMirror else { return "Cloud" }
+        return host.isEmpty ? "Remote" : host
+    }
+
+    /// The sessions that happened on this Mac, for everything that records, sounds
+    /// or announces: a mirrored machine's session is status, and its turns, ends
+    /// and lost connections are not this Mac's events.
+    static func local(_ sessions: [Session]) -> [Session] { sessions.filter { !$0.isMirror } }
 
     /// The label Claude Code's PreCompact hook writes while the session summarises
     /// its context (`Scripts/hooks/claude/update.js`). Not a state of its own: the
@@ -77,6 +109,13 @@ struct Session {
         recap       = o["recap"] as? String ?? ""
         activity    = (o["activity"] as? [String] ?? []).prefix(5).map { String($0.prefix(40)) }
         url         = o["url"] as? String ?? ""
+        source      = o["source"] as? String ?? ""
+        // A name a person configured, carried by a file anybody may write: one
+        // short line with no control characters, or nothing.
+        let rawHost = o["host"] as? String ?? ""
+        host        = rawHost.count <= 24 && !rawHost.unicodeScalars.contains {
+            CharacterSet.controlCharacters.contains($0) } ? rawHost : ""
+        stale       = o["stale"] as? Bool ?? false
     }
 
     /// A Unix time a row may carry, or 0. `state.d` is a folder anybody may write
@@ -135,6 +174,9 @@ struct Session {
         recap = ""
         activity = []
         url = ""
+        source = ""
+        host = ""
+        stale = false
         decayed = false
     }
 

@@ -38,7 +38,7 @@ enum MenuBuilder {
                 // Cloud rows get no approval affordances: there is no local hook a
                 // keystroke or answer file could reach — the plain row (which opens
                 // the session's URL) is the whole offer.
-                if s.state == .permission, s.entrypoint != "cloud" {
+                if s.state == .permission, !s.isOffMachine {
                     if !sessionRequests.isEmpty {
                         // Row click defers to the session's own UI; actions live right below.
                         menu.addItem(item)
@@ -379,7 +379,11 @@ enum MenuBuilder {
 
     /// cwd, plus the last turn's recap when the writer carries one.
     private static func rowToolTip(_ s: Session) -> String {
-        s.recap.isEmpty ? s.cwd
+        if s.isMirror, let place = s.placeName {
+            return "On \(place) — answered on that machine."
+                + (s.stale ? "\nConnection lost: this is the last thing it said." : "")
+        }
+        return s.recap.isEmpty ? s.cwd
             : "\(s.cwd)\n\n\(Agent.byID(s.agentID).name): \(s.recap)"
     }
 

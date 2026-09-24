@@ -34,6 +34,12 @@ final class SessionRowView: NSView {
         if ended {
             return Content(dot: .ended, name: name, detail: "ended", elapsed: "", agent: agent, agentID: s.agentID)
         }
+        // What a machine said before the connection went: dimmed like an ended
+        // row, and never presented as finished.
+        if s.stale {
+            return Content(dot: .ended, name: name, detail: "connection lost", elapsed: "",
+                           agent: agent, agentID: s.agentID)
+        }
 
         let dot: Dot
         switch s.state {

@@ -243,7 +243,7 @@ enum URLCommands {
     /// `url` — a string whoever wrote the row chose, a remote host over ssh
     /// included — so a link that could reach one is a link that launches things.
     static func linkable(_ sessions: [Session]) -> [Session] {
-        sessions.filter { $0.entrypoint != "cloud" }
+        sessions.filter { !$0.isOffMachine }
     }
 
     private static func rank(_ s: Session) -> Int {

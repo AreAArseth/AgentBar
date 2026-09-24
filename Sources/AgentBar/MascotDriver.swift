@@ -106,7 +106,7 @@ final class MascotDriver {
             // decayed = a watchdog's guess, not a reported finish — no celebration
             // (SoundCenter skips its done cue on the same condition).
             if state == .some(.done), previousTopState?.isWorking == true,
-               topSession?.decayed != true {
+               topSession?.decayed != true, topSession?.isMirror != true {
                 playHop(resting: resting)
             } else if hopTimer == nil {
                 image = resting

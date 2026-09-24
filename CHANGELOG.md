@@ -3,6 +3,22 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **Your own machines are not "Cloud".** A session mirrored over ssh used to wear
+  the island's *Cloud* chip, which says its data left your machines; it now shows
+  the host's name (or *Remote*), and *Cloud* is kept for Devin, Cursor and Codex
+  cloud runs. The poller says which adapter wrote each row, so the app tells the
+  two apart by where a row came from, never by its words.
+- **A host that drops out is dimmed, not ended.** While a mirrored host misses
+  polls its rows show *connection lost* instead of sitting there looking current,
+  and when they finally go they are not recorded as finished. A mirrored
+  machine's turns no longer make a sound, raise a notification, enter the day's
+  history or start a work diff — they were never this Mac's events. Links
+  (`agentbar://`) and keystrokes refuse every off-machine row by the same rule.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added

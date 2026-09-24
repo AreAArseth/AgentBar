@@ -147,6 +147,7 @@ const normalize = (raw, cfg, now) => {
         prompt: r.prompt || "",
         recap: r.recap || "",
         url: `ssh://${h.host}`,
+        host: h.name,
         started_at: pastTime(r.started_at, now),
         updated_at: pastTime(r.ts, now) || now,
         recentHours: cfg.recentHours,

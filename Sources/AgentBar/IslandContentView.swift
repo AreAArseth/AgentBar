@@ -407,6 +407,11 @@ final class IslandRowView: NSView {
     /// The hero's second line: what this session wants from the user, in its colour.
     private static func heroStatus(_ s: Session) -> NSAttributedString {
         let working = NSColor(srgbRed: 0.45, green: 0.72, blue: 1, alpha: 1)
+        if s.stale {
+            return NSAttributedString(string: "connection lost — last heard from \(s.placeName ?? "its machine")",
+                                      attributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium),
+                                                   .foregroundColor: NSColor.white.withAlphaComponent(0.45)])
+        }
         switch s.state {
         case .permission:
             let out = NSMutableAttributedString(string: "needs approval", attributes: [
@@ -477,6 +482,7 @@ final class IslandRowView: NSView {
     }
 
     private static func dotColor(_ s: Session) -> NSColor {
+        if s.stale { return NSColor.white.withAlphaComponent(0.2) }
         switch s.state {
         case .permission:      return IconRenderer.amberDot
         case .question:        return IconRenderer.questionDot
@@ -493,8 +499,8 @@ final class IslandRowView: NSView {
         let agent = Agent.byID(s.agentID)
         var out = [chip(agent.name, tint: agent.brand)]
         if let m = s.modelChip { out.append(chip(m, tint: NSColor.white.withAlphaComponent(0.85))) }
-        if s.entrypoint == "cloud" {
-            out.append(chip("Cloud", tint: .white))
+        if let place = s.placeName {
+            out.append(chip(place, tint: .white))
         } else if s.entrypoint == "claude-desktop" {
             out.append(chip("Desktop", tint: .white))
         } else if s.entrypoint == "antigravity-app" {
