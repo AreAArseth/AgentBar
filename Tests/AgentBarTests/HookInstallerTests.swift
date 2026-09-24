@@ -139,6 +139,168 @@ import Testing
                                         script: Self.script, isExecutable: { _ in false }) == .unchanged)
     }
 
+    // MARK: - Codex: notify has to land where TOML reads it as top-level
+
+    /// The shape that broke a real config: the user's own `notify` on line 4, a file
+    /// ending in a string table, and every release up to 1.30.0 appending its line
+    /// under that table, where Codex refuses the whole file ("invalid type: sequence,
+    /// expected a string").
+    private static let userConfig = """
+        model = "gpt-5"
+        model_reasoning_effort = "high"
+        approvals_reviewer = "guardian_subagent"
+        notify = ["/Users/x/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+        service_tier = "default"
+
+        [projects."/Users/x"]
+        trust_level = "trusted"
+
+        [mcp_servers.node_repl]
+        command = "node"
+        args = ["repl.js"]
+
+        [mcp_servers.node_repl.env]
+        NODE_OPTIONS = ""
+
+        [features]
+        js_repl = false
+
+        [shell_environment_policy.set]
+        NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "8e86beb8"
+
+        """
+    private static let hooksDir = "/Users/x/.agentbar/hooks"
+    private static let oursLine = "notify = [\"/opt/homebrew/bin/node\", \"\(script)\"]\n"
+
+    private static func withBlock(_ config: String) -> String {
+        guard case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: config, node: "/opt/homebrew/bin/node", dir: hooksDir) else { return config }
+        return next
+    }
+
+    /// Both steps `installCodex` takes, in its order.
+    private static func install(_ config: String) -> String {
+        var text = config
+        if case .write(let next, _) = HookInstaller.codexPlan(
+            config: text, node: "/opt/homebrew/bin/node", script: script, isExecutable: { _ in true }) {
+            text = next
+        }
+        if case .write(let next, _) = HookInstaller.codexHooksPlan(
+            config: text, node: "/opt/homebrew/bin/node", dir: hooksDir) {
+            text = next
+        }
+        return text
+    }
+
+    @Test func aForeignNotifyBelowLineOneIsStillForeign() {
+        #expect(HookInstaller.codexPlan(config: Self.userConfig, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// The exact file 1.30.0 left behind: our line under `[shell_environment_policy.set]`,
+    /// the hooks block after it. The repair takes our line out and nothing else; the
+    /// user's own notify on line 4 stays the one Codex runs.
+    @Test func theLineAnEarlierReleaseWroteUnderATableIsTakenBackOut() {
+        let healthy = Self.withBlock(Self.userConfig)
+        let broken = healthy.replacingOccurrences(
+            of: "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = \"8e86beb8\"\n",
+            with: "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = \"8e86beb8\"\n" + Self.oursLine)
+        #expect(broken != healthy)
+
+        let plan = HookInstaller.codexPlan(config: broken, node: "/opt/homebrew/bin/node",
+                                           script: Self.script, isExecutable: { _ in true })
+        guard case .write(let next, let repaired) = plan else {
+            Issue.record("the stray line must be removed, got \(plan)"); return
+        }
+        #expect(repaired)
+        #expect(next == healthy)
+        #expect(Self.install(broken) == healthy)
+        #expect(Self.install(healthy) == healthy)
+    }
+
+    /// With no notify of the user's, the stray one is moved rather than dropped.
+    @Test func aStrayLineWithoutAForeignNotifyMovesToTheTopLevel() {
+        let mine = Self.userConfig.replacingOccurrences(of: "notify = [\"/Users/x/.codex", with: "# was: [\"/Users/x/.codex")
+        let broken = mine + Self.oursLine
+        guard case .write(let next, true) = HookInstaller.codexPlan(
+            config: broken, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a repair"); return
+        }
+        #expect(next.components(separatedBy: "notify = [").count - 1 == 1)
+        #expect(next.contains("service_tier = \"default\"\n" + Self.oursLine + "\n[projects."))
+        #expect(next.hasSuffix("SHA256S = \"8e86beb8\"\n"))
+    }
+
+    /// A first install onto a file that ends in a table: before, the line went to the
+    /// end and became that table's key even with no notify anywhere.
+    @Test func aFirstInstallGoesAfterTheLastTopLevelKeyNotAtTheEnd() {
+        let config = "model = \"o3\"\n\n[profiles.mine]\nmodel = \"o4\"\n"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next == "model = \"o3\"\n" + Self.oursLine + "\n[profiles.mine]\nmodel = \"o4\"\n")
+        #expect(HookInstaller.codexPlan(config: next, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+    }
+
+    @Test func aFileThatStartsWithATableGetsNotifyAboveIt() {
+        let config = "# my codex config\n[profiles.mine]\nmodel = \"o4\"\n"
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next == "# my codex config\n" + Self.oursLine + "\n[profiles.mine]\nmodel = \"o4\"\n")
+    }
+
+    /// `notify` that is not a top-level key: a comment, the inside of a multi-line
+    /// string, a key of a table. None of them is the user's hook, so ours goes in,
+    /// after the multi-line string rather than inside it.
+    @Test func notifyThatIsNotATopLevelKeyIsNotForeign() {
+        let config = """
+            # notify = ["/usr/bin/say"]
+            developer_instructions = \"""
+            notify = ["not a key"]
+            [not.a.header]
+            \"""
+
+            [tui]
+            notify = true
+
+            """
+        guard case .write(let next, false) = HookInstaller.codexPlan(
+            config: config, node: "/opt/homebrew/bin/node", script: Self.script,
+            isExecutable: { _ in true }) else {
+            Issue.record("expected a first install"); return
+        }
+        #expect(next.contains("[not.a.header]\n\"\"\"\n" + Self.oursLine + "\n[tui]"))
+    }
+
+    /// A nested array whose rows start with `[` is not a table header, so the notify
+    /// after it is still top-level, and still the user's.
+    @Test(arguments: [
+        "model = \"o3\"\nmatrix = [\n  [\"a\", \"b\"],\n]\nnotify = [\"/usr/bin/say\"]\n[t]\nk = 1\n",
+        "model = \"o3\"\n\"notify\" = [\"/usr/bin/say\"]\n[t]\n",
+        "model = \"o3\"\n  notify=[\"/usr/bin/say\"] # mine\n",
+    ])
+    func aTopLevelNotifyInAnyShapeIsForeign(_ config: String) {
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .foreignNotify)
+    }
+
+    /// The hand workaround for the broken file, our stray line commented out, keeps
+    /// AgentBar standing down: deleting it would have had the old installer write it
+    /// back, so this is what a user's config may look like when the fix arrives.
+    @Test func theCommentedOutWorkaroundIsLeftAlone() {
+        let config = Self.withBlock(Self.userConfig + "# " + Self.oursLine)
+        #expect(HookInstaller.codexPlan(config: config, node: "/opt/homebrew/bin/node",
+                                        script: Self.script, isExecutable: { _ in true }) == .unchanged)
+        #expect(Self.install(config) == config)
+    }
+
     // MARK: - firstQuoted
 
     @Test(arguments: [

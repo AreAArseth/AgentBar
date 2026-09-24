@@ -274,7 +274,7 @@ enum HookInstaller {
             break
         case .write(let next, let repaired):
             text = next
-            if repaired { NSLog("AgentBar: repaired a dead node path in ~/.codex/config.toml") }
+            if repaired { NSLog("AgentBar: repaired its notify line in ~/.codex/config.toml") }
         }
         if case .write(let next, _) = codexHooksPlan(config: text, node: node,
                                                      dir: hooksDir.path) {
@@ -374,9 +374,36 @@ enum HookInstaller {
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> CodexPlan {
         let ours = "notify = [\"\(node)\", \"\(script)\"]"
-        let ourLine = #"(?m)^[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
+        let ourLine = #"[ \t]*notify[ \t]*=[ \t]*\[[^\]]*/\.agentbar/hooks/codex/[^\]]*\]"#
+        let outline = TOMLOutline(config)
+        let mine = outline.statements.compactMap { s -> (top: Bool, line: Range<String.Index>)? in
+            guard !s.isHeader,
+                  let r = config.range(of: ourLine, options: [.regularExpression, .anchored],
+                                       range: s.lineStart..<config.endIndex)
+            else { return nil }
+            return (s.isTopLevel, s.lineStart..<r.upperBound)
+        }
 
-        if let line = config.range(of: ourLine, options: .regularExpression) {
+        // Our line under a table header is what every release up to 1.30.0 wrote into
+        // a file that had tables: Codex reads it as that table's key and either rejects
+        // the whole config or quietly never notifies. It carries our path, so it is
+        // ours to take out; what happens next is decided on the file without it.
+        let stray = mine.filter { !$0.top }.map { wholeLines(of: $0.line, in: config) }
+        if !stray.isEmpty {
+            var fixed = "", from = config.startIndex
+            for r in stray {
+                fixed += config[from..<r.lowerBound]
+                from = r.upperBound
+            }
+            fixed += config[from...]
+            if case .write(let next, _) = codexPlan(config: fixed, node: node, script: script,
+                                                   isExecutable: isExecutable) {
+                return .write(next, repaired: true)
+            }
+            return .write(fixed, repaired: true)
+        }
+
+        if let line = mine.first?.line {
             guard let interpreter = firstQuoted(String(config[line])), !isExecutable(interpreter)
             else { return .unchanged }
             var next = config
@@ -392,12 +419,30 @@ enum HookInstaller {
         // `notify` at all would read as "notify is already wired" and notify would never
         // be installed again.
         if withoutCodexBlock(config).contains("/.agentbar/hooks/codex/") { return .unchanged }
-        if config.range(of: #"^\s*notify\s*="#, options: .regularExpression) != nil {
-            return .foreignNotify
-        }
+        // Codex takes one top-level `notify`, on whatever line the user put it.
+        if outline.topLevelKey("notify", in: config) != nil { return .foreignNotify }
+
+        // Never at the end of the file: after a table header, a bare key is that
+        // table's. It goes after the last top-level statement, or above the first
+        // header when there is none.
         var next = config
-        if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
-        return .write(next + ours + "\n", repaired: false)
+        if let end = outline.topLevelEnd {
+            let lead = end == config.endIndex && !config.hasSuffix("\n") ? "\n" : ""
+            next.insert(contentsOf: lead + ours + "\n", at: end)
+        } else if let header = outline.firstHeader {
+            next.insert(contentsOf: ours + "\n\n", at: header)
+        } else {
+            if !next.isEmpty && !next.hasSuffix("\n") { next += "\n" }
+            next += ours + "\n"
+        }
+        return .write(next, repaired: false)
+    }
+
+    /// `range` widened to whole lines, including the line ending after it.
+    static func wholeLines(of range: Range<String.Index>, in text: String) -> Range<String.Index> {
+        let end = text[range.upperBound...].firstIndex(of: "\n").map { text.index(after: $0) }
+            ?? text.endIndex
+        return range.lowerBound..<end
     }
 
     /// The config with AgentBar's own hooks block removed, for the questions that are
