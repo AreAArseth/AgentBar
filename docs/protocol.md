@@ -20,6 +20,8 @@ locks. All timestamps (`ts`) are Unix seconds.
   history-seen.json  the CLI's previous tick, so one-shot commands can diff
   hooks/       installed copies of the hook scripts (refreshed by the installer)
   claude-config-dir  optional hint: custom CLAUDE_CONFIG_DIR path (one line)
+  remote-cluster.json  shared-home declaration — state layout 2 (see below)
+  identity-salt  makes machine ids opaque in shared-home mode (see below)
 ```
 
 ## state.d — sessions
@@ -99,6 +101,50 @@ Frontend pruning (each refresh):
 - on session start with no frontend present, hooks sweep `state.d/` of rows whose
   owning process is gone (leftovers from a crash — start honest). Only dead rows:
   another agent's session outlives a frontend restart, and a wipe would hide it.
+
+### Shared homes — state layout 2
+
+A home mounted on several machines (a compute cluster) shares one `state.d`, and
+layout 1 cannot survive that: two machines write one file name, and a pid is only
+meaningful on the machine that issued it. A home opts in explicitly, once, with
+`agentbar configure-cluster --shared-home`, which creates two files atomically:
+
+```
+~/.agentbar/remote-cluster.json   {"v":1,"sharedHome":true}   — layout 2 is in force
+~/.agentbar/identity-salt         64 hex chars, mode 0600      — makes machine ids opaque
+```
+
+With `remote-cluster.json` present, every writer (all of `Scripts/hooks/`, through
+`Scripts/hooks/shared/owner.js`) adds five fields and names the file differently:
+
+```json
+{
+  "ownerSourceId": "…uuid…",   // this machine: HMAC(salt, machine id), or AGENTBAR_SOURCE_ID
+  "ownerBootId":   "…uuid…",   // this machine's current boot: HMAC(salt, boot id)
+  "ownerPid": 12345,           // the same value as `pid`, named for whose it is
+  "stateLayout": 2,
+  "writeId": "…uuid…"          // one per write; diagnostics only
+}
+```
+
+File name: `<16 hex of sha256(ownerSourceId)>-<32 hex of sha256(sessionId)>.json`.
+Every writer of one session on one machine derives the same name; two machines
+never do. In layout 2 the **`sessionId` field is the identity**, not the file name.
+
+Rules, for every writer and every frontend on a shared home:
+- only the machine whose `ownerSourceId` a row carries may probe its pid, prune it
+  or delete it — and a row from an earlier `ownerBootId` of that machine is dead
+  whatever its pid says;
+- a row without owner fields (written before the home was shared) belongs to
+  nobody: it is neither shown nor deleted, and `agentbar doctor` counts it;
+- a writer that cannot establish who it is (no machine id, unreadable salt, a
+  `remote-cluster.json` it does not understand) writes **nothing** — never a
+  layout-1 file — and exits 0 as always;
+- a standalone home never touches a layout-2 row, so rolling a cluster back
+  (`agentbar configure-cluster --standalone`) cannot reinterpret its files.
+
+Raw machine and boot identifiers are hashed on read and never written anywhere.
+Standalone homes are unaffected: no field, no file name and no rule above changes.
 
 ## requests.d / answers.d — remote approval
 

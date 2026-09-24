@@ -18,8 +18,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const owner = require("../shared/owner.js");
 
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 
 let p = {};
 try { p = JSON.parse(process.argv[2] || "{}"); } catch {}
@@ -66,7 +68,10 @@ const oneLine = (s) => sliceSafe(String(s).replace(/\s+/g, " ").trim(), 120);
 // Prefix INSIDE the cap: the protocol limits session ids (= file names) to 64 chars.
 const id = safeId("codex-" + (p["thread-id"] || p["turn-id"] || String(process.ppid)));
 const cwd = p.cwd || p["working-directory"] || process.cwd() || "";
-const file = path.join(stateDir, id + ".json");
+// A shared home that cannot say which machine this is gets no row at all.
+const own = owner.resolve(base);
+if (!own) process.exit(0);
+const file = owner.stateFile(stateDir, id, own);
 
 let prev = {};
 try { prev = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
@@ -99,13 +104,15 @@ const out = {
 // process shows one conversation at a time. Same pid only — a second codex in
 // another tab owns its own rows, and a pid of 0 would match every one of them.
 const retirePredecessors = () => {
-  const owner = process.ppid;
-  if (!(owner > 0)) return;
+  const codex = process.ppid;
+  if (!(codex > 0)) return;
   for (const f of fs.readdirSync(stateDir)) {
-    if (!f.endsWith(".json") || f === id + ".json") continue;
+    if (!f.endsWith(".json") || f === path.basename(file)) continue;
     let prior = null;
     try { prior = JSON.parse(fs.readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
-    if (prior && prior.agent === "codex" && Number(prior.pid) === owner)
+    // Same pid means the same process only on the machine that issued it.
+    if (!owner.mayManage(prior, own) || owner.fromEarlierBoot(prior, own)) continue;
+    if (prior && prior.agent === "codex" && Number(prior.pid) === codex)
       fs.rmSync(path.join(stateDir, f), { force: true });
   }
 };
@@ -113,7 +120,7 @@ const retirePredecessors = () => {
 try {
   fs.mkdirSync(stateDir, { recursive: true });
   const tmp = file + "." + process.pid + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(out, paired));
+  fs.writeFileSync(tmp, JSON.stringify(owner.stamp(out, own), paired));
   fs.renameSync(tmp, file);
   // After the write, never before: a sweep that ran first and then failed to
   // write would take the session out of the bar entirely.

@@ -22,9 +22,12 @@
 //   agentbar install-hooks          wire agent hooks (Claude/Codex/Cursor/Antigravity/
 //                                   Gemini/Qwen/Copilot/OpenCode) —
 //                                   the Linux equivalent of the macOS app's installer
+//   agentbar configure-cluster      --shared-home: this home is mounted on several
+//                                   machines, so every row names the one that owns it
 
 "use strict";
 const fs = require("fs"), os = require("os"), path = require("path");
+const owner = require("../hooks/shared/owner.js");
 
 const base = path.join(os.homedir(), ".agentbar");
 const stateDir = path.join(base, "state.d");
@@ -65,17 +68,27 @@ const yellow = (s) => c("33", s), blue = (s) => c("34", s), green = (s) => c("32
 
 function sessions() {
   let files = []; try { files = fs.readdirSync(stateDir); } catch { return []; }
+  // On a home several machines share, a row is this machine's to show, probe or
+  // prune only when it says so — another node's pid means nothing here, and
+  // deleting its "dead" row would delete live work. A shared home that cannot
+  // say which machine this is shows nothing rather than everything.
+  const own = owner.resolve(base);
+  if (!own) return [];
   const out = [];
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
     const p = path.join(stateDir, f);
     const s = readJSON(p);
     if (!s) continue;
-    const dead = s.pid > 0 && !alive(s.pid);
+    if (!owner.mayManage(s, own)) continue;
+    const pid = own.shared ? Number(s.ownerPid) || 0 : s.pid;
+    const dead = owner.fromEarlierBoot(s, own) || (pid > 0 && !alive(pid));
     const stale = s.ts > 0 && now() - s.ts > 86400;
     if (dead || stale) { try { fs.rmSync(p, { force: true }); } catch {} continue; }
     if (!s.started) continue;
-    s.id = f.slice(0, -".json".length);
+    // Layout 2 names files by hash; the row's own sessionId is its identity.
+    s.id = own.shared && typeof s.sessionId === "string" && s.sessionId
+      ? s.sessionId : f.slice(0, -".json".length);
     // Antigravity emits no terminal event (2.3.x fires only PostToolUse), so a
     // working session that has gone quiet decays to done instead of running for
     // ever — and the row says it was a watchdog's guess, not a reported finish.
@@ -1223,7 +1236,7 @@ const INTEGRATIONS = [
   { id: "opencode", name: "OpenCode", presence: [".config/opencode"],
     configs: [".config/opencode/plugins/agentbar.js"], marker: "agentbar" },
 ];
-const HOOK_DIRS = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode"];
+const HOOK_DIRS = ["claude", "codex", "cursor", "gemini", "antigravity", "opencode", "shared"];
 // Two weeks, not a few days: people go on holiday, and an agent you simply did not
 // use must not be reported as broken.
 const QUIET_DAYS = 14;
@@ -1376,6 +1389,43 @@ function doctor(json) {
       add("rules.file", "Rules", "ok",
           (counts.length ? counts.join(", ") : "none")
           + " — applied by the AgentBar app; this command only lists them.");
+    }
+  }
+
+  // A shared home is only safe once every row names its machine. Rows from
+  // before that (sessions started under the old hooks) are nobody's: this
+  // machine will neither show nor delete them, and says how many there are.
+  {
+    const mode = owner.clusterMode(base);
+    if (mode === "standalone") {
+      add("remote.cluster", "Shared home", "skipped",
+          "Standalone: this home belongs to one machine.");
+    } else if (mode === "invalid") {
+      add("remote.cluster", "Shared home", "fail",
+          `~/.agentbar/${owner.CLUSTER_FILE} exists but is not understood. No session is reported while it is.`,
+          "Run `agentbar configure-cluster --shared-home` again, or `--standalone` to leave cluster mode.");
+    } else {
+      const own = owner.resolve(base);
+      const c = { mine: 0, other: 0, legacy: 0, earlier: 0 };
+      let names = []; try { names = fs.readdirSync(stateDir); } catch {}
+      for (const f of names.filter((n) => n.endsWith(".json"))) {
+        const r = readJSON(path.join(stateDir, f));
+        if (!r) continue;
+        if (typeof r.ownerSourceId !== "string") c.legacy++;
+        else if (!own || r.ownerSourceId !== own.sourceId) c.other++;
+        else if (r.ownerBootId !== own.bootId) c.earlier++;
+        else c.mine++;
+      }
+      const tally = `${c.mine} this machine's, ${c.other} other machines', ${c.legacy} from before shared mode, ${c.earlier} from an earlier boot`;
+      if (!own) {
+        add("remote.cluster", "Shared home", "fail",
+            "This machine has no unique identity, so its hooks write nothing. " + tally + ".",
+            "Set AGENTBAR_SOURCE_ID to a UUID in this machine's environment.");
+      } else {
+        add("remote.cluster", "Shared home", c.legacy ? "warn" : "ok",
+            `Reporting as ${own.sourceId.slice(0, 8)}… — ${tally}.`,
+            c.legacy ? "Restart the sessions that predate shared mode; their rows are never shown or deleted by any machine." : null);
+      }
     }
   }
 
@@ -1772,6 +1822,41 @@ function installHooks() {
   console.log("Done. Start a NEW agent session to see it (hooks snapshot at session start).");
 }
 
+// MARK: - Shared homes
+
+// One home mounted on several machines: every row must name the machine that
+// owns it (Scripts/hooks/shared/owner.js). Declared, never detected — a guess
+// that a home is private is exactly the one that corrupts a shared one.
+function configureCluster(argv) {
+  const file = path.join(base, owner.CLUSTER_FILE);
+  if (argv.includes("--shared-home")) {
+    fs.mkdirSync(base, { recursive: true });
+    if (!owner.ensureSalt(base)) {
+      console.error(`could not create ~/.agentbar/${owner.SALT_FILE}`);
+      process.exit(1);
+    }
+    let committed = null;
+    try { committed = JSON.parse(owner.createOnce(file, JSON.stringify({ v: 1, sharedHome: true }))); } catch {}
+    if (!committed || committed.v !== 1 || committed.sharedHome !== true) {
+      console.error(`~/.agentbar/${owner.CLUSTER_FILE} already says something else — left untouched.`);
+      process.exit(1);
+    }
+    const own = owner.resolve(base);
+    console.log(own
+      ? `Shared home. This machine reports as ${own.sourceId.slice(0, 8)}…`
+      : "Shared home — but this machine has no unique identity, so its hooks will write nothing. "
+        + "Set AGENTBAR_SOURCE_ID to a UUID in its environment.");
+    console.log("Start NEW agent sessions on every machine: running ones keep the old layout until they restart.");
+  } else if (argv.includes("--standalone")) {
+    fs.rmSync(file, { force: true });
+    console.log("Standalone. Rows written in shared mode stay where they are, and no machine reads them as its own.");
+  } else {
+    const mode = owner.clusterMode(base);
+    console.log(mode === "shared" ? "Shared home." : mode === "standalone" ? "Standalone."
+      : `~/.agentbar/${owner.CLUSTER_FILE} is not understood.`);
+  }
+}
+
 // MARK: - Main
 
 const [cmd, ...argv] = process.argv.slice(2);
@@ -1791,6 +1876,7 @@ switch (cmd) {
   case "forget": forget(); break;
   case "doctor": doctor(json); break;
   case "install-hooks": installHooks(); break;
+  case "configure-cluster": configureCluster(argv); break;
   case "--help": case "help": default:
     console.log(`agentbar — AI coding agents' status & remote approval (file protocol: ~/.agentbar)
 
@@ -1809,6 +1895,7 @@ switch (cmd) {
   agentbar rules                  the rules you wrote and what each one has done [--json]
   agentbar forget                 empty the decision ledger
   agentbar doctor [--json]        why an agent isn't showing up: hooks, node path, permissions
-  agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)`);
+  agentbar install-hooks          wire Claude/Codex/Cursor/Antigravity/Gemini/Qwen/Copilot/OpenCode hooks (Linux installer)
+  agentbar configure-cluster      [--shared-home | --standalone] this home is mounted on several machines (or not)`);
     break;
 }

@@ -374,6 +374,12 @@ to. A hook config outlives the next `node` upgrade; if it named
 upgrade. On a version manager with no stable alias it falls back to the running
 interpreter, so re-run `install-hooks` after a major `node` change.
 
+**One home on several machines** (a compute cluster that mounts your home on
+every node): run `agentbar configure-cluster --shared-home` once, then start new
+sessions. Every row then names the machine that owns it, so nodes never
+overwrite, prune or show each other's sessions; `agentbar doctor` reports it as
+`remote.cluster`. Details: *state layout 2* in [docs/protocol.md](docs/protocol.md).
+
 The CLI works on macOS too (same protocol, handy over SSH). A native tray app
 (StatusNotifierItem) may come later if there's demand.
 

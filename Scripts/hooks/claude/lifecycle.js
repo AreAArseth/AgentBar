@@ -8,11 +8,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
+const owner = require("../shared/owner.js");
 
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const EXEC = "AgentBar";
 const AGENT = String(process.env.AGENTBAR_AGENT || "claude").replace(/[^a-z]/g, "") || "claude";
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 const event = process.argv[2];
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
@@ -71,6 +73,10 @@ setTimeout(run, 1000); // never hang the host session
 
 function run() {
   if (done) return; done = true;
+  // A shared home that cannot say which machine this is gets no row at all:
+  // guessing would write a file another node could overwrite or prune.
+  const own = owner.resolve(base);
+  if (!own) process.exit(0);
   // An unwritable state.d must not throw the hook out with a stack trace: report it
   // once and carry on, so the SessionEnd cleanup below still runs.
   try { fs.mkdirSync(stateDir, { recursive: true }); } catch (e) { warn("mkdir " + stateDir, e); }
@@ -93,7 +99,7 @@ function run() {
     // moment the session began. Claude never sends the field.
     opensWorking = typeof j.initial_prompt === "string" && j.initial_prompt.trim() !== "";
   } catch {}
-  const statePath = path.join(stateDir, rowId(id) + ".json");
+  const statePath = owner.stateFile(stateDir, rowId(id), own);
 
   if (event === "start") {
     const appUp = running();
@@ -106,12 +112,16 @@ function run() {
         let cleared = 0;
         for (const f of fs.readdirSync(stateDir)) {
           const p = path.join(stateDir, f);
-          let owner = 0;
-          try { owner = Number(JSON.parse(fs.readFileSync(p, "utf8")).pid) || 0; } catch {}
-          if (owner > 0) {
+          let row;
+          try { row = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+          // On a shared home only this node's own rows are its to judge.
+          if (!owner.mayManage(row, own)) continue;
+          const pid = owner.fromEarlierBoot(row, own) ? 0
+            : Number(row && (own.shared ? row.ownerPid : row.pid)) || 0;
+          if (pid > 0) {
             // Signal 0 probes without delivering: alive (or ours to leave alone)
             // means keep. EPERM counts as alive — the pid exists.
-            try { process.kill(owner, 0); continue; } catch (e) {
+            try { process.kill(pid, 0); continue; } catch (e) {
               if (e.code === "EPERM") continue;
             }
           }
@@ -153,7 +163,7 @@ function run() {
       : null;
     try {
       const ts = Math.floor(Date.now() / 1000);
-      writeAtomic(statePath, {
+      writeAtomic(statePath, owner.stamp({
         ...kept,
         ...(back && back.recap ? { recap: back.recap } : {}),
         agent: AGENT,
@@ -170,7 +180,7 @@ function run() {
         started_at: prev.started_at || ts,
         ...(model ? { model: String(model) } : {}),
         ts,
-      });
+      }, own));
     } catch (e) { warn("state write " + statePath, e); }
     // Launch ONLY when nothing is running. With two copies on disk (a dev build
     // next to /Applications) LaunchServices may resolve the bundle ID to the

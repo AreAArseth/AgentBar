@@ -3,6 +3,20 @@
 All notable changes to AgentBar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Homes shared by several machines.** On a cluster that mounts one home on every
+  node, all of them wrote the same `~/.agentbar/state.d`: two nodes could overwrite
+  one file, and one node's sweep deleted another node's live sessions as dead,
+  because a pid means nothing on a machine that did not issue it. Run
+  `agentbar configure-cluster --shared-home` once and every hook names the machine
+  that owns its row (state layout 2: opaque owner ids, file names partitioned by
+  owner), and only that machine ever probes, prunes, shows or deletes it. A machine
+  that cannot say who it is writes nothing rather than guessing. Standalone homes
+  are unchanged byte for byte. `agentbar doctor` reports it as `remote.cluster`.
+
 ## 1.30.0 - 2026-09-24
 
 ### Added

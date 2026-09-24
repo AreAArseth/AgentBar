@@ -8,11 +8,13 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const owner = require("../shared/owner.js");
 
 // Claude by default; agents with Claude-compatible hooks (Qwen Code) register
 // this same script with AGENTBAR_AGENT set to their id.
 const AGENT = String(process.env.AGENTBAR_AGENT || "claude").replace(/[^a-z]/g, "") || "claude";
-const stateDir = path.join(os.homedir(), ".agentbar", "state.d");
+const base = path.join(os.homedir(), ".agentbar");
+const stateDir = path.join(base, "state.d");
 const event = process.argv[2] || "";
 
 // Written by the compact event, read by lifecycle.js and by the frontends
@@ -152,7 +154,10 @@ function run() {
   // The session's own file is both the unit of state and the liveness marker; writing it on
   // any event also picks up sessions that predate the hook install (no SessionStart fired).
   const sid = rowId(p.session_id);
-  const statePath = path.join(stateDir, sid + ".json");
+  // A shared home that cannot say which machine this is gets no row at all.
+  const own = owner.resolve(base);
+  if (!own) process.exit(0);
+  const statePath = owner.stateFile(stateDir, sid, own);
 
   let prev = {};
   try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
@@ -253,7 +258,7 @@ function run() {
   try {
     fs.mkdirSync(stateDir, { recursive: true });
     const tmp = statePath + "." + process.pid + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(out, paired));
+    fs.writeFileSync(tmp, JSON.stringify(owner.stamp(out, own), paired));
     fs.renameSync(tmp, statePath);
   } catch (e) { warn("state write " + statePath, e); }
   process.exit(0);

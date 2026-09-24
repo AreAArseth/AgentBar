@@ -7,11 +7,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, execSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 const AGENT = "opencode";
 const BUNDLE_ID = "com.michalstrnadel.agentbar";
 const base = path.join(os.homedir(), ".agentbar");
 const stateDir = path.join(base, "state.d");
+
+// Which machine owns a row on a home several machines share. This plugin runs
+// from OpenCode's own plugins folder rather than beside the other hooks, so the
+// helper is loaded from where the installer copied it. Missing helper on a home
+// that declares itself shared means no row, never a flat one another node could
+// overwrite.
+const owner = (() => {
+  try { return createRequire(import.meta.url)(path.join(base, "hooks", "shared", "owner.js")); }
+  catch { return null; }
+})();
+const ownership = () => (owner ? owner.resolve(base)
+  : fs.existsSync(path.join(base, "remote-cluster.json")) ? null : { shared: false });
+const fileFor = (id, own) => (owner ? owner.stateFile(stateDir, safeId(id), own)
+  : path.join(stateDir, safeId(id) + ".json"));
+const stamp = (row, own) => (owner ? owner.stamp(row, own) : row);
 
 const safeId = (s) => String(s || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "unknown";
 // A lone surrogate anywhere in a value — not only one a cut created — makes Swift's
@@ -65,11 +81,13 @@ export const AgentBar = async ({ directory }) => {
     // Any new activity on a session means it is not finished after all.
     cancelRetire(id);
     try {
+      const own = ownership();
+      if (!own) return;
       fs.mkdirSync(stateDir, { recursive: true });
-      const statePath = path.join(stateDir, safeId(id) + ".json");
+      const statePath = fileFor(id, own);
       let prev = {};
       try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
-      writeAtomic(statePath, {
+      writeAtomic(statePath, stamp({
         agent: AGENT, project: path.basename(cwd), cwd,
         sessionId: String(id), entrypoint: "cli",
         term_program: process.env.TERM_PROGRAM || "",
@@ -79,12 +97,14 @@ export const AgentBar = async ({ directory }) => {
         started_at: prev.started_at || Math.floor(Date.now() / 1000),
         ...(prev.prompt ? { prompt: prev.prompt } : {}),
         ...patch, ts: Math.floor(Date.now() / 1000),
-      });
+      }, own));
     } catch {}
   };
   const remove = (id) => {
     cancelRetire(id);
-    try { fs.rmSync(path.join(stateDir, safeId(id) + ".json"), { force: true }); } catch {}
+    const own = ownership();
+    if (!own) return;
+    try { fs.rmSync(fileFor(id, own), { force: true }); } catch {}
   };
   const retireLater = (id) => {
     cancelRetire(id);
@@ -156,10 +176,12 @@ export const AgentBar = async ({ directory }) => {
           const title = p?.info?.title;
           if (typeof title === "string" && title.trim()) {
             try {
-              const statePath = path.join(stateDir, safeId(id) + ".json");
+              const own = ownership();
+              if (!own) break;
+              const statePath = fileFor(id, own);
               const prev = JSON.parse(fs.readFileSync(statePath, "utf8"));
-              writeAtomic(statePath, { ...prev, prompt: oneLine(title),
-                                       ts: Math.floor(Date.now() / 1000) });
+              writeAtomic(statePath, stamp({ ...prev, prompt: oneLine(title),
+                                             ts: Math.floor(Date.now() / 1000) }, own));
             } catch {}
           }
           break;
